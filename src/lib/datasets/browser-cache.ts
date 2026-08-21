@@ -2,7 +2,7 @@
 
 import type { RecipeDataset } from "./types";
 
-const DB_NAME = "gtnh-factory-flow";
+const DB_NAME = "susy-factory-flow";
 const DB_VERSION = 1;
 const STORE_NAME = "recipe-datasets";
 

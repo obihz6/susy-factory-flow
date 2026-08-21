@@ -1,0 +1,941 @@
+diff --git a/.gitignore b/.gitignore
+index 70b86a5..3dacb7c 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -16,7 +16,7 @@
+ /.tmp
+ /.gh-artifacts-*/
+ *.tar
+-/public/datasets/gtnh/
++/public/datasets/susy/
+ 
+ # next.js
+ /.next/
+diff --git a/src/app/api/community/plans/[planId]/card/route.tsx b/src/app/api/community/plans/[planId]/card/route.tsx
+index 6abe709..ccb2e88 100644
+--- a/src/app/api/community/plans/[planId]/card/route.tsx
++++ b/src/app/api/community/plans/[planId]/card/route.tsx
+@@ -99,13 +99,13 @@ function cropToArt(data: Buffer): Buffer {
+ }
+ 
+ /**
+- * A dataset icon path (`/datasets/gtnh/<version>/textures/rendered/x.png`)
++ * A dataset icon path (`/datasets/<pack>/<version>/textures/rendered/x.png`)
+  * as a data URI, read from disk the same way the texture route serves it.
+  * Anything that fails to validate, read or decode becomes undefined, never
+  * a throw: a card with no icon must still render.
+  */
+ async function loadIconDataUri(iconPath: string | undefined): Promise<string | undefined> {
+-  if (!iconPath?.startsWith("/datasets/gtnh/")) {
++  if (!iconPath?.startsWith("/datasets/")) {
+     return undefined;
+   }
+   const segments = iconPath.slice(1).split("/");
+@@ -241,11 +241,11 @@ export async function GET(
+             }}
+           >
+             <div style={{ display: "flex", fontSize: 28, fontWeight: 700, color: BRAND }}>
+-              gtnhplanner.com
++              susyplanner.local
+             </div>
+             {row.game_version ? (
+               <div style={{ display: "flex", fontSize: 21, color: MUTED }}>
+-                GTNH {row.game_version}
++                SUSY {row.game_version}
+               </div>
+             ) : null}
+           </div>
+diff --git a/src/app/datasets/gtnh/[versionId]/[assetFile]/route.ts b/src/app/datasets/susy/[versionId]/[assetFile]/route.ts
+similarity index 100%
+rename from src/app/datasets/gtnh/[versionId]/[assetFile]/route.ts
+rename to src/app/datasets/susy/[versionId]/[assetFile]/route.ts
+diff --git a/src/app/datasets/gtnh/[versionId]/shards/[assetFile]/route.ts b/src/app/datasets/susy/[versionId]/shards/[assetFile]/route.ts
+similarity index 100%
+rename from src/app/datasets/gtnh/[versionId]/shards/[assetFile]/route.ts
+rename to src/app/datasets/susy/[versionId]/shards/[assetFile]/route.ts
+diff --git a/src/app/datasets/gtnh/[versionId]/textures/[...assetPath]/route.ts b/src/app/datasets/susy/[versionId]/textures/[...assetPath]/route.ts
+similarity index 99%
+rename from src/app/datasets/gtnh/[versionId]/textures/[...assetPath]/route.ts
+rename to src/app/datasets/susy/[versionId]/textures/[...assetPath]/route.ts
+index 603a8fa..4fcaa58 100644
+--- a/src/app/datasets/gtnh/[versionId]/textures/[...assetPath]/route.ts
++++ b/src/app/datasets/susy/[versionId]/textures/[...assetPath]/route.ts
+@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
+ export const runtime = "nodejs";
+ export const dynamic = "force-dynamic";
+ 
+-const datasetRoot = path.join(process.cwd(), "public", "datasets", "gtnh");
++const datasetRoot = path.join(process.cwd(), "public", "datasets", "susy");
+ const textureRoots = new Set(["rendered", "icons", "atlas", "nei-layouts"]);
+ 
+ export async function GET(
+diff --git a/src/app/layout.tsx b/src/app/layout.tsx
+index 63b2ecf..663072c 100644
+--- a/src/app/layout.tsx
++++ b/src/app/layout.tsx
+@@ -23,10 +23,10 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gtnhplanner.com";
+ 
+ export const metadata: Metadata = {
+   metadataBase: new URL(siteUrl),
+-  applicationName: "GTNH Planner",
+-  title: "GTNH Planner | GregTech New Horizons Factory Calculator",
++  applicationName: "SUSY Planner",
++  title: "SUSY Planner | Supersymmetry Factory Calculator",
+   description:
+-    "Plan and optimize GregTech: New Horizons factories on an interactive flowchart. Full recipe data for GTNH 2.8.4 and 2.9, throughput and power calculation, machine ratios, and community-shared plans.",
++    "Plan and optimize Supersymmetry factories on an interactive flowchart. Full recipe data exported from the game itself, throughput and power calculation, machine ratios, and community-shared plans.",
+   alternates: {
+     canonical: "/",
+   },
+@@ -42,18 +42,18 @@ export const metadata: Metadata = {
+     },
+   },
+   keywords: [
+-    "GTNH Planner",
+-    "GregTech New Horizons planner",
+-    "GTNH factory planner",
+-    "GTNH recipe calculator",
+-    "GTNH throughput calculator",
++    "SUSY Planner",
++    "Supersymmetry planner",
++    "Supersymmetry factory planner",
++    "Supersymmetry recipe calculator",
++    "Supersymmetry throughput calculator",
+     "GregTech factory calculator",
+   ],
+   openGraph: {
+-    title: "GTNH Planner | GregTech New Horizons Factory Calculator",
++    title: "SUSY Planner | Supersymmetry Factory Calculator",
+     description:
+-      "Free factory planner for GregTech: New Horizons with full recipe data for GTNH 2.8.4 and 2.9. Draw production chains, balance machine ratios, find bottlenecks, and share plans with the community.",
+-    siteName: "GTNH Planner",
++      "Free factory planner for Supersymmetry with full recipe data exported from the game. Draw production chains, balance machine ratios, find bottlenecks, and share plans with the community.",
++    siteName: "SUSY Planner",
+     type: "website",
+     url: "/",
+   },
+diff --git a/src/app/llms.txt/route.ts b/src/app/llms.txt/route.ts
+index 927b33c..1514294 100644
+--- a/src/app/llms.txt/route.ts
++++ b/src/app/llms.txt/route.ts
+@@ -45,13 +45,13 @@ export async function GET() {
+   const plans = await topPlans(base);
+ 
+   const lines = [
+-    "# GTNH Planner",
++    "# SUSY Planner",
+     "",
+-    "> Free browser-based factory planner and recipe calculator for GregTech: New Horizons (GTNH), the Minecraft expert modpack. Draw production chains on an interactive flowchart, balance machine ratios, compute EU/t power draw and throughput, and share plans with the community. No account and no install needed.",
++    "> Free browser-based factory planner and recipe calculator for Supersymmetry (SUSY), the Minecraft GregTech modpack. Draw production chains on an interactive flowchart, balance machine ratios, compute EU/t power draw and throughput, and share plans with the community. No account and no install needed.",
+     "",
+     "Key facts:",
+     "",
+-    "- Carries full recipe data for GTNH 2.8.4 and 2.9, exported from the game itself (NEI/RecEx), including multiblock machines, ore dictionary alternatives, and programmed circuit settings.",
++    "- Carries full recipe data exported from the game itself (HEI), including multiblock machines, ore dictionary alternatives, and programmed circuit settings.",
+     "- Models GregTech mechanics faithfully: voltage tiers and overclocking, parallel processing on multiblocks, heat bonuses on the Electric Blast Furnace family, machine-specific speed and power coefficients.",
+     "- A solver computes steady-state flow for the whole factory at once: what every machine produces and consumes per second, where the bottleneck is, and how full each machine runs.",
+     "- Plans export as shareable links, JSON, PNG, or GIF. Opening a shared link loads the full plan, editable, with nothing to sign up for.",
+diff --git a/src/app/manifest.ts b/src/app/manifest.ts
+index 9a5fc15..49d4fca 100644
+--- a/src/app/manifest.ts
++++ b/src/app/manifest.ts
+@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
+ 
+ export default function manifest(): MetadataRoute.Manifest {
+   return {
+-    name: "GTNH Planner",
+-    short_name: "GTNH Planner",
++    name: "SUSY Planner",
++    short_name: "SUSY Planner",
+     description:
+-      "Factory planner and recipe calculator for GregTech: New Horizons.",
++      "Factory planner and recipe calculator for Supersymmetry.",
+     start_url: "/",
+     display: "standalone",
+     background_color: "#1b1d21",
+diff --git a/src/app/opengraph-image.alt.txt b/src/app/opengraph-image.alt.txt
+index 4547586..a09e2c0 100644
+--- a/src/app/opengraph-image.alt.txt
++++ b/src/app/opengraph-image.alt.txt
+@@ -1 +1 @@
+-A GregTech: New Horizons factory drawn as a flowchart on GTNH Planner
++A Supersymmetry factory drawn as a flowchart on SUSY Planner
+diff --git a/src/app/page.tsx b/src/app/page.tsx
+index 7b105d7..031a708 100644
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -29,17 +29,17 @@ export async function generateMetadata({
+     url: `/api/community/plans/${encodeURIComponent(row.id)}/card`,
+     width: 1200,
+     height: 630,
+-    alt: `${row.name} on GTNH Planner`,
++    alt: `${row.name} on SUSY Planner`,
+   };
+ 
+   return {
+-    title: `${row.name} | GTNH Planner`,
++    title: `${row.name} | SUSY Planner`,
+     description,
+     alternates: { canonical: planUrl },
+     openGraph: {
+       title: row.name,
+       description,
+-      siteName: "GTNH Planner",
++      siteName: "SUSY Planner",
+       type: "website",
+       url: planUrl,
+       images: [image],
+@@ -60,11 +60,11 @@ export default function Home() {
+       {/* The one paragraph a JS-less visitor (or crawler) gets. Renders
+           nothing at all when the app itself is going to. */}
+       <noscript>
+-        <h1>GTNH Planner</h1>
++        <h1>SUSY Planner</h1>
+         <p>
+-          A free factory planner and recipe calculator for GregTech: New
+-          Horizons. Draw production chains on an interactive flowchart with
+-          full recipe data for GTNH 2.8.4 and 2.9, balance machine ratios,
++          A free factory planner and recipe calculator for Supersymmetry.
++          Draw production chains on an interactive flowchart with
++          full recipe data exported from the game itself, balance machine ratios,
+           compute power and throughput, and share plans with the community.
+           The planner needs JavaScript to run.
+         </p>
+diff --git a/src/components/PlanIdentityDrawer.tsx b/src/components/PlanIdentityDrawer.tsx
+index 07a76ee..f9480e4 100644
+--- a/src/components/PlanIdentityDrawer.tsx
++++ b/src/components/PlanIdentityDrawer.tsx
+@@ -47,7 +47,7 @@ import { formatRelativeDate } from "@/components/shelf-cards";
+  * else, reset while the board has drifted.
+  */
+ 
+-const OPEN_STORAGE_KEY = "gtnh-factory-flow.plan-card-open.v1";
++const OPEN_STORAGE_KEY = "susy-factory-flow.plan-card-open.v1";
+ 
+ /** The header-family square button the bar is made of. */
+ const BAR_BUTTON =
+diff --git a/src/components/RecipeBrowser.tsx b/src/components/RecipeBrowser.tsx
+index c0b3f08..288791f 100644
+--- a/src/components/RecipeBrowser.tsx
++++ b/src/components/RecipeBrowser.tsx
+@@ -214,9 +214,9 @@ const RESOURCE_GRID_ART = "!h-full !w-full scale-[1.4]";
+ const RESOURCE_PAGER_HEIGHT = 40;
+ /** One mouse notch is 100 on most platforms, so one notch is one page. */
+ const RESOURCE_WHEEL_PAGE_DELTA = 80;
+-const RESOURCE_VIEW_STORAGE_KEY = "gtnh-factory-flow.resource-view.v1";
++const RESOURCE_VIEW_STORAGE_KEY = "susy-factory-flow.resource-view.v1";
+ /** Whether the filter block under the search box is folded away. */
+-const RESOURCE_FILTERS_STORAGE_KEY = "gtnh-factory-flow.resource-filters.v1";
++const RESOURCE_FILTERS_STORAGE_KEY = "susy-factory-flow.resource-filters.v1";
+ 
+ type ResourceSortMode = "relevance" | "name" | "mod" | "recipes";
+ type ResourceViewMode = "list" | "grid";
+diff --git a/src/components/community/SharePlanDialog.tsx b/src/components/community/SharePlanDialog.tsx
+index 857e7ad..a09c9f0 100644
+--- a/src/components/community/SharePlanDialog.tsx
++++ b/src/components/community/SharePlanDialog.tsx
+@@ -281,7 +281,7 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
+                   Game version:{" "}
+                   <span className="text-fg-subtle">
+                     {datasetVersion?.gtnhVersion
+-                      ? `GTNH ${datasetVersion.gtnhVersion}`
++                      ? `SUSY ${datasetVersion.gtnhVersion}`
+                       : "unknown"}
+                   </span>
+                 </span>
+diff --git a/src/components/export/ExportFooter.tsx b/src/components/export/ExportFooter.tsx
+index 9525489..26c6a7f 100644
+--- a/src/components/export/ExportFooter.tsx
++++ b/src/components/export/ExportFooter.tsx
+@@ -185,10 +185,10 @@ export function ExportFooter({
+             </div>
+             <div className="mt-1.5 text-[13px]">
+               <span style={{ color: palette.brand }} className="font-semibold">
+-                gtnhplanner.com
++                susyplanner.local
+               </span>
+               {gameVersion ? (
+-                <span style={{ color: palette.muted }}> · GTNH {gameVersion}</span>
++                <span style={{ color: palette.muted }}> · SUSY {gameVersion}</span>
+               ) : null}
+             </div>
+           </div>
+diff --git a/src/components/flow/FactoryFlow.tsx b/src/components/flow/FactoryFlow.tsx
+index f88a925..6b7a5f7 100644
+--- a/src/components/flow/FactoryFlow.tsx
++++ b/src/components/flow/FactoryFlow.tsx
+@@ -609,7 +609,7 @@ const EDGE_ROUTE_SNAP_GRID = 4;
+ const EXPORT_IMAGE_PADDING = 80;
+ const EXPORT_PNG_PIXEL_RATIO = 2;
+ const EXPORT_PNG_MAX_PIXEL_SIDE = 8192;
+-const FLOW_EDGE_LABEL_SELECT_EVENT = "gtnh-flow.edge-label-select";
++const FLOW_EDGE_LABEL_SELECT_EVENT = "susy-flow.edge-label-select";
+ type ResourceEdgeData = {
+   resource: Pick<
+     ResourceAmount,
+diff --git a/src/components/flow/board-motion.tsx b/src/components/flow/board-motion.tsx
+index ef0ac63..07210f3 100644
+--- a/src/components/flow/board-motion.tsx
++++ b/src/components/flow/board-motion.tsx
+@@ -34,7 +34,7 @@ export interface BoardMotion {
+   valueMotion: boolean;
+ }
+ 
+-const BOARD_MOTION_STORAGE_KEY = "gtnh-factory-flow-board-motion";
++const BOARD_MOTION_STORAGE_KEY = "susy-factory-flow-board-motion";
+ 
+ /** How long a card glides onto its cell. Mirrored in globals.css. */
+ export const MOVE_SNAP_MS = 120;
+diff --git a/src/components/flow/board-view.ts b/src/components/flow/board-view.ts
+index 453d3c1..a62a23a 100644
+--- a/src/components/flow/board-view.ts
++++ b/src/components/flow/board-view.ts
+@@ -103,7 +103,7 @@ export interface BoardView {
+   autoArrangeInkTheme: CanvasThemeId;
+ }
+ 
+-const BOARD_VIEW_STORAGE_KEY = "gtnh-factory-flow-board-view";
++const BOARD_VIEW_STORAGE_KEY = "susy-factory-flow-board-view";
+ 
+ export const DEFAULT_BOARD_VIEW: BoardView = {
+   canvasPattern: "dots",
+diff --git a/src/components/shelf-cards.tsx b/src/components/shelf-cards.tsx
+index 9800174..41ff309 100644
+--- a/src/components/shelf-cards.tsx
++++ b/src/components/shelf-cards.tsx
+@@ -237,7 +237,7 @@ export function renderEntryHoverCard(entry: {
+         <span>{entry.machineCount} machines</span>
+         {entry.tier ? <TierBadge tier={entry.tier} /> : null}
+         {entry.gameVersion ? (
+-          <span className="ml-auto shrink-0 truncate">GTNH {entry.gameVersion}</span>
++          <span className="ml-auto shrink-0 truncate">SUSY {entry.gameVersion}</span>
+         ) : null}
+       </div>
+       {entry.description ? (
+diff --git a/src/components/tour/WelcomePage.tsx b/src/components/tour/WelcomePage.tsx
+index 8fa5a58..1a21af6 100644
+--- a/src/components/tour/WelcomePage.tsx
++++ b/src/components/tour/WelcomePage.tsx
+@@ -219,7 +219,7 @@ export function WelcomePage() {
+       <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-7 px-6 py-8 compact:gap-5 compact:px-4 compact:py-5">
+         <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
+           <h2 className="text-2xl font-bold tracking-tight text-fg compact:text-xl">
+-            GTNH <span className="text-cyan-500">Planner</span>
++            SUSY <span className="text-cyan-500">Planner</span>
+           </h2>
+           <span className="rounded border border-line px-1.5 py-px text-[11px] font-semibold leading-none text-fg-muted tabular-nums">
+             v{APP_VERSION}
+diff --git a/src/instrumentation.ts b/src/instrumentation.ts
+index 4b58abb..6d4195e 100644
+--- a/src/instrumentation.ts
++++ b/src/instrumentation.ts
+@@ -3,15 +3,18 @@ export async function register() {
+     return;
+   }
+ 
+-  if (process.env.GTNH_PREWARM_ON_STARTUP !== "1") {
++  if (
++    process.env.SUSY_PREWARM_ON_STARTUP !== "1" &&
++    process.env.GTNH_PREWARM_ON_STARTUP !== "1"
++  ) {
+     return;
+   }
+ 
+   const { prewarmLatestDatasetVersions } = await import("@/lib/server/dataset-query");
+   try {
+     await prewarmLatestDatasetVersions();
+-    console.info("GTNH dataset cache prewarmed.");
++    console.info("Dataset cache prewarmed.");
+   } catch (error) {
+-    console.error("GTNH dataset cache prewarm failed.", error);
++    console.error("Dataset cache prewarm failed.", error);
+   }
+ }
+diff --git a/src/lib/community/client.ts b/src/lib/community/client.ts
+index 49a9b16..19ace1a 100644
+--- a/src/lib/community/client.ts
++++ b/src/lib/community/client.ts
+@@ -15,7 +15,7 @@ import type {
+   EntryIcon,
+ } from "./types";
+ 
+-const DEVICE_ID_STORAGE_KEY = "gtnh-factory-flow.device-id.v1";
++const DEVICE_ID_STORAGE_KEY = "susy-factory-flow.device-id.v1";
+ 
+ /** Stable anonymous id for this browser; pairs with the IP hash server-side. */
+ export function getDeviceId(): string {
+diff --git a/src/lib/datasets/browser-cache.ts b/src/lib/datasets/browser-cache.ts
+index 789ccb1..b5b6118 100644
+--- a/src/lib/datasets/browser-cache.ts
++++ b/src/lib/datasets/browser-cache.ts
+@@ -2,7 +2,7 @@
+ 
+ import type { RecipeDataset } from "./types";
+ 
+-const DB_NAME = "gtnh-factory-flow";
++const DB_NAME = "susy-factory-flow";
+ const DB_VERSION = 1;
+ const STORE_NAME = "recipe-datasets";
+ 
+diff --git a/src/lib/datasets/remote.ts b/src/lib/datasets/remote.ts
+index 3bc76bb..68b8ddf 100644
+--- a/src/lib/datasets/remote.ts
++++ b/src/lib/datasets/remote.ts
+@@ -1,8 +1,8 @@
+ import { parseDatasetManifestJson, parseRecipeDatasetJson } from "../import-export";
++import { DEFAULT_DATASET_MANIFEST_URL } from "../pack";
+ import type { DatasetManifest, DatasetVersion, RecipeDataset } from "./types";
+ 
+-export const DEFAULT_DATASET_MANIFEST_URL =
+-  process.env.NEXT_PUBLIC_GTNH_DATASET_MANIFEST_URL ?? "/datasets/gtnh/datasets.manifest.json";
++export { DEFAULT_DATASET_MANIFEST_URL };
+ 
+ export async function fetchDatasetManifest(
+   manifestUrl = DEFAULT_DATASET_MANIFEST_URL,
+diff --git a/src/lib/designs/design-camera.test.ts b/src/lib/designs/design-camera.test.ts
+index 276b9ed..a2f211a 100644
+--- a/src/lib/designs/design-camera.test.ts
++++ b/src/lib/designs/design-camera.test.ts
+@@ -83,7 +83,7 @@ describe("design cameras", () => {
+     expect(readDesignCamera("nan")).toBeUndefined();
+ 
+     store.set(
+-      "gtnh-factory-flow.design-cameras.v1",
++      "susy-factory-flow.design-cameras.v1",
+       JSON.stringify({ good: { x: 1, y: 2, zoom: 1 }, bad: { x: "left", y: 2, zoom: 1 } }),
+     );
+     expect(readDesignCamera("good")).toEqual({ x: 1, y: 2, zoom: 1 });
+@@ -91,7 +91,7 @@ describe("design cameras", () => {
+   });
+ 
+   it("shrugs off a corrupt blob", () => {
+-    store.set("gtnh-factory-flow.design-cameras.v1", "not json at all");
++    store.set("susy-factory-flow.design-cameras.v1", "not json at all");
+     expect(readDesignCamera("alpha")).toBeUndefined();
+ 
+     writeDesignCamera("alpha", { x: 5, y: 5, zoom: 1 });
+diff --git a/src/lib/designs/design-camera.ts b/src/lib/designs/design-camera.ts
+index 37565e6..084a437 100644
+--- a/src/lib/designs/design-camera.ts
++++ b/src/lib/designs/design-camera.ts
+@@ -36,7 +36,7 @@ export interface BoardCamera {
+   zoom: number;
+ }
+ 
+-const CAMERA_STORAGE_KEY = "gtnh-factory-flow.design-cameras.v1";
++const CAMERA_STORAGE_KEY = "susy-factory-flow.design-cameras.v1";
+ 
+ /**
+  * How many tabs' cameras to keep. Well past the number of tabs anyone has open,
+diff --git a/src/lib/designs/design-storage.ts b/src/lib/designs/design-storage.ts
+index 605a2f5..cd06040 100644
+--- a/src/lib/designs/design-storage.ts
++++ b/src/lib/designs/design-storage.ts
+@@ -9,7 +9,7 @@ import { toDesignSummary, type DesignRecord, type DesignSummary } from "./design
+  * version, and a version change blocks while any other connection is open — so
+  * the two would race on startup, when both are opened at once.
+  */
+-const DB_NAME = "gtnh-factory-flow-designs";
++const DB_NAME = "susy-factory-flow-designs";
+ const DB_VERSION = 1;
+ 
+ /*
+@@ -22,7 +22,7 @@ const META_STORE = "design-meta";
+ const PLAN_STORE = "design-plans";
+ 
+ /** Small enough, and read early enough, to be worth keeping synchronous. */
+-export const ACTIVE_DESIGN_STORAGE_KEY = "gtnh-factory-flow.active-design.v1";
++export const ACTIVE_DESIGN_STORAGE_KEY = "susy-factory-flow.active-design.v1";
+ 
+ interface StoredPlan {
+   id: string;
+diff --git a/src/lib/import-export/plan-image.ts b/src/lib/import-export/plan-image.ts
+index e597a84..c4132de 100644
+--- a/src/lib/import-export/plan-image.ts
++++ b/src/lib/import-export/plan-image.ts
+@@ -1,8 +1,8 @@
+ "use client";
+ 
+-const PLAN_METADATA_KEY = "gtnh-factory-flow-project";
+-export const FLOW_IMAGE_EXPORT_EVENT = "gtnh-flow-export-image";
+-export const FLOW_IMAGE_EXPORT_COMPLETE_EVENT = "gtnh-flow-export-image-complete";
++const PLAN_METADATA_KEY = "susy-factory-flow-project";
++export const FLOW_IMAGE_EXPORT_EVENT = "susy-flow-export-image";
++export const FLOW_IMAGE_EXPORT_COMPLETE_EVENT = "susy-flow-export-image-complete";
+ 
+ /**
+  * What the board is asked for over FLOW_IMAGE_EXPORT_EVENT.
+diff --git a/src/lib/pack.ts b/src/lib/pack.ts
+new file mode 100644
+index 0000000..31f9ae8
+--- /dev/null
++++ b/src/lib/pack.ts
+@@ -0,0 +1,25 @@
++/**
++ * Which modpack this build of the planner serves.
++ *
++ * The upstream project is bound to GregTech: New Horizons; this fork retargets
++ * it at Supersymmetry with the smallest possible surface so upstream merges
++ * stay cheap. Everything pack-specific funnels through this module: dataset
++ * paths, storage namespaces, branding. If an upstream merge conflicts here,
++ * re-derive the values rather than preserving theirs.
++ */
++export const PACK_ID = "susy";
++
++export const PACK_LABEL = "SUSY Planner";
++
++/** URL path segment under /public where datasets are served from. */
++export const DATASET_PUBLIC_ROOT = "/datasets/susy";
++
++export const DEFAULT_DATASET_MANIFEST_URL =
++  process.env.NEXT_PUBLIC_SUSY_DATASET_MANIFEST_URL ??
++  `${DATASET_PUBLIC_ROOT}/datasets.manifest.json`;
++
++/**
++ * Local browser namespace. A fresh name keeps SUSY plans out of any GTNH
++ * install's IndexedDB/localStorage on a shared machine.
++ */
++export const STORAGE_NAMESPACE = "susy-factory-flow";
+diff --git a/src/lib/server/dataset-query.ts b/src/lib/server/dataset-query.ts
+index 407e937..26a7905 100644
+--- a/src/lib/server/dataset-query.ts
++++ b/src/lib/server/dataset-query.ts
+@@ -185,7 +185,7 @@ const BEE_RECIPE_MAPS = new Set(["Bee Produce"]);
+ 
+ export type ResourceSourceFilter = "plants" | "bees";
+ 
+-const datasetRoot = path.join(process.cwd(), "public", "datasets", "gtnh");
++const datasetRoot = path.join(process.cwd(), "public", "datasets", "susy");
+ const loadedCatalogs = new Map<string, LoadedRecipeIndex>();
+ const pendingCatalogLoads = new Map<string, Promise<LoadedRecipeIndex>>();
+ const pendingRecipeIndexLoads = new Map<string, Promise<LoadedRecipeIndex>>();
+diff --git a/src/lib/server/dataset-static-file.ts b/src/lib/server/dataset-static-file.ts
+index ca52520..d1aa182 100644
+--- a/src/lib/server/dataset-static-file.ts
++++ b/src/lib/server/dataset-static-file.ts
+@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
+ import path from "node:path";
+ import { Readable } from "node:stream";
+ 
+-export const datasetRoot = path.join(process.cwd(), "public", "datasets", "gtnh");
++export const datasetRoot = path.join(process.cwd(), "public", "datasets", "susy");
+ 
+ export async function serveDatasetFile(
+   filePath: string,
+diff --git a/src/lib/setups-tab.ts b/src/lib/setups-tab.ts
+index a560a7b..05d8772 100644
+--- a/src/lib/setups-tab.ts
++++ b/src/lib/setups-tab.ts
+@@ -4,14 +4,14 @@
+  * click happens, so the requested scope waits in module state until either
+  * the mounted panel's listener or the next mount collects it.
+  */
+-export const OPEN_SETUPS_EVENT = "gtnh:open-setups";
++export const OPEN_SETUPS_EVENT = "susy:open-setups";
+ 
+ /**
+  * Fired when a share lands on the network, wherever it was posted from (the
+  * shelf's own button or the top bar). A mounted Setups panel refetches so the
+  * new post is already on the shelf when the dialog closes.
+  */
+-export const SETUPS_CHANGED_EVENT = "gtnh:setups-changed";
++export const SETUPS_CHANGED_EVENT = "susy:setups-changed";
+ 
+ export function notifySetupsChanged(): void {
+   window.dispatchEvent(new Event(SETUPS_CHANGED_EVENT));
+diff --git a/src/lib/sidebar-tab.ts b/src/lib/sidebar-tab.ts
+index c13d9a7..4f6eee2 100644
+--- a/src/lib/sidebar-tab.ts
++++ b/src/lib/sidebar-tab.ts
+@@ -10,7 +10,7 @@
+  * `openSetupsTab` stays where it is. It carries a shelf SCOPE as well as a tab,
+  * and the Setups panel listens for that separately.
+  */
+-export const OPEN_SIDEBAR_TAB_EVENT = "gtnh:open-sidebar-tab";
++export const OPEN_SIDEBAR_TAB_EVENT = "susy:open-sidebar-tab";
+ 
+ export type SidebarTab = "items" | "blueprints" | "setups";
+ 
+diff --git a/src/lib/tour/tour-state.ts b/src/lib/tour/tour-state.ts
+index 827d535..093fbcd 100644
+--- a/src/lib/tour/tour-state.ts
++++ b/src/lib/tour/tour-state.ts
+@@ -23,7 +23,7 @@ export interface TourState {
+   completedLessonIds: string[];
+ }
+ 
+-const COMPLETED_STORAGE_KEY = "gtnh-factory-flow-tours-done";
++const COMPLETED_STORAGE_KEY = "susy-factory-flow-tours-done";
+ 
+ const IDLE: TourState = { stepIndex: 0, completedLessonIds: [] };
+ 
+diff --git a/src/lib/tour/welcome-tab.ts b/src/lib/tour/welcome-tab.ts
+index bac34b6..b252584 100644
+--- a/src/lib/tour/welcome-tab.ts
++++ b/src/lib/tour/welcome-tab.ts
+@@ -34,10 +34,10 @@ export interface WelcomeTabState {
+   showOnStartup: boolean;
+ }
+ 
+-const WELCOME_TAB_STORAGE_KEY = "gtnh-factory-flow-welcome-tab";
++const WELCOME_TAB_STORAGE_KEY = "susy-factory-flow-welcome-tab";
+ 
+ /** Set once the user has stepped off Welcome in this browser session. */
+-const WELCOME_LEFT_SESSION_KEY = "gtnh-factory-flow-welcome-left";
++const WELCOME_LEFT_SESSION_KEY = "susy-factory-flow-welcome-left";
+ 
+ const CLOSED: WelcomeTabState = { open: false, active: false, showOnStartup: true };
+ 
+diff --git a/src/lib/whats-new.test.ts b/src/lib/whats-new.test.ts
+index 8a68ca1..114d932 100644
+--- a/src/lib/whats-new.test.ts
++++ b/src/lib/whats-new.test.ts
+@@ -29,8 +29,8 @@ const {
+   unseenEntries,
+ } = await import("@/lib/whats-new");
+ 
+-const KEY = "gtnh-factory-flow.last-seen-version.v1";
+-const FORCED_KEY = "gtnh-factory-flow.forced-notes.v1";
++const KEY = "susy-factory-flow.last-seen-version.v1";
++const FORCED_KEY = "susy-factory-flow.forced-notes.v1";
+ 
+ describe("compareVersions", () => {
+   it("orders by number, not by string", () => {
+diff --git a/src/lib/whats-new.ts b/src/lib/whats-new.ts
+index 5f6772b..4382570 100644
+--- a/src/lib/whats-new.ts
++++ b/src/lib/whats-new.ts
+@@ -18,7 +18,7 @@ import { APP_VERSION } from "@/lib/version";
+  * The stamp is written when the popup is DISMISSED, not when it is shown, so
+  * closing the tab mid-read does not lose the notes.
+  */
+-const LAST_SEEN_KEY = "gtnh-factory-flow.last-seen-version.v1";
++const LAST_SEEN_KEY = "susy-factory-flow.last-seen-version.v1";
+ 
+ /**
+  * Which `showToEveryone` releases this browser has already been shown.
+@@ -29,7 +29,7 @@ const LAST_SEEN_KEY = "gtnh-factory-flow.last-seen-version.v1";
+  * showing had to lie about the stamp to work, and then a browser that had
+  * genuinely read the notes would be told about them again.
+  */
+-const FORCED_SHOWN_KEY = "gtnh-factory-flow.forced-notes.v1";
++const FORCED_SHOWN_KEY = "susy-factory-flow.forced-notes.v1";
+ 
+ function readLastSeen(): string | undefined {
+   try {
+diff --git a/src/lib/workspace-view.test.ts b/src/lib/workspace-view.test.ts
+index aa6bfcb..47a49c4 100644
+--- a/src/lib/workspace-view.test.ts
++++ b/src/lib/workspace-view.test.ts
+@@ -13,7 +13,7 @@ import {
+  */
+ function current() {
+   return JSON.parse(
+-    window.localStorage.getItem("gtnh-factory-flow-workspace-view") ?? "{}",
++    window.localStorage.getItem("susy-factory-flow-workspace-view") ?? "{}",
+   ) as { hiddenResourceKeys: string[]; favouriteResourceKeys: string[] };
+ }
+ 
+diff --git a/src/lib/workspace-view.ts b/src/lib/workspace-view.ts
+index a56c742..0f4974d 100644
+--- a/src/lib/workspace-view.ts
++++ b/src/lib/workspace-view.ts
+@@ -45,7 +45,7 @@ export interface WorkspaceView {
+   favouriteResourceKeys: string[];
+ }
+ 
+-const WORKSPACE_VIEW_STORAGE_KEY = "gtnh-factory-flow-workspace-view";
++const WORKSPACE_VIEW_STORAGE_KEY = "susy-factory-flow-workspace-view";
+ 
+ export const DEFAULT_WORKSPACE_VIEW: WorkspaceView = {
+   leftPanelOpen: true,
+diff --git a/src/store/factory-store.ts b/src/store/factory-store.ts
+index b0ed9a6..b056881 100644
+--- a/src/store/factory-store.ts
++++ b/src/store/factory-store.ts
+@@ -68,8 +68,8 @@ import {
+ } from "@/lib/model/pocket-connections";
+ import type { BoardCamera } from "@/lib/designs/design-camera";
+ 
+-export const LOCAL_STORAGE_KEY = "gtnh-factory-flow.project.v2";
+-export const RESOURCE_HISTORY_STORAGE_KEY = "gtnh-factory-flow.resource-history.v1";
++export const LOCAL_STORAGE_KEY = "susy-factory-flow.project.v2";
++export const RESOURCE_HISTORY_STORAGE_KEY = "susy-factory-flow.resource-history.v1";
+ const RESOURCE_HISTORY_LIMIT = 30;
+ const PROJECT_HISTORY_LIMIT = 100;
+ 
+diff --git a/tools/dataset-pipeline/scripts/reuse-previous-icons.mjs b/tools/dataset-pipeline/scripts/reuse-previous-icons.mjs
+index 3985405..c8b7974 100644
+--- a/tools/dataset-pipeline/scripts/reuse-previous-icons.mjs
++++ b/tools/dataset-pipeline/scripts/reuse-previous-icons.mjs
+@@ -85,10 +85,10 @@ function reusableIcon(resource, previousVersionId, currentVersionId) {
+ }
+ 
+ function rewriteDatasetPath(value, previousVersionId, currentVersionId) {
+-  if (typeof value !== "string" || !value.includes(`/datasets/gtnh/${previousVersionId}/`)) {
++  if (typeof value !== "string" || !value.includes(`/datasets/susy/${previousVersionId}/`)) {
+     return undefined;
+   }
+-  return value.replace(`/datasets/gtnh/${previousVersionId}/`, `/datasets/gtnh/${currentVersionId}/`);
++  return value.replace(`/datasets/susy/${previousVersionId}/`, `/datasets/susy/${currentVersionId}/`);
+ }
+ 
+ async function copyTextureDir(name) {
+diff --git a/tools/dataset-pipeline/scripts/run-dataset-in-docker.sh b/tools/dataset-pipeline/scripts/run-dataset-in-docker.sh
+index c38c95d..9d24c30 100644
+--- a/tools/dataset-pipeline/scripts/run-dataset-in-docker.sh
++++ b/tools/dataset-pipeline/scripts/run-dataset-in-docker.sh
+@@ -9,7 +9,7 @@ timeout_seconds="${GTNH_EXPORT_TIMEOUT_SECONDS:-21600}"
+ docker_memory_limit="${GTNH_DATASET_DOCKER_MEMORY_LIMIT:-10g}"
+ docker_memory_swap="${GTNH_DATASET_DOCKER_MEMORY_SWAP:-12g}"
+ docker_cpus="${GTNH_DATASET_DOCKER_CPUS:-8}"
+-dataset_root="${GTNH_DATASETS_ROOT:-public/datasets/gtnh}"
++dataset_root="${GTNH_DATASETS_ROOT:-public/datasets/susy}"
+ 
+ case "$dataset_root" in
+   /*) dataset_root_abs="$dataset_root" ;;
+diff --git a/tools/perf/anim-probe.mjs b/tools/perf/anim-probe.mjs
+index 3f7a675..64a6b77 100644
+--- a/tools/perf/anim-probe.mjs
++++ b/tools/perf/anim-probe.mjs
+@@ -14,7 +14,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const db = await new Promise((resolve, reject) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const database = request.result;
+       if (!database.objectStoreNames.contains("design-meta")) database.createObjectStore("design-meta", { keyPath: "id" });
+@@ -31,7 +31,7 @@ await page.evaluate(async (plan) => {
+     transaction.oncomplete = () => resolve();
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+ }, project);
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120_000 });
+diff --git a/tools/perf/churn-probe.mjs b/tools/perf/churn-probe.mjs
+index a095783..2d373ee 100644
+--- a/tools/perf/churn-probe.mjs
++++ b/tools/perf/churn-probe.mjs
+@@ -29,7 +29,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const db = await new Promise((res, rej) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const d = request.result;
+       if (!d.objectStoreNames.contains("design-meta")) d.createObjectStore("design-meta", { keyPath: "id" });
+@@ -46,8 +46,8 @@ await page.evaluate(async (plan) => {
+     t.oncomplete = () => res();
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
+-  localStorage.setItem("gtnh-factory-flow-board-view", JSON.stringify({snapToGrid:false,canvasPattern:"dots",heatmapMode:false,lineHeatMode:false,lineThicknessMode:false,linePulseMode:false}));
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow-board-view", JSON.stringify({snapToGrid:false,canvasPattern:"dots",heatmapMode:false,lineHeatMode:false,lineThicknessMode:false,linePulseMode:false}));
+ }, project);
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120_000 });
+diff --git a/tools/perf/diagnose.mjs b/tools/perf/diagnose.mjs
+index 383d8cb..2ab6822 100644
+--- a/tools/perf/diagnose.mjs
++++ b/tools/perf/diagnose.mjs
+@@ -27,7 +27,7 @@ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const open = () =>
+     new Promise((resolve, reject) => {
+-      const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++      const request = indexedDB.open("susy-factory-flow-designs", 1);
+       request.onupgradeneeded = () => {
+         const db = request.result;
+         if (!db.objectStoreNames.contains("design-meta")) db.createObjectStore("design-meta", { keyPath: "id" });
+@@ -46,7 +46,7 @@ await page.evaluate(async (plan) => {
+     transaction.onerror = () => reject(transaction.error);
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+ }, project);
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120_000 });
+diff --git a/tools/perf/feel-firefox.mjs b/tools/perf/feel-firefox.mjs
+index 745c807..660c293 100644
+--- a/tools/perf/feel-firefox.mjs
++++ b/tools/perf/feel-firefox.mjs
+@@ -47,7 +47,7 @@ await page.waitForSelector(".react-flow", { timeout: 90_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const db = await new Promise((res, rej) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const d = request.result;
+       if (!d.objectStoreNames.contains("design-meta")) d.createObjectStore("design-meta", { keyPath: "id" });
+@@ -64,10 +64,10 @@ await page.evaluate(async (plan) => {
+     t.oncomplete = () => res();
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+   // Match the reporting session's board view exactly: thickness and pulse off.
+   localStorage.setItem(
+-    "gtnh-factory-flow-board-view",
++    "susy-factory-flow-board-view",
+     JSON.stringify({
+       snapToGrid: false,
+       canvasPattern: "dots",
+diff --git a/tools/perf/feel.mjs b/tools/perf/feel.mjs
+index 7e268d3..4774220 100644
+--- a/tools/perf/feel.mjs
++++ b/tools/perf/feel.mjs
+@@ -36,7 +36,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const db = await new Promise((res, rej) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const d = request.result;
+       if (!d.objectStoreNames.contains("design-meta")) d.createObjectStore("design-meta", { keyPath: "id" });
+@@ -53,7 +53,7 @@ await page.evaluate(async (plan) => {
+     t.oncomplete = () => res();
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+ }, project);
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120_000 });
+diff --git a/tools/perf/idle-probe.mjs b/tools/perf/idle-probe.mjs
+index d75133f..af02150 100644
+--- a/tools/perf/idle-probe.mjs
++++ b/tools/perf/idle-probe.mjs
+@@ -26,7 +26,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const db = await new Promise((resolve, reject) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const database = request.result;
+       if (!database.objectStoreNames.contains("design-meta")) database.createObjectStore("design-meta", { keyPath: "id" });
+@@ -44,7 +44,7 @@ await page.evaluate(async (plan) => {
+     transaction.onerror = () => reject(transaction.error);
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+ }, project);
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120_000 });
+diff --git a/tools/perf/layer-count.mjs b/tools/perf/layer-count.mjs
+index 3f23f92..bbb342e 100644
+--- a/tools/perf/layer-count.mjs
++++ b/tools/perf/layer-count.mjs
+@@ -11,16 +11,16 @@ await page.goto("http://localhost:3000/", { waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow", { timeout: 60000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async ({ plan, view }) => {
+-  const db = await new Promise((res, rej) => { const r = indexedDB.open("gtnh-factory-flow-designs", 1);
++  const db = await new Promise((res, rej) => { const r = indexedDB.open("susy-factory-flow-designs", 1);
+     r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains("design-meta")) d.createObjectStore("design-meta", {keyPath:"id"}); if (!d.objectStoreNames.contains("design-plans")) d.createObjectStore("design-plans", {keyPath:"id"}); };
+     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+   const now = new Date().toISOString();
+   await new Promise((res) => { const t = db.transaction(["design-meta","design-plans"],"readwrite");
+     t.objectStore("design-meta").put({ id: plan.id, name: plan.name, createdAt: now, updatedAt: now });
+     t.objectStore("design-plans").put({ id: plan.id, project: plan }); t.oncomplete = () => res(); });
+-  db.close(); localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
+-  if (view) { const raw = localStorage.getItem("gtnh-factory-flow-board-view");
+-    localStorage.setItem("gtnh-factory-flow-board-view", JSON.stringify({ ...(raw ? JSON.parse(raw) : {}), ...view })); }
++  db.close(); localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
++  if (view) { const raw = localStorage.getItem("susy-factory-flow-board-view");
++    localStorage.setItem("susy-factory-flow-board-view", JSON.stringify({ ...(raw ? JSON.parse(raw) : {}), ...view })); }
+ }, { plan: project, view });
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120000 });
+diff --git a/tools/perf/lod-preview.mjs b/tools/perf/lod-preview.mjs
+index b514030..6400c0f 100644
+--- a/tools/perf/lod-preview.mjs
++++ b/tools/perf/lod-preview.mjs
+@@ -62,7 +62,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async (plan) => {
+   const db = await new Promise((res, rej) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const d = request.result;
+       if (!d.objectStoreNames.contains("design-meta")) d.createObjectStore("design-meta", { keyPath: "id" });
+@@ -79,7 +79,7 @@ await page.evaluate(async (plan) => {
+     t.oncomplete = () => res();
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+ }, project);
+ await page.reload({ waitUntil: "domcontentloaded" });
+ await page.waitForSelector(".react-flow__node", { timeout: 120_000 });
+diff --git a/tools/perf/shots.mjs b/tools/perf/shots.mjs
+index 4f9116b..f635473 100644
+--- a/tools/perf/shots.mjs
++++ b/tools/perf/shots.mjs
+@@ -23,7 +23,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ await page.evaluate(async ({ plan, view }) => {
+   const db = await new Promise((resolve, reject) => {
+-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
++    const request = indexedDB.open("susy-factory-flow-designs", 1);
+     request.onupgradeneeded = () => {
+       const database = request.result;
+       if (!database.objectStoreNames.contains("design-meta")) database.createObjectStore("design-meta", { keyPath: "id" });
+@@ -40,11 +40,11 @@ await page.evaluate(async ({ plan, view }) => {
+     transaction.oncomplete = () => resolve();
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+   if (view) {
+-    const raw = localStorage.getItem("gtnh-factory-flow-board-view");
++    const raw = localStorage.getItem("susy-factory-flow-board-view");
+     localStorage.setItem(
+-      "gtnh-factory-flow-board-view",
++      "susy-factory-flow-board-view",
+       JSON.stringify({ ...(raw ? JSON.parse(raw) : {}), ...view }),
+     );
+   }
+diff --git a/tools/perf/stress.mjs b/tools/perf/stress.mjs
+index 936d71c..d01793e 100644
+--- a/tools/perf/stress.mjs
++++ b/tools/perf/stress.mjs
+@@ -48,7 +48,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
+ await page.waitForTimeout(6000);
+ 
+ await page.evaluate(async (plan) => {
+-  const DB_NAME = "gtnh-factory-flow-designs";
++  const DB_NAME = "susy-factory-flow-designs";
+   const open = () =>
+     new Promise((resolve, reject) => {
+       const request = indexedDB.open(DB_NAME, 1);
+@@ -76,15 +76,15 @@ await page.evaluate(async (plan) => {
+     transaction.onerror = () => reject(transaction.error);
+   });
+   db.close();
+-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
++  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+ }, project);
+ 
+ if (BOARD_VIEW) {
+   await page.evaluate((view) => {
+-    const raw = localStorage.getItem("gtnh-factory-flow-board-view");
++    const raw = localStorage.getItem("susy-factory-flow-board-view");
+     const current = raw ? JSON.parse(raw) : {};
+     localStorage.setItem(
+-      "gtnh-factory-flow-board-view",
++      "susy-factory-flow-board-view",
+       JSON.stringify({ ...current, ...view }),
+     );
+   }, BOARD_VIEW);

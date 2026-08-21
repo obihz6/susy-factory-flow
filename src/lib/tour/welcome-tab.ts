@@ -34,10 +34,10 @@ export interface WelcomeTabState {
   showOnStartup: boolean;
 }
 
-const WELCOME_TAB_STORAGE_KEY = "gtnh-factory-flow-welcome-tab";
+const WELCOME_TAB_STORAGE_KEY = "susy-factory-flow-welcome-tab";
 
 /** Set once the user has stepped off Welcome in this browser session. */
-const WELCOME_LEFT_SESSION_KEY = "gtnh-factory-flow-welcome-left";
+const WELCOME_LEFT_SESSION_KEY = "susy-factory-flow-welcome-left";
 
 const CLOSED: WelcomeTabState = { open: false, active: false, showOnStartup: true };
 

@@ -16,7 +16,7 @@
 /.tmp
 /.gh-artifacts-*/
 *.tar
-/public/datasets/gtnh/
+/public/datasets/susy/
 
 # next.js
 /.next/

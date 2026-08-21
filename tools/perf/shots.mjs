@@ -23,7 +23,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
 await page.waitForTimeout(6000);
 await page.evaluate(async ({ plan, view }) => {
   const db = await new Promise((resolve, reject) => {
-    const request = indexedDB.open("gtnh-factory-flow-designs", 1);
+    const request = indexedDB.open("susy-factory-flow-designs", 1);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains("design-meta")) database.createObjectStore("design-meta", { keyPath: "id" });
@@ -40,11 +40,11 @@ await page.evaluate(async ({ plan, view }) => {
     transaction.oncomplete = () => resolve();
   });
   db.close();
-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
+  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
   if (view) {
-    const raw = localStorage.getItem("gtnh-factory-flow-board-view");
+    const raw = localStorage.getItem("susy-factory-flow-board-view");
     localStorage.setItem(
-      "gtnh-factory-flow-board-view",
+      "susy-factory-flow-board-view",
       JSON.stringify({ ...(raw ? JSON.parse(raw) : {}), ...view }),
     );
   }
