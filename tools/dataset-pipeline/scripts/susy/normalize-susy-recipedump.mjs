@@ -1,0 +1,559 @@
+/**
+ * SusyCore recipedump.json -> planner RecipeDataset.
+ *
+ * Raw source: SusyCore's `/recipemapdump` command (SymmetricDevs/Susy-Core,
+ * CommandRecipemapDump.java), which writes one JSON object with these keys:
+ *
+ *   items       full item catalog ({resource, metadata, displayName, material?})
+ *   fluids      full fluid catalog ({fluidName, unlocalizedName, localizedName})
+ *   oreDict     { oreName: [itemStack] }
+ *   recipemaps  { <unlocalizedName>: { maxInputs..., recipes: [gtRecipe] } }
+ *   gtMTEs      { <registryKey>: { metaName, isController, tier?, recipemapName? } }
+ *   smelting    [ {input, output} ]
+ *   crafting    [ {type, keymap/shape | ingredients, output} ]
+ *   materials   { ... } (unused here)
+ *
+ * The GTNH pipeline models this same stage on gtnh-calc-oracle +
+ * normalize-oracle-export.mjs; resource ids follow that contract
+ * (`registry@meta` when meta != 0, lowercased) so downstream code behaves
+ * identically across packs.
+ *
+ * Known gaps vs the GTNH export, accepted for now:
+ *   - No HEI slot layouts: neiSlot values are synthesized deterministically;
+ *     the browser falls back to capacity-based grids anyway.
+ *   - No localized recipe-map names: they are derived from the unlocalized
+ *     name ("gtceu.macerator" -> "Macerator").
+ *   - No runtimeCalculation: the solver's own overclock model applies.
+ *   - Smelting recipes carry synthesized 128 ticks @ 4 EU/t (the GregTech
+ *     electric-furnace baseline); vanilla furnace timing differs.
+ *
+ * Usage:
+ *   normalize-susy-recipedump.mjs <recipedump.json> <recipes.json>
+ * Env:
+ *   SUSY_DATASET_VERSION_ID   (required)
+ *   SUSY_DATASET_VERSION_LABEL (required)
+ *   SUSY_RENDERED_ICON_DIR    optional dir of rendered PNGs keyed by icon stem
+ */
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { writeDatasetJson } from "../dataset-json-writer.mjs";
+
+const inputPath = process.argv[2];
+const outputPath = process.argv[3];
+if (!inputPath || !outputPath) {
+  throw new Error("Usage: normalize-susy-recipedump.mjs <recipedump.json> <recipes.json>");
+}
+
+const datasetVersionId = requiredEnv("SUSY_DATASET_VERSION_ID");
+const susyVersion = requiredEnv("SUSY_DATASET_VERSION_LABEL");
+const generatedAt = new Date().toISOString();
+
+const raw = JSON.parse(stripBom(await fs.readFile(inputPath, "utf8")));
+
+// ---------------------------------------------------------------------------
+// Resource identity
+// ---------------------------------------------------------------------------
+
+/** `registry@meta` when meta != 0, lowercased — the GTNH oracle convention. */
+function itemId(resource, metadata) {
+  const canonical = String(resource || "").toLowerCase();
+  if (!canonical || canonical === "null") return null;
+  return Number(metadata) ? `${canonical}@${Number(metadata)}` : canonical;
+}
+
+const VOLTAGE_NAMES = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV"];
+const VOLTAGES = [8, 32, 128, 512, 2048, 8192, 32768, 131072, 524288];
+
+function voltageTierForEu(eut) {
+  const value = Math.max(0, Math.abs(Number(eut) || 0));
+  for (let tier = 0; tier < VOLTAGES.length; tier += 1) {
+    if (value <= VOLTAGES[tier]) return VOLTAGE_NAMES[tier];
+  }
+  return VOLTAGE_NAMES[VOLTAGE_NAMES.length - 1];
+}
+
+/** "gtceu.macerator" / "macerator" / "susy.mixer_settler" -> "Macerator". */
+function prettyMachineName(unlocalizedName) {
+  const tail = String(unlocalizedName || "").split(".").pop() || String(unlocalizedName || "");
+  return tail
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function sha16(text) {
+  return crypto.createHash("sha1").update(text, "utf8").digest("hex").slice(0, 16);
+}
+
+function stripBom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+function requiredEnv(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required.`);
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog joins
+// ---------------------------------------------------------------------------
+
+/** unlocalizedName/localizedName -> {fluidName, displayName} */
+const fluidByUnlocalizedName = new Map();
+for (const fluid of Array.isArray(raw.fluids) ? raw.fluids : []) {
+  if (!fluid || typeof fluid !== "object") continue;
+  const entry = {
+    fluidName: String(fluid.fluidName || ""),
+    displayName: String(fluid.localizedName || fluid.unlocalizedName || fluid.fluidName || ""),
+  };
+  if (fluid.unlocalizedName) fluidByUnlocalizedName.set(fluid.unlocalizedName, entry);
+  if (fluid.fluidName) fluidByUnlocalizedName.set(fluid.fluidName, entry);
+}
+
+const itemDisplayNames = new Map();
+for (const item of Array.isArray(raw.items) ? raw.items : []) {
+  if (!item || !item.resource) continue;
+  const id = itemId(item.resource, item.metadata);
+  if (id && item.displayName) itemDisplayNames.set(id, String(item.displayName));
+}
+
+// ---------------------------------------------------------------------------
+// Dataset accumulators
+// ---------------------------------------------------------------------------
+
+const resources = new Map();
+const recipes = [];
+const recipeMaps = new Set();
+const recipeMapIcons = [];
+
+function addResource(entry) {
+  const key = `${entry.kind}:${entry.id}`;
+  const existing = resources.get(key);
+  if (!existing) {
+    resources.set(key, entry);
+    return entry;
+  }
+  if (!existing.displayName && entry.displayName) existing.displayName = entry.displayName;
+  if (!existing.modId && entry.modId) existing.modId = entry.modId;
+  return existing;
+}
+
+function modIdOf(id) {
+  const separator = id.indexOf(":");
+  return separator > 0 ? id.slice(0, separator) : undefined;
+}
+
+/** Deterministic fallback NEI-style slot positions (presentation only). */
+function assignSlots(recipe) {
+  let itemInputs = 0;
+  for (const input of recipe.inputs) {
+    if (input.kind === "item") {
+      input.neiSlot = { x: 6, y: 4 + itemInputs * 18 };
+      itemInputs += 1;
+    } else {
+      input.neiSlot = { x: 30, y: 4 + itemInputs * 18 };
+      itemInputs += 1;
+    }
+  }
+  recipe.outputs.forEach((output, index) => {
+    output.neiSlot = { x: 102, y: 4 + index * 18 };
+  });
+}
+
+function stackToResource(stack) {
+  const id = itemId(stack.resource, stack.metadata);
+  if (!id) return null;
+  const nbtConfiguration =
+    stack.nbt && typeof stack.nbt === "object"
+      ? Number(stack.nbt.configuration ?? stack.nbt.Configuration ?? NaN)
+      : NaN;
+  return addResource({
+    kind: "item",
+    id,
+    amount: Math.max(1, Number(stack.count) || 1),
+    displayName: itemDisplayNames.get(id),
+    modId: modIdOf(id),
+    ...(Number.isFinite(nbtConfiguration) ? { circuitConfiguration: nbtConfiguration } : {}),
+  });
+}
+
+function fluidInputToResource(input) {
+  const fluidStack = input.inputFluidStack;
+  if (!fluidStack) return null;
+  const known = fluidByUnlocalizedName.get(fluidStack.unlocalizedName);
+  const id = known?.fluidName || String(fluidStack.unlocalizedName || "").replace(/^fluid\./, "");
+  if (!id) return null;
+  return addResource({
+    kind: "fluid",
+    id,
+    amount: Math.max(1, Number(fluidStack.amount) || 1),
+    displayName: fluidStack.specificLocalizedName || known?.displayName,
+  });
+}
+
+/**
+ * CEu chanced-output chances are integers out of 10000 (GT5u convention).
+ * Anything larger can only come from a different logic scale, so fall back to
+ * the int32 maximum.
+ */
+function normalizeChance(value) {
+  const numeric = Number(value);
+  if (!(numeric > 0)) return undefined;
+  const fraction = numeric <= 10000 ? numeric / 10000 : numeric / 2147483647;
+  return fraction >= 1 ? undefined : Math.round(fraction * 10000) / 10000;
+}
+
+function isCircuitStack(stack) {
+  const resource = String(stack.resource || "").toLowerCase();
+  return (
+    resource.includes("integrated_circuit") ||
+    resource.includes("programmable_circuit") ||
+    /[/:]circuit\b/.test(resource)
+  );
+}
+
+function convertGtRecipe(mapName, index, rawRecipe) {
+  const inputs = [];
+  let programmedCircuit;
+
+  for (const input of Array.isArray(rawRecipe.inputs) ? rawRecipe.inputs : []) {
+    const stacks = (input.inputStacks || []).filter(
+      (stack) => stack && stack.resource,
+    );
+    if (stacks.length === 0) continue;
+    const nonConsumable = Boolean(input.nonConsumable);
+    const amount = Math.max(1, Number(input.amount) || 1);
+
+    const primary = stackToResource(stacks[0]);
+    if (!primary) continue;
+    const entry = {
+      kind: primary.kind,
+      id: primary.id,
+      amount,
+      displayName: primary.displayName,
+      modId: primary.modId,
+      ...(nonConsumable ? { consumed: false } : {}),
+    };
+    if (nonConsumable && stacks.some(isCircuitStack)) {
+      const dialled = stacks.find(isCircuitStack);
+      const configuration = Number(dialled.metadata);
+      if (Number.isFinite(configuration)) programmedCircuit = String(configuration);
+    }
+    if (stacks.length > 1) {
+      entry.alternatives = stacks
+        .slice(1)
+        .map((stack) => stackToResource(stack))
+        .filter(Boolean)
+        .map(({ kind, id, displayName, modId }) => ({ kind, id, displayName, modId }));
+    }
+    inputs.push(entry);
+  }
+
+  for (const input of Array.isArray(rawRecipe.inputsFluid) ? rawRecipe.inputsFluid : []) {
+    const fluidResource = fluidInputToResource(input);
+    if (!fluidResource) continue;
+    inputs.push({
+      kind: "fluid",
+      id: fluidResource.id,
+      amount: Math.max(1, Number(input.amount) || Number(fluidResource.amount) || 1),
+      displayName: fluidResource.displayName,
+      ...(input.nonConsumable ? { consumed: false } : {}),
+    });
+  }
+
+  const outputs = [];
+  for (const output of Array.isArray(rawRecipe.outputs) ? rawRecipe.outputs : []) {
+    const resource = stackToResource(output);
+    if (resource) {
+      outputs.push({
+        kind: resource.kind,
+        id: resource.id,
+        amount: Math.max(1, Number(output.count) || 1),
+        displayName: resource.displayName,
+        modId: resource.modId,
+      });
+    }
+  }
+  for (const output of Array.isArray(rawRecipe.chancedOutputs) ? rawRecipe.chancedOutputs : []) {
+    const resource = stackToResource(output);
+    if (!resource) continue;
+    const chance = normalizeChance(output.chance);
+    outputs.push({
+      kind: resource.kind,
+      id: resource.id,
+      amount: Math.max(1, Number(output.count) || 1),
+      displayName: resource.displayName,
+      modId: resource.modId,
+      ...(chance === undefined ? {} : { chance }),
+      ...(outputs.length > 0 ? { byproduct: true } : {}),
+    });
+  }
+  for (const output of Array.isArray(rawRecipe.chancedFluidOutputs)
+    ? rawRecipe.chancedFluidOutputs
+    : []) {
+    const known = fluidByUnlocalizedName.get(output.unlocalizedName);
+    const id = known?.fluidName || String(output.unlocalizedName || "").replace(/^fluid\./, "");
+    if (!id) continue;
+    const chance = normalizeChance(output.chance);
+    addResource({ kind: "fluid", id, displayName: known?.displayName });
+    outputs.push({
+      kind: "fluid",
+      id,
+      amount: Math.max(1, Number(output.amount) || 1),
+      displayName: known?.displayName,
+      ...(chance === undefined ? {} : { chance }),
+      byproduct: true,
+    });
+  }
+  for (const output of Array.isArray(rawRecipe.fluidOutputs) ? rawRecipe.fluidOutputs : []) {
+    const known = fluidByUnlocalizedName.get(output.unlocalizedName);
+    const id = known?.fluidName || String(output.unlocalizedName || "").replace(/^fluid\./, "");
+    if (!id) continue;
+    addResource({ kind: "fluid", id, displayName: known?.displayName });
+    outputs.push({
+      kind: "fluid",
+      id,
+      amount: Math.max(1, Number(output.amount) || 1),
+      displayName: output.specificLocalizedName || known?.displayName,
+    });
+  }
+
+  if (inputs.length === 0 || outputs.length === 0) return null;
+
+  const properties = Array.isArray(rawRecipe.properties) ? rawRecipe.properties : [];
+  const temperatureProperty = properties.find((prop) => prop.propertyKey === "temperature");
+  const metadata = {};
+  for (const prop of properties) {
+    if (prop.propertyKey === "eu_to_start") metadata.fusionEuToStart = prop.eu_to_start;
+    if (prop.propertyKey === "cleanroom") metadata.cleanroom = prop.cleanroom;
+    if (prop.propertyKey === "dimension") metadata.dimensions = prop.dimensions;
+    if (prop.propertyKey === "cells") metadata.cells = prop.cells;
+  }
+
+  const recipe = {
+    id: sha16(`susy:${mapName}:${index}`),
+    name: outputs[0]?.displayName || outputs[0]?.id || mapName,
+    kind: "gregtech_machine",
+    machineType: mapName,
+    minimumTier: voltageTierForEu(rawRecipe.EUt),
+    durationTicks: Math.max(1, Number(rawRecipe.duration) || 1),
+    eut: Math.max(0, Number(rawRecipe.EUt) || 0),
+    inputs,
+    outputs,
+    category: rawRecipe.categoryName || undefined,
+    ...(programmedCircuit !== undefined ? { programmedCircuit } : {}),
+    ...(temperatureProperty ? { specialValue: Number(temperatureProperty.temperature) } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    source: {
+      datasetVersionId,
+      recipeMap: mapName,
+      sourceMod: rawRecipe.categoryModID || undefined,
+      exporter: "gtnh-oracle",
+      rawRecipeId: rawRecipe.categoryUniqueID || undefined,
+    },
+  };
+  assignSlots(recipe);
+  return recipe;
+}
+
+// ---------------------------------------------------------------------------
+// Domains
+// ---------------------------------------------------------------------------
+
+const machinesByRecipeMap = new Map();
+for (const [registryKey, machine] of Object.entries(raw.gtMTEs || {})) {
+  if (!machine?.recipemapName) continue;
+  const list = machinesByRecipeMap.get(machine.recipemapName) || [];
+  list.push({ registryKey, machine });
+  machinesByRecipeMap.set(machine.recipemapName, list);
+}
+
+for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
+  // SusyCore keys the object by RecipeMap#getUnlocalizedName(); translationKey
+  // ends in ".name", so it must not be used for display.
+  const machineType = prettyMachineName(mapName);
+  const handlers = (machinesByRecipeMap.get(mapName) || []).map(({ registryKey, machine }) => ({
+    id: registryKey,
+    label: prettyMachineName(machine.metaName || registryKey.split(":").pop() || registryKey),
+    kind: machine.isController ? "multiblock" : "single",
+  }));
+
+  let index = 0;
+  for (const rawRecipe of Array.isArray(map.recipes) ? map.recipes : []) {
+    const recipe = convertGtRecipe(machineType, index, rawRecipe);
+    index += 1;
+    if (!recipe) continue;
+    if (handlers.length > 0) recipe.machineHandlers = handlers;
+    recipeMaps.add(machineType);
+    recipes.push(recipe);
+    const primaryOutput = recipe.outputs[0];
+    if (primaryOutput && handlers.length > 0 && !recipeMapIcons.some((icon) => icon.recipeMap === machineType)) {
+      recipeMapIcons.push({
+        recipeMap: machineType,
+        resource: {
+          kind: primaryOutput.kind,
+          id: primaryOutput.id,
+          displayName: primaryOutput.displayName,
+          modId: primaryOutput.modId,
+        },
+      });
+    }
+  }
+}
+
+// Smelting: SusyCore dumps vanilla FurnaceRecipes without durations; the
+// GregTech electric-furnace baseline (128 ticks @ 4 EU/t) is applied so the
+// chains do not show an untimed step. Flagged in metadata for later refinement.
+let smeltingCount = 0;
+for (const entry of Array.isArray(raw.smelting) ? raw.smelting : []) {
+  const input = entry.input && stackToResource(entry.input);
+  const output = entry.output && stackToResource(entry.output);
+  if (!input || !output) continue;
+  smeltingCount += 1;
+  const recipe = {
+    id: sha16(`susy:smelting:${smeltingCount}:${input.id}`),
+    name: output.displayName || output.id,
+    kind: "gregtech_machine",
+    machineType: "Electric Furnace",
+    minimumTier: "LV",
+    durationTicks: 128,
+    eut: 4,
+    inputs: [
+      {
+        kind: input.kind,
+        id: input.id,
+        amount: Math.max(1, Number(entry.input.count) || 1),
+        displayName: input.displayName,
+        modId: input.modId,
+        neiSlot: { x: 6, y: 22 },
+      },
+    ],
+    outputs: [
+      {
+        kind: output.kind,
+        id: output.id,
+        amount: Math.max(1, Number(entry.output.count) || 1),
+        displayName: output.displayName,
+        modId: output.modId,
+        neiSlot: { x: 102, y: 22 },
+      },
+    ],
+    source: { datasetVersionId, recipeMap: "electric_furnace", exporter: "gtnh-oracle" },
+    metadata: { synthesizedDuration: true },
+  };
+  recipeMaps.add("Electric Furnace");
+  recipes.push(recipe);
+}
+
+// Crafting table: instant manual recipes (the app treats 0-duration as instant).
+let craftingCount = 0;
+for (const entry of Array.isArray(raw.crafting) ? raw.crafting : []) {
+  const output = entry.output && stackToResource(entry.output);
+  if (!output || !Number(entry.output.count)) continue;
+  const ingredients =
+    entry.type === "shaped" && entry.recipe?.keymap
+      ? Object.values(entry.recipe.keymap)
+      : Array.isArray(entry.recipe?.ingredients)
+        ? entry.recipe.ingredients
+        : [];
+  const inputs = [];
+  for (const ingredient of ingredients) {
+    const validInputs = Array.isArray(ingredient?.validInputs) ? ingredient.validInputs : [];
+    const stacks = validInputs.filter((stack) => stack && stack.resource);
+    if (stacks.length === 0) continue;
+    const primary = stackToResource(stacks[0]);
+    if (!primary) continue;
+    const converted = {
+      kind: primary.kind,
+      id: primary.id,
+      amount: Math.max(1, Number(stacks[0].count) || 1),
+      displayName: primary.displayName,
+      modId: primary.modId,
+    };
+    if (stacks.length > 1) {
+      converted.alternatives = stacks
+        .slice(1)
+        .map((stack) => stackToResource(stack))
+        .filter(Boolean)
+        .map(({ kind, id, displayName, modId }) => ({ kind, id, displayName, modId }));
+    }
+    inputs.push(converted);
+  }
+  if (inputs.length === 0) continue;
+  craftingCount += 1;
+  inputs.forEach((input, index) => {
+    input.neiSlot = { x: 6 + (index % 3) * 18, y: 4 + Math.floor(index / 3) * 18 };
+  });
+  const recipe = {
+    id: sha16(`susy:crafting:${craftingCount}:${output.id}`),
+    name: output.displayName || output.id,
+    machineType: "Crafting Table",
+    minimumTier: "ULV",
+    durationTicks: 0,
+    eut: 0,
+    inputs,
+    outputs: [
+      {
+        kind: output.kind,
+        id: output.id,
+        amount: Math.max(1, Number(entry.output.count) || 1),
+        displayName: output.displayName,
+        modId: output.modId,
+        neiSlot: { x: 102, y: 22 },
+      },
+    ],
+    source: {
+      datasetVersionId,
+      recipeMap: "crafting",
+      exporter: "gtnh-oracle",
+      rawRecipeId: typeof entry.registryName === "string" ? entry.registryName : undefined,
+    },
+  };
+  recipeMaps.add("Crafting Table");
+  recipes.push(recipe);
+}
+
+// ---------------------------------------------------------------------------
+// Output
+// ---------------------------------------------------------------------------
+
+const oreDictionary = {};
+for (const [name, stacks] of Object.entries(raw.oreDict || {})) {
+  const ids = (Array.isArray(stacks) ? stacks : [])
+    .map((stack) => stack && itemId(stack.resource, stack.metadata))
+    .filter(Boolean);
+  if (ids.length > 0) oreDictionary[name] = [...new Set(ids)];
+}
+for (const resource of resources.values()) {
+  const membership = Object.entries(oreDictionary)
+    .filter(([, ids]) => ids.includes(resource.id))
+    .map(([name]) => name);
+  if (membership.length > 0) resource.oreDictionary = membership;
+}
+
+const dataset = {
+  schemaVersion: 1,
+  datasetVersionId,
+  gtnhVersion: susyVersion,
+  sourceInfo: {
+    sourceId: "gtnh-oracle",
+    sourceVersion: susyVersion,
+    generatedAt,
+    notes: `SusyCore /recipemapdump of Supersymmetry ${susyVersion}; smelting durations synthesized.`,
+  },
+  resources: [...resources.values()].map(({ circuitConfiguration, ...resource }) => resource),
+  recipes,
+  oreDictionary,
+  recipeMaps: [...recipeMaps].sort(),
+  ...(recipeMapIcons.length > 0 ? { recipeMapIcons } : {}),
+  generatedAt,
+};
+
+await fs.mkdir(path.dirname(path.resolve(outputPath)), { recursive: true });
+await writeDatasetJson(outputPath, dataset);
+console.log(
+  `SUSY dataset written: ${recipes.length} recipes, ${resources.size} resources, ${Object.keys(oreDictionary).length} oredict entries.`,
+);

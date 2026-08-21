@@ -1,0 +1,178 @@
+{
+  "items": [
+    { "resource": "gregtech:meta_item_1", "metadata": 1204, "displayName": "Iron Ore" },
+    { "resource": "minecraft:iron_ingot", "metadata": 0, "displayName": "Iron Ingot" },
+    { "resource": "gregtech:integrated_circuit", "metadata": 7, "displayName": "Programmed Circuit (Config 7)" },
+    { "resource": "gregtech:dust", "metadata": 555, "displayName": "Iron Dust" }
+  ],
+  "fluids": [
+    {
+      "fluidName": "water",
+      "unlocalizedName": "fluid.water",
+      "localizedName": "Water"
+    },
+    {
+      "fluidName": "susy.acidic_ore_leach",
+      "unlocalizedName": "fluid.susy.acidic_ore_leach",
+      "localizedName": "Acidic Ore Leach"
+    }
+  ],
+  "oreDict": {
+    "ingotIron": [{ "resource": "minecraft:iron_ingot", "count": 1, "metadata": 0 }],
+    "dustIron": [{ "resource": "gregtech:dust", "count": 1, "metadata": 555 }]
+  },
+  "recipemaps": {
+    "gtceu.macerator": {
+      "translationKey": "gtceu.macerator.name",
+      "maxInputs": 3,
+      "maxFluidInputs": 1,
+      "maxOutputs": 6,
+      "maxFluidOutputs": 1,
+      "recipes": [
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 8,
+          "duration": 100,
+          "properties": [],
+          "categoryName": "gregtech.macerator",
+          "categoryModID": "gregtech",
+          "inputs": [
+            {
+              "amount": 1,
+              "oreDict": true,
+              "nonConsumable": false,
+              "inputStacks": [{ "resource": "gregtech:meta_item_1", "count": 1, "metadata": 1204 }],
+              "inputFluidStack": null
+            }
+          ],
+          "inputsFluid": [],
+          "outputs": [
+            { "resource": "gregtech:dust", "count": 1, "metadata": 555 }
+          ],
+          "chancedOutputs": null,
+          "chancedFluidOutputs": null,
+          "fluidOutputs": []
+        },
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 30,
+          "duration": 200,
+          "properties": [{ "propertyKey": "temperature", "temperature": 1700 }],
+          "categoryName": "gregtech.macerator",
+          "categoryModID": "gregtech",
+          "inputs": [
+            {
+              "amount": 2,
+              "oreDict": false,
+              "nonConsumable": false,
+              "inputStacks": [{ "resource": "minecraft:iron_ingot", "count": 2, "metadata": 0 }],
+              "inputFluidStack": null
+            }
+          ],
+          "inputsFluid": [
+            {
+              "amount": 100,
+              "oreDict": false,
+              "nonConsumable": false,
+              "inputStacks": [],
+              "inputFluidStack": {
+                "type": "FluidStack",
+                "unlocalizedName": "fluid.water",
+                "specificLocalizedName": "Water",
+                "amount": 100
+              }
+            }
+          ],
+          "outputs": [],
+          "chancedOutputs": [
+            { "resource": "gregtech:dust", "count": 3, "metadata": 555, "chance": 3000 }
+          ],
+          "chancedFluidOutputs": [
+            {
+              "type": "FluidStack",
+              "unlocalizedName": "fluid.susy.acidic_ore_leach",
+              "specificLocalizedName": "Acidic Ore Leach",
+              "amount": 50,
+              "chance": 5000
+            }
+          ],
+          "fluidOutputs": []
+        },
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 4,
+          "duration": 16,
+          "properties": [],
+          "categoryName": "gregtech.macerator",
+          "categoryModID": "gregtech",
+          "inputs": [
+            {
+              "amount": 1,
+              "oreDict": false,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "gregtech:integrated_circuit", "count": 1, "metadata": 7 }],
+              "inputFluidStack": null
+            }
+          ],
+          "inputsFluid": [],
+          "outputs": [
+            { "resource": "gregtech:dust", "count": 1, "metadata": 555 }
+          ],
+          "chancedOutputs": null,
+          "chancedFluidOutputs": null,
+          "fluidOutputs": []
+        }
+      ]
+    }
+  },
+  "gtMTEs": {
+    "gregtech:macerator.lv": {
+      "class": "class gregtech.api.metatileentity.single.MetaTileEntityMacerator",
+      "metaName": "macerator.lv",
+      "isController": false,
+      "tier": 1,
+      "recipemapName": "gtceu.macerator"
+    },
+    "gregtech:macerator.hv": {
+      "class": "class gregtech.api.metatileentity.single.MetaTileEntityMacerator",
+      "metaName": "macerator.hv",
+      "isController": false,
+      "tier": 3,
+      "recipemapName": "gtceu.macerator"
+    },
+    "susy.mixer_settler.ev": {
+      "class": "class supersymmetry.common.metatileentities.multi.electric.MetaTileEntityMixerSettler",
+      "metaName": "mixer_settler.ev",
+      "isController": true,
+      "tier": 4,
+      "recipemapName": "gtceu.unused_map"
+    }
+  },
+  "smelting": [
+    {
+      "input": { "resource": "gregtech:meta_item_1", "count": 1, "metadata": 1204 },
+      "output": { "resource": "minecraft:iron_ingot", "count": 1, "metadata": 0 }
+    }
+  ],
+  "crafting": [
+    {
+      "id": "minecraft:iron_ingot_from_nuggets",
+      "registryName": "minecraft:iron_ingot_from_nuggets",
+      "type": "shaped",
+      "recipe": {
+        "keymap": {
+          "A": {
+            "class": "net.minecraftforge.oredict.IngredientOreDict",
+            "validInputs": [
+              { "resource": "minecraft:iron_nugget", "count": 1, "metadata": 0 },
+              { "resource": "susy:iron_nugget_hot", "count": 1, "metadata": 0 }
+            ]
+          }
+        },
+        "shape": ["AAA", "AAA", "AAA"]
+      },
+      "output": { "resource": "minecraft:iron_ingot", "count": 1, "metadata": 0 }
+    }
+  ],
+  "materials": {}
+}
