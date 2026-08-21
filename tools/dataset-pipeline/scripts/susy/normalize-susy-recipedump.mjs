@@ -166,17 +166,12 @@ function assignSlots(recipe) {
 function stackToResource(stack) {
   const id = itemId(stack.resource, stack.metadata);
   if (!id) return null;
-  const nbtConfiguration =
-    stack.nbt && typeof stack.nbt === "object"
-      ? Number(stack.nbt.configuration ?? stack.nbt.Configuration ?? NaN)
-      : NaN;
   return addResource({
     kind: "item",
     id,
     amount: Math.max(1, Number(stack.count) || 1),
     displayName: itemDisplayNames.get(id),
     modId: modIdOf(id),
-    ...(Number.isFinite(nbtConfiguration) ? { circuitConfiguration: nbtConfiguration } : {}),
   });
 }
 
@@ -544,7 +539,7 @@ const dataset = {
     generatedAt,
     notes: `SusyCore /recipemapdump of Supersymmetry ${susyVersion}; smelting durations synthesized.`,
   },
-  resources: [...resources.values()].map(({ circuitConfiguration, ...resource }) => resource),
+  resources: [...resources.values()],
   recipes,
   oreDictionary,
   recipeMaps: [...recipeMaps].sort(),
