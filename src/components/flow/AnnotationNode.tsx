@@ -554,7 +554,7 @@ function AnnotationStylePanel({
                     ? "bg-[var(--mc-85)] shadow-[inset_2px_2px_0_var(--mc-100)]"
                     : "",
                 ].join(" ")}
-                title="Fill colour: any dye, or a textured paper"
+                title="Fill colour"
                 aria-label="Fill colour"
                 aria-expanded={openMenu === "fillColor"}
               >
@@ -603,7 +603,7 @@ function AnnotationStylePanel({
                 type="button"
                 onClick={() => deleteAnnotation(annotation.id)}
                 className={STYLE_CHIP_CLASS}
-                title="Delete this image"
+                title="Delete image"
                 aria-label="Delete this image"
               >
                 <Trash2 className="h-3.5 w-3.5 text-red-400" />

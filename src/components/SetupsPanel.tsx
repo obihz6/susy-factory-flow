@@ -269,9 +269,9 @@ export function SetupsPanel() {
     }
   };
 
-  // The whole setup lands on the CURRENT board as one pocket card: paste it
-  // centred like a blueprint, then compact the pasted cards — same code path
-  // as Ctrl+G, so ports, wiring and the purple room all come out right.
+  // The whole setup lands on the CURRENT canvas inside one board: paste it
+  // centred like a blueprint, then wrap the pasted cards — same code path as
+  // Ctrl+G, so the frame appears around exactly what arrived.
   const openAsPocket = async (plan: CommunityPlanSummary) => {
     setBusy({ id: plan.id, kind: "pocket" });
     try {
@@ -285,12 +285,11 @@ export function SetupsPanel() {
       const pastedIds = placePayload(payload);
       if (pastedIds.length > 0) {
         const state = useFactoryStore.getState();
-        const pocketId = state.compactSelectionIntoPocket(pastedIds, plan.name);
-        if (pocketId) {
-          state.setPendingBoardSelection([pocketId]);
-          // The whole setup is one card now, so the camera settles on that
-          // card rather than on the spread it was a moment ago.
-          state.frameBoardNodes([pocketId]);
+        const boardId = state.wrapSelectionInBoard(pastedIds, plan.name);
+        if (boardId) {
+          // The whole setup is one window now, so the camera settles on it
+          // rather than on the spread it was a moment ago.
+          state.frameBoardNodes([boardId]);
         }
       }
 
@@ -298,7 +297,7 @@ export function SetupsPanel() {
       setError(undefined);
     } catch (pocketError) {
       setError(
-        pocketError instanceof Error ? pocketError.message : "Loading as a pocket failed.",
+        pocketError instanceof Error ? pocketError.message : "Loading as a board failed.",
       );
     } finally {
       setBusy(undefined);
@@ -417,7 +416,7 @@ export function SetupsPanel() {
     <>
       <ControlsCard>
         {/* Share on the left, then Mine | Public: the same row shape as the
-            pocket shelf. The panel still OPENS on Public: browsing is
+            board shelf. The panel still OPENS on Public: browsing is
             the point. */}
         <div className="flex gap-1">
           <MinecraftTooltip
@@ -584,7 +583,7 @@ export function SetupsPanel() {
       {isShareOpen ? <SharePlanDialog onClose={() => setShareOpen(false)} /> : null}
       {iconEditId ? (
         <IconPicker
-          title="Pick this setup's icon"
+          title="Pick an icon"
           suggestions={iconSuggestionsFromStats(
             plans.find((entry) => entry.id === iconEditId)?.needs,
             plans.find((entry) => entry.id === iconEditId)?.outputs,
@@ -833,12 +832,12 @@ function SetupRow({
             </MinecraftTooltip>
           </>
         ) : null}
-        <MinecraftTooltip label={"Load as a pocket\nLands on this board as one card"}>
+        <MinecraftTooltip label={"Load as a board\nLands on this canvas inside one window"}>
           <button
             type="button"
             disabled={isBusy}
             onClick={onOpenAsPocket}
-            aria-label={`Load setup ${plan.name} as a pocket`}
+            aria-label={`Load setup ${plan.name} as a board`}
             className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border border-neutral-700 bg-[#17191d] text-neutral-400 enabled:hover:border-[#8d6fd1] enabled:hover:text-[#c9b8ec] disabled:opacity-50"
           >
             {busy === "pocket" ? (

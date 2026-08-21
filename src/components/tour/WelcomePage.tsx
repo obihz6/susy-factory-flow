@@ -263,7 +263,6 @@ export function WelcomePage() {
                       {/* Stays up after it has been done: see `recommended`. */}
                       {lesson.recommended ? (
                         <span
-                          title="This tour covers the rules that change most often."
                           className="inline-flex items-center gap-1 rounded border border-cyan-500/70 bg-cyan-500/20 px-1.5 py-px text-[10px] font-black uppercase tracking-wide text-cyan-200"
                         >
                           <Sparkles className="h-3 w-3" aria-hidden />
@@ -272,7 +271,6 @@ export function WelcomePage() {
                       ) : null}
                       {isDone ? (
                         <span
-                          title="You have completed this tour"
                           className="inline-flex items-center gap-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400"
                         >
                           <Check className="h-3 w-3" />

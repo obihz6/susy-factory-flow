@@ -209,3 +209,24 @@ describe("dropping doubled wires on load", () => {
     expect(normalized.edges.map((edge) => edge.id)).toEqual(["auto-connected"]);
   });
 });
+
+describe("board windows on load", () => {
+  it("snaps a board's frame to whole cells and keeps its open state", () => {
+    const project = createCrossFormProject();
+    project.pockets = [
+      {
+        id: "board",
+        name: "Ragged board",
+        position: { x: 13, y: 7 },
+        expanded: true,
+        size: { width: 493, height: 301 },
+      },
+    ];
+
+    const normalized = normalizeLoadedProject(project);
+    const board = normalized.pockets?.[0];
+    expect(board?.expanded).toBe(true);
+    expect(board?.position).toEqual({ x: 20, y: 0 });
+    expect(board?.size).toEqual({ width: 500, height: 320 });
+  });
+});

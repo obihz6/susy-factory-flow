@@ -50,16 +50,16 @@ export function HeaderLinks() {
       <button
         type="button"
         onClick={openWelcomeTab}
-        title="Welcome: what everything is, and the guided tours"
+        title="Welcome"
         aria-label="Open the Welcome tab"
         className="inline-flex h-7 w-7 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised hover:text-fg"
       >
         <Compass className="h-3.5 w-3.5" />
       </button>
-      <HeaderLink href={GITHUB_URL} label="Source code on GitHub">
+      <HeaderLink href={GITHUB_URL} label="Source on GitHub">
         <GithubMark />
       </HeaderLink>
-      <HeaderLink href={DISCORD_THREAD_URL} label="Planner thread in the GTNH Discord">
+      <HeaderLink href={DISCORD_THREAD_URL} label="Discord thread">
         <DiscordMark />
       </HeaderLink>
     </div>
@@ -111,7 +111,7 @@ export function WhatsNewButton({
         markVersionSeenAndNotify();
         onClick(unseenNow);
       }}
-      title="What's new in the planner"
+      title="What's new"
       aria-label="What's new in the planner"
       className="relative inline-flex h-7 shrink-0 items-center gap-1.5 rounded border border-cyan-700 bg-cyan-950 px-2 text-xs font-semibold text-cyan-300 hover:border-cyan-500 hover:bg-cyan-900 hover:text-cyan-200 snug:w-7 snug:justify-center snug:px-0"
     >
@@ -161,7 +161,7 @@ export function SupportButton() {
       href={KOFI_URL}
       target="_blank"
       rel="noreferrer noopener"
-      title="Support GTNH Planner on Ko-fi"
+      title="Support on Ko-fi"
       aria-label="Support GTNH Planner on Ko-fi"
       data-umami-event="support-kofi"
       data-umami-event-source="header"

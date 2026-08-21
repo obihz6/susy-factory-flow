@@ -73,6 +73,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.22.1",
+    date: "2026-08-21",
+    headline: "Plainer buttons",
+    notes: [
+      "Auto-arrange is one button: click it and the board is laid out.",
+      "Hovering a button now tells you its name instead of a paragraph.",
+    ],
+  },
+  {
+    version: "2.22.0",
+    date: "2026-08-21",
+    headline: "Boards: rooms you can put your factory in",
+    notes: [
+      "Wrap cards in a board and the whole room drags as one.",
+      "Fold a board down to a card that says what it needs and what it makes.",
+      "Auto-arrange now builds a board around each part of your factory.",
+      "Every board gets its own paper, and you can pick another.",
+    ],
+  },
+  {
     version: "2.21.0",
     date: "2026-08-20",
     headline: "The tours catch up with the board",

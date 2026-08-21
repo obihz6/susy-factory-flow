@@ -139,7 +139,7 @@ export function DesignTabs() {
             <button
               type="button"
               onClick={openWelcomeTab}
-              title="Welcome: what everything is, and the guided tours"
+              title="Welcome"
               className="flex items-center gap-1 text-xs font-medium"
             >
               <Compass className="h-3 w-3" aria-hidden />
@@ -149,7 +149,7 @@ export function DesignTabs() {
               type="button"
               onClick={closeWelcomeTab}
               aria-label="Close the Welcome tab"
-              title="Close the Welcome tab"
+              title="Close tab"
               className="ml-1 rounded px-1 text-xs text-fg-muted opacity-0 hover:bg-surface hover:text-fg focus:opacity-100 group-hover:opacity-100"
             >
               ✕
@@ -204,7 +204,7 @@ export function DesignTabs() {
                         void switchToDesign(design.id);
                       }}
                       onDoubleClick={() => setRenamingId(design.id)}
-                      title={`${design.name} (double-click to rename)`}
+                      title={design.name}
                       className="max-w-[150px] truncate text-xs font-medium"
                     >
                       {design.name}

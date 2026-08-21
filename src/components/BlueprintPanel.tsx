@@ -811,7 +811,7 @@ function MineShelf({
       </div>
       {iconEditId ? (
         <IconPicker
-          title="Pick this pocket's icon"
+          title="Pick an icon"
           suggestions={iconSuggestionsFromStats(
             blueprints.find((entry) => entry.id === iconEditId)?.needs,
             blueprints.find((entry) => entry.id === iconEditId)?.outputs,

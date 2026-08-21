@@ -438,4 +438,112 @@ describe("solveGridRoutes", () => {
     expect(points.length).toBeGreaterThanOrEqual(2);
     expect(isOrthogonal(points)).toBe(true);
   });
+
+  it("a board frame turns foreign wires away like a card", () => {
+    // Two facing cards with an open board frame standing between them.
+    const a = card("a", 0, 0);
+    const b = card("b", 1200, 0);
+    const frame: GridObstacle = { id: "frame", left: 480, top: -200, right: 840, bottom: 360 };
+    const foreign = solveGridRoutes(
+      [a, b, frame],
+      [
+        request({
+          edgeId: "foreign",
+          sources: [{ x: 360, y: 60, side: "right" }],
+          targets: [{ x: 1200, y: 60, side: "left" }],
+        }),
+      ],
+    ).get("foreign")!.points;
+    expect(isOrthogonal(foreign)).toBe(true);
+    expect(violatesMargin(foreign, frame, 0)).toBe(false);
+  });
+
+  it("a member's wire crosses its own frame and leaves by the shortest way", () => {
+    // A card outside, a member card inside the frame's right half: the wire
+    // must cross the border (the frame cannot block its own member's wire)
+    // and must not run the length of the frame's rim to get there.
+    const outside = card("outside", 0, 0);
+    const frame: GridObstacle = { id: "frame", left: 480, top: -200, right: 1400, bottom: 600 };
+    const member = card("member", 1000, 0);
+    const points = solveGridRoutes(
+      [outside, frame, member],
+      [
+        request({
+          edgeId: "member",
+          sources: [{ x: 360, y: 60, side: "right" }],
+          targets: [{ x: 1000, y: 60, side: "left" }],
+          exemptObstacleIds: ["frame"],
+        }),
+      ],
+    ).get("member")!.points;
+
+    expect(isOrthogonal(points)).toBe(true);
+    // It arrives: the frame never blocks a wire that belongs to it.
+    expect(points[points.length - 1]).toEqual({ x: 1000, y: 60 });
+
+    // And it spends only the crossing inside the frame — the straight run
+    // from the border to the card, not a lap of the rim. Each segment is
+    // clipped to the frame so a run that enters part-way counts only the
+    // part that is actually in there.
+    let insideLength = 0;
+    for (const { a: from, b: to } of segments(points)) {
+      const overlap = (lo: number, hi: number, min: number, max: number) =>
+        Math.max(0, Math.min(hi, max) - Math.max(lo, min));
+      const spanX = overlap(
+        Math.min(from.x, to.x),
+        Math.max(from.x, to.x),
+        frame.left,
+        frame.right,
+      );
+      const spanY = overlap(
+        Math.min(from.y, to.y),
+        Math.max(from.y, to.y),
+        frame.top,
+        frame.bottom,
+      );
+      // One of the two is zero on an orthogonal run; a run is inside only
+      // while its fixed coordinate is inside as well.
+      if (from.y === to.y && from.y >= frame.top && from.y <= frame.bottom) {
+        insideLength += spanX;
+      } else if (from.x === to.x && from.x >= frame.left && from.x <= frame.right) {
+        insideLength += spanY;
+      }
+    }
+    // The card's left edge is 520 past the border; a cell of slack covers
+    // the dock stub. A wire that ran the rim would be several times this.
+    expect(insideLength).toBeLessThanOrEqual(1000 - 480 + WIRE_NODE_MARGIN);
+  });
+
+  it("a wire between two cards on one board never leaves it", () => {
+    // Two members side by side inside a roomy frame. The frame is exempt
+    // for this wire AND holds both its ends, so the route has to stay in:
+    // ducking out to the open board and back is what this forbids.
+    const frame: GridObstacle = { id: "frame", left: 0, top: 0, right: 1400, bottom: 500 };
+    const left = card("left", 100, 160);
+    const right = card("right", 900, 160);
+    const points = solveGridRoutes(
+      [frame, left, right],
+      [
+        request({
+          edgeId: "inner",
+          sources: [{ x: 460, y: 220, side: "right" }],
+          targets: [{ x: 900, y: 220, side: "left" }],
+          exemptObstacleIds: ["frame"],
+          homeObstacleIds: ["frame"],
+        }),
+      ],
+    ).get("inner")!.points;
+
+    expect(isOrthogonal(points)).toBe(true);
+    // Every corner of the route sits inside the room it belongs to.
+    expect(
+      points.every(
+        (point) =>
+          point.x >= frame.left &&
+          point.x <= frame.right &&
+          point.y >= frame.top &&
+          point.y <= frame.bottom,
+      ),
+    ).toBe(true);
+  });
 });

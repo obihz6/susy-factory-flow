@@ -58,7 +58,7 @@ export function AppHeader({ onLoadDatasetVersion }: AppHeaderProps) {
             setUnseenVersions(new Set(unseenEntries().map((entry) => entry.version)));
             setChangelogOpen(true);
           }}
-          title="What's new in GTNH Planner"
+          title="What's new"
           aria-label={`Version ${APP_VERSION}: see what's new`}
           className="shrink-0 rounded border border-line px-1 py-px text-[10px] font-semibold leading-none text-fg-muted tabular-nums hover:border-cyan-600 hover:text-cyan-500"
         >

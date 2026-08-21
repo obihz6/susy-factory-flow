@@ -152,7 +152,7 @@ export function PlanIdentityDrawer() {
           }}
           maxLength={80}
           aria-label="Plan name"
-          title="Also the tab's name: renaming here renames the tab"
+          title="Plan name"
           className="h-7 min-w-16 flex-1 rounded border border-transparent bg-transparent px-1.5 text-sm font-medium text-fg outline-none hover:border-line focus:border-line-strong focus:bg-surface-sunken"
         />
         {linkedPlanId ? (
@@ -162,11 +162,7 @@ export function PlanIdentityDrawer() {
             type="button"
             onClick={() => setSharing(true)}
             disabled={project.nodes.length === 0}
-            title={
-              project.nodes.length === 0
-                ? "Share this setup: build something on the board first"
-                : "Share this setup with everyone"
-            }
+            title={project.nodes.length === 0 ? "Share: build something first" : "Share"}
             aria-label="Share this setup"
             className={BAR_BUTTON}
           >
@@ -384,7 +380,7 @@ function LinkedPostStrip({ planId }: { planId: string }) {
         <button
           type="button"
           onClick={clearProjectCommunityLink}
-          title="The post this plan came from is no longer on the network. Detach from it."
+          title="Detach from the post"
           aria-label="Detach this plan from its deleted post"
           className={BAR_BUTTON}
         >
@@ -438,7 +434,7 @@ function LinkedPostStrip({ planId }: { planId: string }) {
       <button
         type="button"
         onClick={() => void copyLink()}
-        title="Copy the link to this post"
+        title="Copy link"
         aria-label="Copy the link to this post"
         className={BAR_BUTTON}
       >
@@ -453,7 +449,7 @@ function LinkedPostStrip({ planId }: { planId: string }) {
           type="button"
           onClick={() => void saveDetails()}
           disabled={busy === "save"}
-          title="Save this name, icon and description to your post. The board itself is re-posted through Share."
+          title="Save to the post"
           aria-label="Save the plan's name, icon and description to your post"
           className={BAR_BUTTON}
         >
@@ -489,11 +485,7 @@ function LinkedPostStrip({ planId }: { planId: string }) {
       <button
         type="button"
         onClick={() => setSharingAsOwn(true)}
-        title={
-          post.isMine
-            ? "Share this setup: update your post or post it anew"
-            : "Post this board as your own setup"
-        }
+        title={post.isMine ? "Share" : "Post as your own"}
         aria-label={
           post.isMine ? "Share this setup" : "Post this board as your own setup"
         }

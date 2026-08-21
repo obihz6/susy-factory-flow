@@ -460,6 +460,12 @@ export interface FactoryAnnotation {
  * nodes/storages/annotations tagged with `pocketId` — the graph the solver
  * sees is completely flat; pockets only decide what the board SHOWS. Pockets
  * nest through `parentPocketId` (absent = the pocket sits on the root board).
+ *
+ * A pocket can also stand OPEN as a board: a window frame on its parent board
+ * whose members render inside it and move with it (`expanded`). Boards and
+ * pockets are the same thing in two states — minimizing a board gives back
+ * the classic collapsed card, and every plan saved before boards existed
+ * simply has no `expanded` flag and renders exactly as it always did.
  */
 export interface FactoryPocket {
   id: string;
@@ -467,11 +473,38 @@ export interface FactoryPocket {
   colorTag?: FactoryNodeColorTag;
   /** Which board the collapsed card sits on; absent = the root board. */
   parentPocketId?: string;
-  /** Where the collapsed card sits on that board. */
+  /**
+   * Where the card — or, standing open, the window frame's top-left corner —
+   * sits on that board.
+   */
   position: {
     x: number;
     y: number;
   };
+  /**
+   * Standing open as a board. While open, member positions are relative to
+   * the frame's top-left corner; a legacy pocket's members (whose positions
+   * were their own dive-in space) are rebased to fit the frame the first
+   * time it opens. Absent/false = the classic collapsed pocket card.
+   */
+  expanded?: boolean;
+  /** The window frame, whole cells; absent = fitted when it first opens. */
+  size?: {
+    width: number;
+    height: number;
+  };
+  /**
+   * The paper this board is drawn on: a canvas theme id (see
+   * `canvas-themes.ts`), giving the floor its base colour, its grain and its
+   * own grid ink. Absent = the house purple. Deliberately the SAME palette
+   * the canvas itself offers — a board is a piece of board.
+   */
+  theme?: string;
+  /**
+   * The ruling on that paper: a canvas pattern id ("dots", "lines",
+   * "cross", "ruled", "graph", "none"). Absent = dots, the canvas default.
+   */
+  pattern?: string;
 }
 
 export interface FactoryEdge {

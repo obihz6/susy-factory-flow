@@ -261,12 +261,12 @@ const LOOK_AROUND: TourLesson = {
       anchor: "browser",
       side: "right",
       before: showSidebarTab("blueprints"),
-      title: "Pockets: reusable groups",
+      title: "Boards: group and fold",
       rows: [
-        { chip: "Ctrl+G", text: "Select a few cards and they *fold into one pocket*." },
-        { mouse: "left", text: "Double click a pocket to *step inside*. Esc backs out." },
-        { chip: "✦", text: "This shelf holds your pockets and shared ones." },
-        { text: "Place one from the shelf and it lands as *one card*, wires folded inside." },
+        { chip: "Ctrl+G", text: "Select a few cards and *a board wraps around them*." },
+        { text: "Drag the title bar and *everything on the board moves together*." },
+        { chip: "✦", text: "Fold a board and it becomes *one card* showing its inputs and outputs." },
+        { text: "This shelf holds your saved boards; place one and it lands folded." },
       ],
     },
     {

@@ -1,444 +1,375 @@
-import { describeStorage, getStorageRole } from "@/lib/model/storage-role";
+import { BOARD_GRID } from "@/lib/board-grid";
 import { getNodeMachineBuildCount } from "@/lib/model/passive-production";
-import { calculateThroughput } from "@/lib/solver";
+import { makeResourceKey } from "@/lib/model/resources";
 import type {
-  FactoryEdge,
   FactoryPocket,
   FactoryProject,
   ResourceAmount,
   ResourceBalance,
   ThroughputResult,
 } from "@/lib/model/types";
-import { collectPocketMembers, listPocketPortResources } from "@/lib/model/pocket-connections";
-import { closeBoundaries } from "@/lib/solver/close-boundaries";
-import { makeResourceKey, resourceMatchesInput } from "@/lib/model/resources";
-import { makeResourceHandleId, parseResourceHandleId } from "./resource-handles";
-import type { RailPort } from "./node-verdict";
 
 /**
- * One port row on a collapsed pocket card: a resource the dimension needs
- * from the outside (input) or offers to it (output), at the rate the members
- * would move running by themselves.
+ * What a MINIMIZED board says about itself.
+ *
+ * A minimized board is a SUMMARY, not a machine: you cannot wire to it, it
+ * has no ports, and it makes no claim about being fed. It reports two
+ * things - what is inside (machines, cards, power) and what crosses its
+ * border right now - and both come straight out of the plan-wide solve.
+ *
+ * That is the whole design, and it is deliberately smaller than what came
+ * before. The card used to run its own SCOPED solve over the members with
+ * the outside world unhooked, and then wear the result as input and output
+ * ports. It read like a machine and lied like one: a board holding its own
+ * source was told it was starving, because the scoped solve cut the source's
+ * wires; a board exporting a byproduct was told it was clogged. Every one of
+ * those verdicts was about a factory that does not exist - the members are
+ * ordinary cards in the flat graph, and the real solver has been simulating
+ * them, with their real supply, all along.
  */
-export interface PocketPortSummary {
+
+/** One resource crossing a minimized board's border, in one direction. */
+export interface PocketCrossing {
+  key: string;
   kind: ResourceBalance["kind"];
   resourceId: string;
   displayName?: string;
   iconPath?: string;
   iconAtlas?: ResourceAmount["iconAtlas"];
   dominantColor?: string;
+  /** What is really moving, summed over the wires or over the machines. */
   ratePerSecond: number;
+  /** How many wires carry it. Zero on a need or an offer: those are not wires. */
+  wireCount: number;
 }
 
+const RATE_EPSILON = 1e-6;
+
 export interface PocketSummary {
-  inputs: PocketPortSummary[];
-  outputs: PocketPortSummary[];
-  /** Machines inside, nested pockets included. */
+  /**
+   * What the contents ASK FOR that nothing inside makes: the board read as
+   * a little factory, wires ignored. Red, like the plan's own Inputs.
+   */
+  needs: PocketCrossing[];
+  /**
+   * What the contents MAKE that nothing inside drinks. Green, like the
+   * plan's own Outputs.
+   */
+  offers: PocketCrossing[];
+  /** Resources arriving from outside on a wire, busiest first. */
+  incoming: PocketCrossing[];
+  /** Resources leaving for outside on a wire, busiest first. */
+  outgoing: PocketCrossing[];
+  /** Machines inside, nested boards included. */
   machineCount: number;
-  /** Cards inside, nested pockets included. */
+  /** Cards inside, nested boards included. */
   memberCount: number;
+  /** What those machines are drawing at the speed they are running. */
+  euPerTick: number;
+}
+
+/*
+ * No cap. A board with forty crossings draws forty lines and stands
+ * forty lines tall: a summary that hides half of itself behind "and 12
+ * more" is not a summary, and the card is read at whatever zoom the
+ * board is read at anyway.
+ */
+
+/** The four lists a minimized card stacks, by length. */
+export interface PocketCardLines {
+  needs: number;
+  offers: number;
+  incoming: number;
+  outgoing: number;
+}
+
+/** Cells one two-column section costs, its label row included; 0 when empty. */
+export function sectionCells(left: number, right: number): number {
+  const rows = Math.max(left, right);
+  return rows === 0 ? 0 : 1 + 2 * rows;
 }
 
 /**
- * What a pocket looks like from the outside: run the solver over ONLY its
- * members (wires to the rest of the plan dropped), and the sub-plan's
- * unmet inputs become the card's input ports while its unconsumed outputs
- * become the card's output ports — the same NEED/OUTPUT split the right-hand
- * panel shows for the whole plan, scoped to one dimension.
+ * How tall a minimized card stands, from its list lengths alone.
  *
- * Computed per project commit for the pockets on screen; the sub-plans are
- * small, so a full scoped solve is cheaper than it sounds.
+ * The card and the auto-arranger both call this, so the layout can size a
+ * minimized board before it has ever been measured on screen: head row,
+ * the board's own needs and offers, what crosses its border, and the stat
+ * footer.
  */
+export function pocketCardHeight(lines: PocketCardLines): number {
+  const balance = sectionCells(lines.needs, lines.offers);
+  const crossings = sectionCells(lines.incoming, lines.outgoing);
+  // A rule between the two, when there are two: they answer different
+  // questions and must not read as one long list.
+  const rule = balance > 0 && crossings > 0 ? 1 : 0;
+  const body = balance + rule + crossings;
+  // A board with nothing to say still gets a line saying so.
+  return BOARD_GRID * (2 + (body === 0 ? 2 : body) + 2);
+}
+
+/** Every board nested under `pocketId`, itself included. */
+function pocketFamily(allPockets: FactoryPocket[], pocketId: string): Set<string> {
+  const family = new Set<string>([pocketId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const entry of allPockets) {
+      if (
+        entry.parentPocketId !== undefined &&
+        family.has(entry.parentPocketId) &&
+        !family.has(entry.id)
+      ) {
+        family.add(entry.id);
+        grew = true;
+      }
+    }
+  }
+  return family;
+}
+
+/** The cards living inside a board, nested boards included. */
+function pocketMemberIds(project: FactoryProject, pocketId: string): Set<string> {
+  const family = pocketFamily(project.pockets ?? [], pocketId);
+  const members = new Set<string>();
+  for (const node of project.nodes) {
+    if (node.pocketId !== undefined && family.has(node.pocketId)) {
+      members.add(node.id);
+    }
+  }
+  for (const storage of project.storages ?? []) {
+    if (storage.pocketId !== undefined && family.has(storage.pocketId)) {
+      members.add(storage.id);
+    }
+  }
+  return members;
+}
+
+/**
+ * How many distinct resources cross a board's border each way.
+ *
+ * Structural: no solve, no rates. The auto-arranger sizes a minimized card
+ * with this before any of it is on screen, and the card draws exactly this
+ * many rows, so the two agree without one having to wait for the other.
+ */
+export function countPocketCrossings(
+  project: FactoryProject,
+  pocketId: string,
+): PocketCardLines {
+  const members = pocketMemberIds(project, pocketId);
+  const incoming = new Set<string>();
+  const outgoing = new Set<string>();
+  for (const edge of project.edges) {
+    const sourceInside = members.has(edge.source);
+    const targetInside = members.has(edge.target);
+    if (sourceInside === targetInside) {
+      continue;
+    }
+    (targetInside ? incoming : outgoing).add(`${edge.resourceKind}:${edge.resourceId}`);
+  }
+  const balance = computeBoardBalance(project, members, new Map(), undefined);
+  return {
+    needs: balance.needs.length,
+    offers: balance.offers.length,
+    incoming: incoming.size,
+    outgoing: outgoing.size,
+  };
+}
+
+/**
+ * What a board's CONTENTS want and what they make, wires ignored.
+ *
+ * Netting is the whole point: a board whose own mine feeds its own macerator
+ * asks the world for no ore, because the ore never leaves the family. What
+ * survives the netting is what the board would need brought in and what it
+ * would have to give away - the question the right-hand panel answers for the
+ * whole plan, asked of one board.
+ *
+ * Rates are FULL SPEED - what the board would move with everything fed -
+ * because a stalled board still needs what it is missing. What is really
+ * moving is the other half of the card, the border crossings. With no solve
+ * in hand the recipe amounts stand in: the arranger only needs the number of
+ * lines, and the signs come out the same in every ordinary case.
+ *
+ * Drawers are deliberately not counted. A drawer inside is a bank, not a
+ * source or a sink, exactly as the plan's own panel treats one.
+ */
+function computeBoardBalance(
+  project: FactoryProject,
+  memberIds: ReadonlySet<string>,
+  icons: Map<string, ResourceIconMeta>,
+  result: ThroughputResult | undefined,
+): { needs: PocketCrossing[]; offers: PocketCrossing[] } {
+  const net = new Map<
+    string,
+    { kind: ResourceBalance["kind"]; resourceId: string; net: number }
+  >();
+  const add = (kind: ResourceBalance["kind"], resourceId: string, perSecond: number) => {
+    const key = makeResourceKey(kind, resourceId);
+    const entry = net.get(key);
+    if (entry) {
+      entry.net += perSecond;
+    } else {
+      net.set(key, { kind, resourceId, net: perSecond });
+    }
+  };
+
+  for (const node of project.nodes) {
+    if (!memberIds.has(node.id)) {
+      continue;
+    }
+    const nodeResult = result?.nodes[node.id];
+    if (nodeResult) {
+      // FULL SPEED here, deliberately, unlike everything else on this card.
+      // This list answers "what does this board need to run", which is a
+      // property of what is built, not of how it happens to be doing right
+      // now. Scaling by utilization would erase the needs of a board that is
+      // stalled BECAUSE those needs are unmet - the one board that most
+      // needs a red line.
+      for (const flow of Object.values(nodeResult.outputs)) {
+        add(flow.kind, flow.resourceId, flow.amountPerSecond);
+      }
+      for (const flow of Object.values(nodeResult.inputs)) {
+        add(flow.kind, flow.resourceId, -flow.amountPerSecond);
+      }
+      continue;
+    }
+    // No solve: the recipe's own amounts, which is enough for the signs and
+    // the number of lines.
+    const recipe = project.recipes.find((entry) => entry.id === node.recipeId);
+    if (!recipe) {
+      continue;
+    }
+    for (const output of recipe.outputs) {
+      add(output.kind, output.id, output.amount * node.machineCount);
+    }
+    for (const input of recipe.inputs) {
+      add(input.kind, input.id, -input.amount * node.machineCount);
+    }
+  }
+
+  const line = (
+    kind: ResourceBalance["kind"],
+    resourceId: string,
+    ratePerSecond: number,
+  ): PocketCrossing => {
+    const key = makeResourceKey(kind, resourceId);
+    const icon = icons.get(key);
+    return {
+      key,
+      kind,
+      resourceId,
+      displayName: icon?.displayName,
+      iconPath: icon?.iconPath,
+      iconAtlas: icon?.iconAtlas,
+      dominantColor: icon?.dominantColor,
+      ratePerSecond,
+      wireCount: 0,
+    };
+  };
+
+  const needs = new Map<string, PocketCrossing>();
+  const offers = new Map<string, PocketCrossing>();
+  for (const entry of net.values()) {
+    const key = makeResourceKey(entry.kind, entry.resourceId);
+    if (entry.net < -RATE_EPSILON) {
+      needs.set(key, line(entry.kind, entry.resourceId, -entry.net));
+    } else if (entry.net > RATE_EPSILON) {
+      offers.set(key, line(entry.kind, entry.resourceId, entry.net));
+    }
+  }
+  return { needs: sortCrossings(needs), offers: sortCrossings(offers) };
+}
+
 export function computePocketSummaries(
   project: FactoryProject,
   pockets: FactoryPocket[],
+  result?: ThroughputResult,
 ): Map<string, PocketSummary> {
   const summaries = new Map<string, PocketSummary>();
   if (pockets.length === 0) {
     return summaries;
   }
 
-  const allPockets = project.pockets ?? [];
   const icons = buildResourceIconLookup(project);
   const recipesById = new Map(project.recipes.map((recipe) => [recipe.id, recipe]));
 
   for (const pocket of pockets) {
-    // Membership is transitive: a nested pocket's machines count toward the
-    // outer card, because from out here they are all "inside".
-    const pocketIds = new Set<string>([pocket.id]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const entry of allPockets) {
-        if (
-          entry.parentPocketId !== undefined &&
-          pocketIds.has(entry.parentPocketId) &&
-          !pocketIds.has(entry.id)
-        ) {
-          pocketIds.add(entry.id);
-          grew = true;
-        }
-      }
-    }
+    const memberIds = pocketMemberIds(project, pocket.id);
+    const incoming = new Map<string, PocketCrossing>();
+    const outgoing = new Map<string, PocketCrossing>();
 
-    const nodes = project.nodes.filter(
-      (node) => node.pocketId !== undefined && pocketIds.has(node.pocketId),
-    );
-    const storages = (project.storages ?? []).filter(
-      (storage) => storage.pocketId !== undefined && pocketIds.has(storage.pocketId),
-    );
-    const memberIds = new Set<string>([
-      ...nodes.map((node) => node.id),
-      ...storages.map((storage) => storage.id),
-    ]);
-    const edges = project.edges.filter(
-      (edge) => memberIds.has(edge.source) && memberIds.has(edge.target),
-    );
-
-    // Heal the cut before solving, exactly as calculateSelectionFlow does.
-    // The plan is closed at both ends, so every wire severed at the pocket
-    // boundary leaves a bare slot that stops its machine dead — left alone,
-    // the scoped solve answers zero for any pocket that touches the outside
-    // world, and the card draws no ports at all (unless the sketch toggle
-    // happened to close the boundary for it).
-    const scoped = calculateThroughput(
-      closeBoundaries({
-        ...project,
-        nodes,
-        storages,
-        annotations: [],
-        edges,
-      }),
-    );
-
-    const toPort = (balance: ResourceBalance, ratePerSecond: number): PocketPortSummary => {
-      const icon = icons.get(balance.key);
-      return {
-        kind: balance.kind,
-        resourceId: balance.resourceId,
-        displayName: balance.displayName ?? icon?.displayName,
-        iconPath: icon?.iconPath,
-        iconAtlas: icon?.iconAtlas,
-        dominantColor: icon?.dominantColor,
-        ratePerSecond,
-      };
-    };
-
-    const inputs = scoped.externalInputs.map((balance) =>
-      toPort(balance, balance.deficitPerSecond),
-    );
-    const outputs = scoped.unconsumedOutputs.map((balance) =>
-      toPort(balance, balance.surplusPerSecond),
-    );
-
-    // Every wire crossing the boundary gets a port even when the members-only
-    // solve reports nothing for its resource (an internally covered input
-    // also fed from outside, a fully consumed output also exported). Port
-    // identity derives exactly as the board's edge remap does — the stored
-    // handle first, the wire's resource as fallback — so a crossing wire
-    // always finds its rendered port and can never turn invisible.
-    const portFromEdge = (
-      edge: FactoryEdge,
-      side: "input" | "output",
-    ): PocketPortSummary => {
-      const parsed = parseResourceHandleId(
-        side === "input" ? edge.targetHandle : edge.sourceHandle,
-      );
-      const kind = parsed?.kind ?? edge.resourceKind;
-      const resourceId = parsed?.resourceId ?? edge.resourceId;
-      const icon = icons.get(`${kind}:${resourceId}`);
-      return {
-        kind,
-        resourceId,
-        displayName: icon?.displayName ?? edge.label,
-        iconPath: icon?.iconPath,
-        iconAtlas: icon?.iconAtlas,
-        dominantColor: icon?.dominantColor,
-        ratePerSecond: 0,
-      };
-    };
-    const seenInputs = new Set(inputs.map((port) => `${port.kind}:${port.resourceId}`));
-    const seenOutputs = new Set(outputs.map((port) => `${port.kind}:${port.resourceId}`));
-    // A wire's resource and a member's recipe can name one physical thing
-    // differently - concrete carbon dust on the line, oredict carbon dust in
-    // the machine. Both used to earn a row, so the card grew two Carbon Dust
-    // inputs: the real one, and a phantom carrying no rate at all. One
-    // resource is one port, so a crossing wire whose resource is merely a
-    // compatible form of a row already on the card rides THAT row.
-    const coveredBy = (side: "input" | "output", port: PocketPortSummary) =>
-      listPocketPortResources(project, pocket.id, side).some(
-        (entry) =>
-          !(entry.kind === port.kind && entry.id === port.resourceId) &&
-          resourceMatchesInput({ kind: port.kind, id: port.resourceId }, entry) &&
-          (side === "input" ? seenInputs : seenOutputs).has(`${entry.kind}:${entry.id}`),
-      );
     for (const edge of project.edges) {
       const sourceInside = memberIds.has(edge.source);
       const targetInside = memberIds.has(edge.target);
       if (sourceInside === targetInside) {
         continue;
       }
-      const side = targetInside ? "input" : "output";
-      const port = portFromEdge(edge, side);
-      const key = `${port.kind}:${port.resourceId}`;
-      const seen = targetInside ? seenInputs : seenOutputs;
-      if (!seen.has(key) && !coveredBy(side, port)) {
-        seen.add(key);
-        (targetInside ? inputs : outputs).push(port);
+      const side = targetInside ? incoming : outgoing;
+      const key = `${edge.resourceKind}:${edge.resourceId}`;
+      // Several wires carrying one resource across one border are ONE line
+      // on the card, exactly as they are one drawn wire on the board.
+      const existing = side.get(key);
+      const rate = result?.edges[edge.id]?.transferredPerSecond ?? 0;
+      if (existing) {
+        existing.ratePerSecond += rate;
+        existing.wireCount += 1;
+        continue;
+      }
+      const icon = icons.get(key);
+      side.set(key, {
+        key,
+        kind: edge.resourceKind,
+        resourceId: edge.resourceId,
+        displayName: icon?.displayName ?? edge.label,
+        iconPath: icon?.iconPath,
+        iconAtlas: icon?.iconAtlas,
+        dominantColor: icon?.dominantColor,
+        ratePerSecond: rate,
+        wireCount: 1,
+      });
+    }
+
+    let machineCount = 0;
+    let euPerTick = 0;
+    for (const node of project.nodes) {
+      if (!memberIds.has(node.id)) {
+        continue;
+      }
+      machineCount += getNodeMachineBuildCount(recipesById.get(node.recipeId), node);
+      const nodeResult = result?.nodes[node.id];
+      if (nodeResult) {
+        // Solver figures are FULL SPEED; what a board is drawing is what its
+        // machines are actually running at.
+        euPerTick += nodeResult.euT * Math.min(Math.max(nodeResult.utilization ?? 0, 0), 1);
       }
     }
 
+    const balance = computeBoardBalance(project, memberIds, icons, result);
     summaries.set(pocket.id, {
-      inputs,
-      outputs,
-      // Crop cards count the harvesters their crops fill, not seeds.
-      machineCount: nodes.reduce(
-        (sum, node) => sum + getNodeMachineBuildCount(recipesById.get(node.recipeId), node),
-        0,
-      ),
+      needs: balance.needs,
+      offers: balance.offers,
+      incoming: sortCrossings(incoming),
+      outgoing: sortCrossings(outgoing),
+      machineCount,
       memberCount: memberIds.size,
+      euPerTick,
     });
   }
 
   return summaries;
 }
 
-const RATE_EPSILON = 1e-6;
-
-/**
- * Which rendered port a crossing wire docks on.
- *
- * The card draws one row per resource and merges compatible forms, so a wire
- * stored against a concrete form has to find the row its oredict sibling
- * kept. The board's edge remap and the card must agree here, or a wire
- * anchors to a port that was never drawn and simply vanishes.
- */
-export function resolvePocketPortHandleId(
-  project: FactoryProject,
-  summary: PocketSummary | undefined,
-  pocketId: string,
-  side: "input" | "output",
-  resource: { kind: ResourceBalance["kind"]; id: string },
-): string | undefined {
-  const ports = side === "input" ? summary?.inputs : summary?.outputs;
-  if (!ports || ports.length === 0) {
-    return undefined;
-  }
-
-  const exact = ports.find(
-    (port) => port.kind === resource.kind && port.resourceId === resource.id,
-  );
-  const chosen =
-    exact ??
-    (() => {
-      const entries = listPocketPortResources(project, pocketId, side);
-      return ports.find((port) => {
-        const entry = entries.find(
-          (candidate) => candidate.kind === port.kind && candidate.id === port.resourceId,
-        );
-        return entry ? resourceMatchesInput(resource, entry) : false;
-      });
-    })();
-
-  return chosen
-    ? makeResourceHandleId(side, { kind: chosen.kind, id: chosen.resourceId })
-    : undefined;
-}
-
-/**
- * A pocket's ports as RAIL ports — the same surface a machine card wears.
- *
- * Two numbers meet on every row, and they come from opposite places. The
- * nameplate is what the dimension could move if it got everything it asked
- * for, and that is not a usage multiply: it is the scoped solve in
- * `computePocketSummaries`, a real simulation of every machine inside with
- * the outside world unhooked. The current rate is what it is ACTUALLY moving
- * right now, read straight out of the plan-wide solve — pocket members never
- * leave the flat graph, so the solver has been simulating them, with their
- * real supply, all along. Nobody was reading it.
- *
- * So a starved pocket now reads exactly like a starved machine: 12 / 30 a
- * second, bar a third full, and the row tinted for why.
- */
-export function buildPocketRailPorts(
-  project: FactoryProject,
-  result: ThroughputResult | undefined,
-  pocketId: string,
-  summary: PocketSummary,
-): { inputs: RailPort[]; outputs: RailPort[] } {
-  const members = collectPocketMembers(project, pocketId);
-  const memberIds = new Set<string>([
-    ...members.nodes.map((node) => node.id),
-    ...members.storages.map((storage) => storage.id),
-  ]);
-
-  // What the machines inside are really moving. A node's flow figures are
-  // NAMEPLATE rates - what the machine would move at full blast - so each one
-  // is scaled by how hard that machine is actually running, exactly as a
-  // machine card scales its own output chip. Netting the two sides is what
-  // makes an ingredient the dimension makes for itself stop counting as a
-  // boundary need.
-  const produced = new Map<string, number>();
-  const consumed = new Map<string, number>();
-  for (const member of members.nodes) {
-    const memberResult = result?.nodes[member.id];
-    if (!memberResult) {
-      continue;
+/** Busiest first, then by name, so the card's order is stable and useful. */
+function sortCrossings(crossings: Map<string, PocketCrossing>): PocketCrossing[] {
+  return [...crossings.values()].sort((left, right) => {
+    if (right.ratePerSecond !== left.ratePerSecond) {
+      return right.ratePerSecond - left.ratePerSecond;
     }
-    const running = Math.min(Math.max(memberResult.utilization ?? 0, 0), 1);
-    for (const flow of Object.values(memberResult.outputs)) {
-      produced.set(flow.key, (produced.get(flow.key) ?? 0) + flow.amountPerSecond * running);
-    }
-    for (const flow of Object.values(memberResult.inputs)) {
-      consumed.set(flow.key, (consumed.get(flow.key) ?? 0) + flow.amountPerSecond * running);
-    }
-  }
-
-  const nodesById = new Map(project.nodes.map((node) => [node.id, node] as const));
-  const recipesById = new Map(project.recipes.map((recipe) => [recipe.id, recipe] as const));
-  const storagesById = new Map(
-    (project.storages ?? []).map((storage) => [storage.id, storage] as const),
-  );
-  const farEndName = (id: string): string => {
-    const node = nodesById.get(id);
-    if (node) {
-      const recipe = recipesById.get(node.recipeId);
-      return recipe?.machineType ?? recipe?.name ?? "Machine";
-    }
-    const storage = storagesById.get(id);
-    return storage ? describeStorage(storage, getStorageRole(project, storage.id)) : "Card";
-  };
-
-  const buildSide = (side: "input" | "output"): RailPort[] => {
-    const isInput = side === "input";
-    const ports = isInput ? summary.inputs : summary.outputs;
-
-    // Every crossing wire is bucketed onto its row ONCE, not re-resolved for
-    // each port: a pocket holding a thousand machines behind a dozen ports
-    // would otherwise walk the edge list a dozen times over, and resolution
-    // itself walks the members.
-    const edgesByHandle = new Map<string, FactoryEdge[]>();
-    for (const edge of project.edges) {
-      const inside = isInput ? memberIds.has(edge.target) : memberIds.has(edge.source);
-      const outside = isInput ? !memberIds.has(edge.source) : !memberIds.has(edge.target);
-      if (!inside || !outside) {
-        continue;
-      }
-      const stored = parseResourceHandleId(isInput ? edge.targetHandle : edge.sourceHandle);
-      const docked = resolvePocketPortHandleId(project, summary, pocketId, side, {
-        kind: stored?.kind ?? edge.resourceKind,
-        id: stored?.resourceId ?? edge.resourceId,
-      });
-      if (docked) {
-        const bucket = edgesByHandle.get(docked);
-        if (bucket) {
-          bucket.push(edge);
-        } else {
-          edgesByHandle.set(docked, [edge]);
-        }
-      }
-    }
-
-    return ports.map((port) => {
-      const key = makeResourceKey(port.kind, port.resourceId);
-      const handleId = makeResourceHandleId(side, { kind: port.kind, id: port.resourceId });
-      const edges = edgesByHandle.get(handleId) ?? [];
-      const connected = edges.length > 0;
-
-      let transferred = 0;
-      let available = 0;
-      let lineAsk = 0;
-      const farEnds = new Set<string>();
-      for (const edge of edges) {
-        const edgeResult = result?.edges[edge.id];
-        transferred += edgeResult?.transferredPerSecond ?? 0;
-        available += edgeResult?.availablePerSecond ?? edgeResult?.transferredPerSecond ?? 0;
-        lineAsk += edgeResult?.nameplateDemandPerSecond ?? edgeResult?.demandPerSecond ?? 0;
-        farEnds.add(isInput ? edge.source : edge.target);
-      }
-
-      // Net flow across the boundary for this resource, from the REAL solve.
-      const net = (produced.get(key) ?? 0) - (consumed.get(key) ?? 0);
-      const currentPerSecond = Math.max(0, isInput ? -net : net);
-      // The scoped solve's figure is the nameplate. A row that exists only
-      // because a wire crosses here has no scoped figure (it carries 0), so
-      // it falls back to what is actually moving rather than drawing a bar
-      // against nothing.
-      const nameplatePerSecond =
-        port.ratePerSecond > RATE_EPSILON
-          ? port.ratePerSecond
-          : Math.max(currentPerSecond, isInput ? lineAsk : transferred);
-
-      const short = currentPerSecond + RATE_EPSILON < nameplatePerSecond;
-      const fillFraction =
-        nameplatePerSecond > RATE_EPSILON
-          ? Math.min(currentPerSecond / nameplatePerSecond, 1)
-          : connected
-            ? 1
-            : 0;
-
-      let tone: RailPort["tone"] = "ok";
-      if (isInput && !connected) {
-        tone = "idle";
-      } else if (short) {
-        tone = isInput ? "bind" : "slowed";
-      }
-
-      let plug: RailPort["plug"];
-      if (!isInput && connected) {
-        const ask = lineAsk > RATE_EPSILON ? lineAsk : transferred;
-        const covered = ask > RATE_EPSILON ? Math.min(transferred / ask, 1) : 1;
-        plug = {
-          // Askers want more than they get: blame the dimension when it is
-          // running short of its own nameplate, the askers when it is not.
-          state:
-            transferred + RATE_EPSILON >= ask ? "fed" : short ? "blocked" : "hungry",
-          askerName:
-            farEnds.size === 1 ? farEndName([...farEnds][0]!) : `${farEnds.size} machines`,
-          askerMachines: farEnds.size,
-          askPerSecond: ask,
-          getPerSecond: transferred,
-          coveredFraction: covered,
-          timesShort:
-            transferred > RATE_EPSILON ? ask / transferred : ask > RATE_EPSILON ? Infinity : undefined,
-        };
-      }
-
-      return {
-        side,
-        key: `${side}:${key}`,
-        kind: port.kind,
-        resourceId: port.resourceId,
-        displayName: port.displayName ?? port.resourceId,
-        handleId,
-        resource: {
-          kind: port.kind,
-          id: port.resourceId,
-          amount: 1,
-          displayName: port.displayName,
-          iconPath: port.iconPath,
-          iconAtlas: port.iconAtlas,
-          dominantColor: port.dominantColor,
-        },
-        connected,
-        // A consumed input with no line on it is fed by hand, exactly as on a
-        // machine card. Pockets never said so before.
-        unsupplied: isInput && !connected,
-        currentPerSecond,
-        nameplatePerSecond,
-        wantedPerSecond: isInput ? nameplatePerSecond : connected ? lineAsk : 0,
-        couldPerSecond: isInput ? (connected ? available : nameplatePerSecond) : nameplatePerSecond,
-        fillFraction,
-        tone,
-        plug,
-        // Both halves whenever they differ: "what it is moving / what it
-        // could move" is the entire question a pocket card was not answering.
-        showNameplate: short,
-      } satisfies RailPort;
-    });
-  };
-
-  return { inputs: buildSide("input"), outputs: buildSide("output") };
+    return (left.displayName ?? left.resourceId).localeCompare(
+      right.displayName ?? right.resourceId,
+    );
+  });
 }
 
 type ResourceIconMeta = Pick<

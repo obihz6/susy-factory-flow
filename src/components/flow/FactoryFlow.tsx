@@ -23,6 +23,7 @@ import {
   type NodeTypes,
   type OnSelectionChangeParams,
   type ReactFlowInstance,
+  useStore,
   useStoreApi,
   ViewportPortal,
 } from "@xyflow/react";
@@ -30,6 +31,7 @@ import { toBlob, toSvg } from "html-to-image";
 import {
   Activity,
   AlignJustify,
+  AppWindow,
   Ban,
   Box,
   Cable,
@@ -95,11 +97,9 @@ import {
   resourceMatchesInput,
 } from "@/lib/model";
 import {
+  collectPocketMembers,
   getEffectiveNodeRecipe,
-  getPocketResourceForHandle,
   isPocketId,
-  listPocketPortResources,
-  resolvePocketMemberIds,
 } from "@/lib/model/pocket-connections";
 import type {
   EdgeThroughput,
@@ -107,6 +107,7 @@ import type {
   FactoryEdge,
   FactoryNode,
   FactoryNodeColorTag,
+  FactoryPocket,
   FactoryProject,
   Recipe,
   ResourceAmount,
@@ -115,11 +116,9 @@ import type {
 } from "@/lib/model/types";
 import {
   captureBoardSelection,
-  collectPocketConvergenceWarnings,
   useFactoryStore,
   type BoardClipboardPayload,
   type BoardFraming,
-  type PocketConvergenceWarning,
 } from "@/store/factory-store";
 import { useBlueprintStore } from "@/store/blueprint-store";
 import { useDesignStore } from "@/store/design-store";
@@ -139,12 +138,18 @@ import {
   ANNOTATION_MIN_BOX,
   ANNOTATION_MIN_TEXT,
   BOARD_GRID,
+  BOARD_WINDOW_DEFAULT_SIZE,
+  BOARD_WINDOW_FIT_PAD,
+  BOARD_WINDOW_MIN_HEIGHT,
+  BOARD_WINDOW_MIN_WIDTH,
+  BOARD_WINDOW_TITLE_HEIGHT,
   RECIPE_NODE_WIDTH,
   STORAGE_NODE_HEIGHT,
   STORAGE_NODE_WIDTH,
   TRASH_NODE_HEIGHT,
   TRASH_NODE_WIDTH,
   cells,
+  snapPositionToGrid,
   snapSizeUpToGrid,
 } from "@/lib/board-grid";
 import {
@@ -284,11 +289,32 @@ import {
 } from "./edge-pulse";
 import { StorageNode, type StorageFlowNode } from "./StorageNode";
 import { TrashNode, type TrashFlowNode } from "./TrashNode";
-import { PocketNode, type PocketFlowNode } from "./PocketNode";
 import {
-  buildPocketRailPorts,
+  POCKET_CARD_SOURCE_HANDLE,
+  POCKET_CARD_TARGET_HANDLE,
+  PocketNode,
+  type PocketFlowNode,
+} from "./PocketNode";
+import {
+  BOARD_DRAG_HANDLE_CLASS,
+  BOARD_EDGE,
+  BoardFloor,
+  BoardNode,
+  type BoardNodeData,
+  type BoardWindowFlowNode,
+} from "./BoardNode";
+import {
+  boardWindowSize,
+  collectPocketDescendantIds,
+  computeBoardLevelView,
+  computeOpenBoardRects,
+  boardBodyRect,
+  pickBoardOwnerFor,
+} from "@/lib/model/board-windows";
+import {
   computePocketSummaries,
-  resolvePocketPortHandleId,
+  countPocketCrossings,
+  pocketCardHeight,
 } from "./pocket-summary";
 import {
   ANNOTATION_DRAG_HANDLE_CLASS,
@@ -296,6 +322,9 @@ import {
   type AnnotationFlowNode,
 } from "./AnnotationNode";
 import { settleZonePoints } from "@/lib/model/zone-points";
+import { BOARD_PAPER_IDS } from "@/lib/model/board-paper";
+import { nearestFreeSpot, type PlacementRect, type PlacementRegion } from "./board-placement";
+import { registerBoardResize, type BoardResizeDraft } from "./board-resize";
 
 const nodeTypes = {
   recipeNode: RecipeNode,
@@ -303,6 +332,7 @@ const nodeTypes = {
   trashNode: TrashNode,
   annotationNode: AnnotationNode,
   pocketNode: PocketNode,
+  boardNode: BoardNode,
 } satisfies NodeTypes;
 
 type BoardFlowNode =
@@ -310,7 +340,8 @@ type BoardFlowNode =
   | StorageFlowNode
   | TrashFlowNode
   | AnnotationFlowNode
-  | PocketFlowNode;
+  | PocketFlowNode
+  | BoardWindowFlowNode;
 
 interface AnnotationDraft {
   start: { x: number; y: number };
@@ -318,6 +349,13 @@ interface AnnotationDraft {
   /** Every point the pointer passed through; the zone tool settles it. */
   trail: Array<{ x: number; y: number }>;
 }
+
+/**
+ * What the draw-a-shape pipeline can be armed with: the annotation kinds,
+ * plus the board window — drawn exactly like a box, but it lands as a pocket
+ * standing open, adopting whatever cards its frame covers.
+ */
+type BoardDrawTool = FactoryAnnotationKind | "board";
 
 const ResourceEdge = memo(ResourceEdgeComponent);
 
@@ -336,10 +374,9 @@ const connectionLineStyle = {
 const DEFAULT_ITEM_EDGE_COLOR = "#8b8f98";
 const DEFAULT_FLUID_EDGE_COLOR = "#2f89c5";
 
-// The base colour and pattern ink now come from the active canvas theme
+// The base colour and pattern ink come from the active canvas theme
 // (canvas-themes.ts); the Slate theme carries the old --canvas / --canvas-dot
-// values. Inside a pocket dimension the dots go faintly violet with the room.
-const POCKET_CANVAS_DOT_COLOR = "#5b4c7a";
+// values.
 
 /**
  * Snap step, and the background gap — same number so nodes land on marks.
@@ -444,8 +481,11 @@ function withTouchDragRule(nodes: BoardFlowNode[], compact: boolean): BoardFlowN
   let changed = false;
   const next = nodes.map((node) => {
     // Off compact nothing carries the flag, so a window that grows back into a
-    // desktop hands every card its drag back.
-    const draggable = compact && node.selected ? true : undefined;
+    // desktop hands every card its drag back. A board window is never
+    // selectable, so the select-first rule would strand it; its title bar is
+    // a deliberate enough target to keep the drag on a finger.
+    const draggable =
+      node.type === "boardNode" ? (compact ? true : undefined) : compact && node.selected ? true : undefined;
     if (node.draggable === draggable) {
       return node;
     }
@@ -914,6 +954,16 @@ type GridRouteEdgeInput = {
   routingWidth: number;
   /** User-pinned stops the wire must pass through, in order. */
   waypoints?: Array<{ x: number; y: number }>;
+  /**
+   * The open board frames this wire's endpoints live inside — the only
+   * frames its route may cross. Every other frame blocks it like a card.
+   */
+  throughBoardIds?: string[];
+  /**
+   * The frames holding BOTH ends: the rooms the wire lives in, which it
+   * should not leave and come back into. Always a subset of the above.
+   */
+  homeBoardIds?: string[];
 };
 
 let publishedGridRouteEdges: GridRouteEdgeInput[] = [];
@@ -1100,6 +1150,8 @@ function ensureGridSolve() {
       targets,
       strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
       waypoints: input.waypoints,
+      exemptObstacleIds: input.throughBoardIds,
+      homeObstacleIds: input.homeBoardIds,
     });
     orderByEdge.set(input.edgeId, input.order);
     // Free-dock candidates derive purely from the card rects, and the sweep
@@ -1118,18 +1170,43 @@ function ensureGridSolve() {
           .join("+")}|${targets
           .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
           .join("+")}`;
+    // Frame exemptions are a routing input like a waypoint: adopting a card
+    // changes no endpoint and moves no obstacle, yet its wires must reroute.
+    const throughPart =
+      (input.throughBoardIds && input.throughBoardIds.length > 0
+        ? `|thru:${input.throughBoardIds.join(",")}`
+        : "") +
+      (input.homeBoardIds && input.homeBoardIds.length > 0
+        ? `|home:${input.homeBoardIds.join(",")}`
+        : "");
     parts.push(
-      `${input.edgeId}|${input.order}|${input.routingWidth}|${input.sourceNodeId}|${input.targetNodeId}${describe}`,
+      `${input.edgeId}|${input.order}|${input.routingWidth}|${input.sourceNodeId}|${input.targetNodeId}${describe}${throughPart}`,
     );
   }
 
-  const signature = `${publishedGridFreeDock ? "free" : "ports"}::${sweep.hash}::${parts.join(";")}`;
+  // Open board frames are obstacles too — solid to every wire that is not
+  // exempt from them. They live outside the card sweep, so they carry their
+  // own slice of the signature.
+  const frames = publishedBoardFrameBounds;
+  const framesPart = frames
+    .map(
+      (entry) =>
+        `${entry.id}:${Math.round(entry.bounds.left)},${Math.round(entry.bounds.top)},${Math.round(
+          entry.bounds.right,
+        )},${Math.round(entry.bounds.bottom)}`,
+    )
+    .join(";");
+
+  const signature = `${publishedGridFreeDock ? "free" : "ports"}::${sweep.hash}::${framesPart}::${parts.join(";")}`;
   if (signature === gridSolveSignature) {
     return;
   }
   gridSolveSignature = signature;
 
-  const obstacles = sweep.bounds.map((entry) => ({ id: entry.id, ...entry.bounds }));
+  const obstacles = [
+    ...sweep.bounds.map((entry) => ({ id: entry.id, ...entry.bounds })),
+    ...frames.map((entry) => ({ id: entry.id, ...entry.bounds })),
+  ];
   const solved = solveGridRoutes(obstacles, requests);
   for (const [edgeId, routed] of solved) {
     if (routed.points.length < 2) {
@@ -1170,6 +1247,22 @@ function clearDirectRoutes() {
 // live transform.
 type MeasuredBounds = { left: number; right: number; top: number; bottom: number };
 
+/**
+ * The OPAQUE parts of an open board: its title bar and the rim around its
+ * floor. Both sit above the wires (chrome at z 15, wires at 10), so anything
+ * drawn on top of the wires has to stop at them too. The floor between them
+ * is a separate layer UNDER the wires, so a wire and its dashes cross it.
+ */
+function boardChromeOccluders(bounds: MeasuredBounds): MeasuredBounds[] {
+  const { left, top, right, bottom } = bounds;
+  return [
+    { left, top, right, bottom: Math.min(bottom, top + BOARD_WINDOW_TITLE_HEIGHT) },
+    { left, top, right: Math.min(right, left + BOARD_EDGE), bottom },
+    { left: Math.max(left, right - BOARD_EDGE), top, right, bottom },
+    { left, top: Math.max(top, bottom - BOARD_EDGE), right, bottom },
+  ];
+}
+
 const missingRecipePlaceholders = new Map<string, RecipeFlowNode["data"]["recipe"]>();
 
 /**
@@ -1206,6 +1299,13 @@ const storageNodeDataCache = new Map<string, StorageFlowNode["data"]>();
 const trashNodeDataCache = new Map<string, TrashFlowNode["data"]>();
 const annotationNodeDataCache = new Map<string, AnnotationFlowNode["data"]>();
 const pocketNodeDataCache = new Map<string, PocketFlowNode["data"]>();
+const boardNodeDataCache = new Map<string, BoardNodeData>();
+
+/**
+ * The board chrome's depth: over the wire layer (10 while un-sealed), under
+ * the cards (20). See the frame node below.
+ */
+const BOARD_CHROME_Z_INDEX = 15;
 // Same idea for edges, but with structural comparison: an edge object nests
 // fresh data/style objects on every rebuild, and handing React Flow an equal-
 // but-new identity re-renders the edge — which re-runs the route solver. Most
@@ -1256,6 +1356,13 @@ function pruneNodeDataCaches(
   for (const id of pocketNodeDataCache.keys()) {
     if (!pocketIds.has(id)) {
       pocketNodeDataCache.delete(id);
+    }
+  }
+
+  // Same id space as the pocket cards: a pocket standing open caches here.
+  for (const id of boardNodeDataCache.keys()) {
+    if (!pocketIds.has(id)) {
+      boardNodeDataCache.delete(id);
     }
   }
 
@@ -1326,6 +1433,14 @@ const measuredNodeBoundsCache = new Map<string, MeasuredBounds | undefined>();
 // obstacle set, invalidating every cached route (and quietly making routes
 // depend on the viewport, which AGENTS.md forbids).
 let publishedBoardBounds: Array<{ id: string; bounds: MeasuredBounds }> | undefined;
+/**
+ * Open board frames, published separately from the card set: a frame is a
+ * ROUTING obstacle (a foreign wire goes around it like a card), but only for
+ * wires with no business inside — the solve exempts each wire from the
+ * frames its endpoints live in. Kept out of `publishedBoardBounds` so every
+ * other consumer of the card set (drop targeting, label maths) is untouched.
+ */
+let publishedBoardFrameBounds: Array<{ id: string; bounds: MeasuredBounds }> = [];
 let publishedBoardGeometryById = new Map<
   string,
   { x: number; y: number; width: number; height: number }
@@ -1440,14 +1555,12 @@ export function FactoryFlow() {
   const moveBoardItems = useFactoryStore((state) => state.moveBoardItems);
   const deleteBoardSelection = useFactoryStore((state) => state.deleteBoardSelection);
   const pasteBoardItems = useFactoryStore((state) => state.pasteBoardItems);
-  const activePocketId = useFactoryStore((state) => state.activePocketId);
-  const enterPocket = useFactoryStore((state) => state.enterPocket);
   // Blueprint overwrite picker mode: a shelf row is waiting for the user to
   // click a pocket. The board wears it — banner up top, pockets ringed.
   const overwritePicking = useBlueprintStore((state) => state.overwritePicking);
-  const compactSelectionIntoPocket = useFactoryStore(
-    (state) => state.compactSelectionIntoPocket,
-  );
+  const wrapSelectionInBoard = useFactoryStore((state) => state.wrapSelectionInBoard);
+  const expandPocket = useFactoryStore((state) => state.expandPocket);
+  const paintPocket = useFactoryStore((state) => state.paintPocket);
   const setPendingBoardSelection = useFactoryStore((state) => state.setPendingBoardSelection);
   const setSelectedBoardIds = useFactoryStore((state) => state.setSelectedBoardIds);
   const updateNode = useFactoryStore((state) => state.updateNode);
@@ -1461,6 +1574,7 @@ export function FactoryFlow() {
   const deleteStorage = useFactoryStore((state) => state.deleteStorage);
   const deleteEdge = useFactoryStore((state) => state.deleteEdge);
   const addAnnotation = useFactoryStore((state) => state.addAnnotation);
+  const createBoard = useFactoryStore((state) => state.createBoard);
   const updateAnnotation = useFactoryStore((state) => state.updateAnnotation);
   const deleteAnnotation = useFactoryStore((state) => state.deleteAnnotation);
   const cancelResourceConnection = useFactoryStore((state) => state.cancelResourceConnection);
@@ -1499,73 +1613,98 @@ export function FactoryFlow() {
     [project.storages],
   );
 
-  // The pocket dimension view. The graph is always the whole flat project;
-  // the board only ever SHOWS one level of it — cards whose pocketId is the
-  // active level, plus one collapsed card per pocket that sits on this level.
-  // `representativeOf` maps any project item to what stands for it here: the
-  // item itself when it is on this level, the ancestor pocket card that
-  // swallowed it, or undefined when it is outside this view entirely (which
-  // is what hides the rest of the plan while zoomed into a pocket).
+  // The board view. The graph is always the whole flat project; the canvas
+  // shows the root plus the contents of every board standing open,
+  // recursively. `representativeOf` maps any project item to what stands
+  // for it here: the item itself when its owner chain is open, or the
+  // minimized card hiding it. See board-windows.ts; the auto-arrange
+  // adapter keeps its own root walk so a board arranges as a single block.
   const pocketView = useMemo(() => {
-    const pockets = project.pockets ?? [];
-    const parentById = new Map(pockets.map((pocket) => [pocket.id, pocket.parentPocketId]));
-    const itemPocketById = new Map<string, string | undefined>();
-    for (const node of project.nodes) {
-      itemPocketById.set(node.id, node.pocketId);
-    }
-    for (const storage of project.storages ?? []) {
-      itemPocketById.set(storage.id, storage.pocketId);
-    }
-
-    const representativeOf = (itemId: string): string | undefined => {
-      let level = itemPocketById.get(itemId);
-      if (level === activePocketId) {
-        return itemId;
-      }
-      const seen = new Set<string>();
-      while (level !== undefined && !seen.has(level)) {
-        seen.add(level);
-        const parent = parentById.get(level);
-        if (parent === activePocketId) {
-          return level;
-        }
-        level = parent;
-      }
-      return undefined;
-    };
-
+    const view = computeBoardLevelView(project);
     return {
-      representativeOf,
-      visiblePockets: pockets.filter((pocket) => pocket.parentPocketId === activePocketId),
+      isLevelShown: view.isLevelShown,
+      representativeOf: view.representativeOf,
+      visiblePockets: view.collapsedBoards,
+      openBoards: view.openBoards,
     };
-  }, [activePocketId, project.nodes, project.storages, project.pockets]);
+  }, [project]);
 
-  // Scoped solves are small (a pocket's members only) and run once per
-  // project commit, not per hover — see pocket-summary.ts.
+  // What each minimized board says about itself: what is inside, and what
+  // crosses its border. Read straight out of the plan-wide solve - a
+  // minimized board has no books of its own (see pocket-summary.ts) - and
+  // built here rather than in the card so an unrelated store write cannot
+  // make every card redo it.
   const pocketSummaries = useMemo(
-    () => computePocketSummaries(project, pocketView.visiblePockets),
-    [project, pocketView.visiblePockets],
+    () => computePocketSummaries(project, pocketView.visiblePockets, result),
+    [project, result, pocketView.visiblePockets],
   );
 
-  // The rails a pocket card wears. Built here rather than inside the card for
-  // the same reason the summaries are: this reads the whole plan's solve, and
-  // a card that derived it per render would redo it on every unrelated store
-  // write. Keyed off the result too, so the bars follow the live numbers.
-  const pocketRails = useMemo(() => {
-    const rails = new Map<string, ReturnType<typeof buildPocketRailPorts>>();
-    for (const pocket of pocketView.visiblePockets) {
-      const summary = pocketSummaries.get(pocket.id);
-      if (summary) {
-        rails.set(pocket.id, buildPocketRailPorts(project, result, pocket.id, summary));
+  const nodesFromProject = useMemo<BoardFlowNode[]>(() => {
+    // An item inside an open board is a React Flow CHILD of the frame: its
+    // stored position is already frame-relative, so handing the owner over
+    // as `parentId` is the whole mechanism that makes a dragged title bar
+    // carry the household. Root items stay parentless.
+    const childOf = (levelId: string | undefined) =>
+      levelId !== undefined ? { parentId: levelId } : undefined;
+    const memberCounts = new Map<string, number>();
+    const countMember = (levelId: string | undefined) => {
+      if (levelId !== undefined) {
+        memberCounts.set(levelId, (memberCounts.get(levelId) ?? 0) + 1);
       }
+    };
+    for (const node of project.nodes) {
+      countMember(node.pocketId);
     }
-    return rails;
-  }, [project, result, pocketSummaries, pocketView.visiblePockets]);
+    for (const storage of project.storages ?? []) {
+      countMember(storage.pocketId);
+    }
+    for (const annotation of project.annotations ?? []) {
+      countMember(annotation.pocketId);
+    }
+    for (const pocket of project.pockets ?? []) {
+      countMember(pocket.parentPocketId);
+    }
 
-  const nodesFromProject = useMemo<BoardFlowNode[]>(
-    () => [
+    return [
+      // Open boards first: React Flow insists a parent node appears before
+      // every child that names it, and `openBoards` already comes
+      // parents-before-children for the same reason.
+      ...pocketView.openBoards.map(
+        (pocket) =>
+          ({
+            id: pocket.id,
+            type: "boardNode",
+            position: pocket.position,
+            ...childOf(pocket.parentPocketId),
+            width: boardWindowSize(pocket).width,
+            height: boardWindowSize(pocket).height,
+            // The chrome — title bar, border, grip — sits ABOVE the wires
+            // (which ride at 10 while the layers are un-sealed) and below
+            // the cards at 20: a wire crossing a board passes under its bar
+            // and its rim, the way a window occludes what is behind it. The
+            // FLOOR is a separate child node underneath the wires, so the
+            // board's own members keep their wiring in plain sight. The
+            // class keeps the selected/dragging z-lift from raising the
+            // frame over the cards it holds.
+            zIndex: BOARD_CHROME_Z_INDEX,
+            className: "board-window",
+            // A board is a thing on the plan: a marquee drawn around one
+            // picks it up like any card, and shift-clicking its bar adds
+            // it to a selection. Its members are collected by the same
+            // marquee, which is fine - a passenger's own position change
+            // is dropped mid-drag (see dragPassengersRef) so a selected
+            // frame and its selected cards never move twice.
+            selectable: true,
+            dragHandle: `.${BOARD_DRAG_HANDLE_CLASS}`,
+            style: { pointerEvents: "none" as const },
+            data: reuseObjectIdentity(boardNodeDataCache, pocket.id, {
+              pocket,
+              memberCount: memberCounts.get(pocket.id) ?? 0,
+            }),
+          }) satisfies BoardWindowFlowNode,
+      ),
       ...project.nodes
-        .filter((node) => node.pocketId === activePocketId)
+        .filter((node) => pocketView.isLevelShown(node.pocketId))
         .map((node): BoardFlowNode => {
         const recipe = recipesById.get(node.recipeId) ?? getMissingRecipePlaceholder(node.recipeId);
         // Trash cans get their own compact card; a distinct node TYPE (not a
@@ -1576,6 +1715,7 @@ export function FactoryFlow() {
             id: node.id,
             type: "trashNode",
             position: node.position,
+            ...childOf(node.pocketId),
             zIndex: CARD_Z_INDEX,
             data: reuseObjectIdentity(trashNodeDataCache, node.id, {
               projectNode: node,
@@ -1586,6 +1726,7 @@ export function FactoryFlow() {
           id: node.id,
           type: "recipeNode",
           position: node.position,
+          ...childOf(node.pocketId),
           zIndex:
             hoveredUsageNodeId === node.id
               ? 1500
@@ -1606,13 +1747,14 @@ export function FactoryFlow() {
         } satisfies RecipeFlowNode;
       }),
       ...(project.storages ?? [])
-        .filter((storage) => storage.pocketId === activePocketId)
+        .filter((storage) => pocketView.isLevelShown(storage.pocketId))
         .map(
         (storage) =>
           ({
             id: storage.id,
             type: "storageNode",
             position: storage.position,
+            ...childOf(storage.pocketId),
             zIndex:
               activeFlowResourceKey === makeResourceKey(storage.kind, storage.resourceId)
                 ? 1500
@@ -1624,13 +1766,14 @@ export function FactoryFlow() {
           }) satisfies StorageFlowNode,
       ),
       ...(project.annotations ?? [])
-        .filter((annotation) => annotation.pocketId === activePocketId)
+        .filter((annotation) => pocketView.isLevelShown(annotation.pocketId))
         .map(
         (annotation) =>
           ({
             id: annotation.id,
             type: "annotationNode",
             position: annotation.position,
+            ...childOf(annotation.pocketId),
             width: annotation.size.width,
             height: annotation.size.height,
             // Boxes, zones and images sit under everything so they read as
@@ -1663,38 +1806,34 @@ export function FactoryFlow() {
             id: pocket.id,
             type: "pocketNode",
             position: pocket.position,
+            ...childOf(pocket.parentPocketId),
             zIndex: CARD_Z_INDEX,
             data: reuseObjectIdentity(pocketNodeDataCache, pocket.id, {
               pocket,
               summary: pocketSummaries.get(pocket.id),
-              railPorts: pocketRails.get(pocket.id),
             }),
           }) satisfies PocketFlowNode,
       ),
-    ],
-    [
-      activeFlowResourceKey,
-      activeNodeBottlenecks,
-      activePocketId,
-      hoveredUsageNodeId,
-      pocketRails,
-      pocketSummaries,
-      pocketView.visiblePockets,
-      project.annotations,
-      project.nodes,
-      project.storages,
-      recipesById,
-      result.nodes,
-      result.storages,
-    ],
-  );
+    ];
+  }, [
+    activeFlowResourceKey,
+    activeNodeBottlenecks,
+    hoveredUsageNodeId,
+    pocketSummaries,
+    pocketView,
+    project.annotations,
+    project.nodes,
+    project.pockets,
+    project.storages,
+    recipesById,
+    result.nodes,
+    result.storages,
+  ]);
   const [flowNodes, setFlowNodes] = useState<BoardFlowNode[]>(() => nodesFromProject);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   const [isNodeDragging, setNodeDragging] = useState(false);
-  const [annotationTool, setAnnotationTool] = useState<FactoryAnnotationKind | undefined>(
-    undefined,
-  );
+  const [annotationTool, setAnnotationTool] = useState<BoardDrawTool | undefined>(undefined);
   // Shared by the brush and the annotation tools: the last colour picked in
   // the palette is what a new box/arrow/note is created with. Blue to start:
   // the house colour, and legible on every paper the board ships with.
@@ -1703,16 +1842,11 @@ export function FactoryFlow() {
   const [annotationDraft, setAnnotationDraft] = useState<AnnotationDraft | undefined>(undefined);
   const annotationDraftRef = useRef<AnnotationDraft | undefined>(undefined);
   const [layoutVersion, setLayoutVersion] = useState(0);
-  // Bumped whenever a paste/compact/blueprint-load hands the selection to
+  // Bumped whenever a paste/wrap/blueprint-load hands the selection to
   // fresh cards. React Flow keeps its band-selection GROUP RECTANGLE up
   // through that handoff, parked over the new card and eating every click —
   // the controller below watches this counter and dismisses the rect.
   const [selectionHandoffCount, setSelectionHandoffCount] = useState(0);
-  // Compacting would pool same-resource supplies from different places:
-  // the selection waits here while the player reads what would happen.
-  const [compactWarning, setCompactWarning] = useState<
-    { ids: string[]; warnings: PocketConvergenceWarning[] } | undefined
-  >(undefined);
   const draggingNodeRef = useRef(false);
   const draggedResourceRef = useRef<DraggedResourceConnection | undefined>(undefined);
   const lastConnectionPointerRef = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -1736,6 +1870,55 @@ export function FactoryFlow() {
   // A phone changes several things about the board: which cards can be dragged,
   // which toolbars are folded, where the centred banners sit.
   const isCompact = useIsCompactViewport();
+
+  // A board being resized publishes its frame here (board-resize.ts). The
+  // frame's own node takes the new rect, and its members are shifted by the
+  // same step in the opposite direction, so a wall dragged outward reveals
+  // floor instead of towing the cards. Local to the board's node state:
+  // nothing reaches the plan until the pointer comes up.
+  useEffect(() => {
+    registerBoardResize((draft: BoardResizeDraft | undefined) => {
+      if (!draft) {
+        // The commit that follows re-syncs from the plan; nothing to undo
+        // here, and clearing the draft must not fight it.
+        return;
+      }
+      setFlowNodes((currentNodes) => {
+        const frame = currentNodes.find((node) => node.id === draft.boardId);
+        if (!frame) {
+          return currentNodes;
+        }
+        const dx = frame.position.x - draft.position.x;
+        const dy = frame.position.y - draft.position.y;
+        if (
+          dx === 0 &&
+          dy === 0 &&
+          frame.width === draft.size.width &&
+          frame.height === draft.size.height
+        ) {
+          return currentNodes;
+        }
+        return currentNodes.map((node) => {
+          if (node.id === draft.boardId) {
+            return {
+              ...node,
+              position: draft.position,
+              width: draft.size.width,
+              height: draft.size.height,
+            } as typeof node;
+          }
+          if (node.parentId === draft.boardId && (dx !== 0 || dy !== 0)) {
+            return {
+              ...node,
+              position: { x: node.position.x + dx, y: node.position.y + dy },
+            } as typeof node;
+          }
+          return node;
+        });
+      });
+    });
+    return () => registerBoardResize(undefined);
+  }, []);
 
   useEffect(() => {
     if (draggingNodeRef.current) {
@@ -1776,9 +1959,14 @@ export function FactoryFlow() {
         // deselected the user's whole selection. A pending paste instead
         // hands the selection over to the freshly pasted cards.
         const selected = pendingSelection ? pendingSelection.has(node.id) : previous?.selected;
+        // A pocket flipping between card and open board keeps its id but not
+        // its shape; carrying the old card's measurement over would publish
+        // a frame the size of a card until React Flow re-measures.
         const merged = {
           ...node,
-          ...(previous?.measured ? { measured: previous.measured } : undefined),
+          ...(previous?.measured && previous.type === node.type
+            ? { measured: previous.measured }
+            : undefined),
           ...(selected !== undefined ? { selected } : undefined),
         } as typeof node;
         if (previous && isSameFlowNode(previous, merged)) {
@@ -1872,9 +2060,27 @@ export function FactoryFlow() {
    */
   const cameraCards = useCallback((nodeIds?: string[]) => {
     const wanted = nodeIds && nodeIds.length > 0 ? new Set(nodeIds) : undefined;
-    const cards = wanted
-      ? nodesFromProjectRef.current.filter((node) => wanted.has(node.id))
-      : nodesFromProjectRef.current;
+    const all = nodesFromProjectRef.current;
+    // Members of an open board carry frame-relative positions; the camera
+    // frames flow space, so parent chains resolve here first.
+    const byId = new Map(all.map((node) => [node.id, node]));
+    const absoluteById = new Map<string, { x: number; y: number }>();
+    const absoluteOf = (id: string): { x: number; y: number } => {
+      const cached = absoluteById.get(id);
+      if (cached) {
+        return cached;
+      }
+      const node = byId.get(id)!;
+      const parent = node.parentId ? byId.get(node.parentId) : undefined;
+      const base = parent ? absoluteOf(parent.id) : { x: 0, y: 0 };
+      const absolute = { x: base.x + node.position.x, y: base.y + node.position.y };
+      absoluteById.set(id, absolute);
+      return absolute;
+    };
+    const picked = wanted ? all.filter((node) => wanted.has(node.id)) : all;
+    const cards = picked.map((node) =>
+      node.parentId ? ({ ...node, position: absoluteOf(node.id) } as typeof node) : node,
+    );
     const measuredById = new Map(
       flowNodesRef.current.map((node) => [node.id, node.measured] as const),
     );
@@ -2045,11 +2251,28 @@ export function FactoryFlow() {
       // the new bumps are drawn.
       clearDirectRoutes();
     }
+    // Members of an open board carry frame-RELATIVE positions (that is what
+    // lets React Flow move them with the frame); everything downstream of
+    // this publish — routing sweeps, slot endpoints, arrange, cameras —
+    // speaks flow space, so the parent chain is resolved here, once.
+    const nodeById = new Map(flowNodesRef.current.map((node) => [node.id, node]));
+    const absoluteById = new Map<string, { x: number; y: number }>();
+    const absoluteOf = (id: string): { x: number; y: number } => {
+      const cached = absoluteById.get(id);
+      if (cached) {
+        return cached;
+      }
+      const node = nodeById.get(id)!;
+      const parent = node.parentId ? nodeById.get(node.parentId) : undefined;
+      const base = parent ? absoluteOf(parent.id) : { x: 0, y: 0 };
+      const absolute = { x: base.x + node.position.x, y: base.y + node.position.y };
+      absoluteById.set(id, absolute);
+      return absolute;
+    };
     const geometryById = new Map<string, { x: number; y: number; width: number; height: number }>();
     for (const node of flowNodesRef.current) {
       geometryById.set(node.id, {
-        x: node.position.x,
-        y: node.position.y,
+        ...absoluteOf(node.id),
         width: node.measured?.width ?? node.width ?? 0,
         height: node.measured?.height ?? node.height ?? 0,
       });
@@ -2058,16 +2281,20 @@ export function FactoryFlow() {
     // Annotations are ink on the board, not furniture. A box drawn AROUND a
     // cluster used to be a solid obstacle spanning all of it, so every wire
     // inside was forced to detour around its own group — the drawing changed
-    // the routing without changing the factory. Wires now pass straight
-    // through boxes, arrows and notes as if they were not there.
+    // the routing without changing the factory. Wires pass straight through
+    // boxes, arrows and notes as if they were not there. A board WINDOW is
+    // different: to a wire with no business inside it, the frame is as
+    // solid as a card — it goes in the frame list below and the solve routes
+    // foreign wires around it, exempting only the wires whose endpoints
+    // live inside (they have to cross the border to exist).
     const annotationIds = new Set(
       flowNodesRef.current
-        .filter((node) => node.type === "annotationNode")
+        .filter((node) => node.type === "annotationNode" || node.type === "boardNode")
         .map((node) => node.id),
     );
-    publishedBoardBounds = [...geometryById.entries()]
-      .filter(([id]) => !annotationIds.has(id))
-      .map(([id, geometry]) => ({
+    const asBounds = (id: string) => {
+      const geometry = geometryById.get(id)!;
+      return {
         id,
         bounds: {
           left: geometry.x,
@@ -2075,7 +2302,16 @@ export function FactoryFlow() {
           right: geometry.x + geometry.width,
           bottom: geometry.y + geometry.height,
         },
-      }))
+      };
+    };
+    publishedBoardBounds = [...geometryById.keys()]
+      .filter((id) => !annotationIds.has(id))
+      .map(asBounds)
+      .filter((entry) => entry.bounds.right > entry.bounds.left)
+      .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+    publishedBoardFrameBounds = flowNodesRef.current
+      .filter((node) => node.type === "boardNode")
+      .map((node) => asBounds(node.id))
       .filter((entry) => entry.bounds.right > entry.bounds.left)
       .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
     if (invalidateRoutes) {
@@ -2211,7 +2447,56 @@ export function FactoryFlow() {
   });
 
   const handleNodesChange = useCallback(
-    (changes: NodeChange<BoardFlowNode>[]) => {
+    (incoming: NodeChange<BoardFlowNode>[]) => {
+      let changes = incoming;
+      // The placement magnet, live: a held card is never ALLOWED onto a spot
+      // it cannot have, so it slides along whatever it meets instead of
+      // being tidied up after the fact. The pointer runs ahead of the card
+      // exactly as it does when a drag meets the grid.
+      const passengers = dragPassengersRef.current;
+      if (passengers.size > 0) {
+        changes = changes.filter(
+          (change) => change.type !== "position" || !passengers.has(change.id),
+        );
+      }
+      const constraints = dragConstraintsRef.current;
+      if (constraints.size > 0) {
+        for (const change of changes) {
+          if (change.type !== "position" || !change.dragging || !change.position) {
+            continue;
+          }
+          const constraint = constraints.get(change.id);
+          if (
+            !constraint ||
+            (constraint.blockers.length === 0 && constraint.regions.length === 0)
+          ) {
+            continue;
+          }
+          const geometry = publishedBoardGeometryById.get(change.id);
+          const width = geometry?.width ?? 0;
+          const height = geometry?.height ?? 0;
+          if (width <= 0 || height <= 0) {
+            continue;
+          }
+          const absolute = {
+            x: change.position.x + constraint.origin.x,
+            y: change.position.y + constraint.origin.y,
+            width,
+            height,
+          };
+          const free = nearestFreeSpot(
+            absolute,
+            constraint.blockers,
+            0,
+            undefined,
+            constraint.regions,
+          );
+          change.position = {
+            x: free.x - constraint.origin.x,
+            y: free.y - constraint.origin.y,
+          };
+        }
+      }
       setFlowNodes((currentNodes) => {
         const next = applyNodeChanges(changes, currentNodes) as BoardFlowNode[];
         // Only when the selection moved. This runs on every frame of a drag, and
@@ -2361,12 +2646,13 @@ export function FactoryFlow() {
       }
     }
 
-    // Collapsed-pocket channels. Convergence keeps several flat wires
-    // crossing one boundary with the same resource (a maker feeding both
-    // melters inside a pocket is TWO real edges), but the collapsed card
-    // advertises one channel per resource — so the view draws ONE wire per
-    // (visible far end, pocket, resource, ports) group: the first flat edge
-    // is the representative, the rest are skipped, the rates are summed.
+    // Minimized-board channels. Several flat wires can cross one border
+    // carrying the same resource (a maker feeding both melters inside a
+    // board is TWO real edges), and the card is a summary with one line per
+    // resource — so the view draws ONE wire per (visible far end, board,
+    // resource) group: the first flat edge is the representative, the rest
+    // are skipped, the rates are summed. Handles play no part: a minimized
+    // board has no ports to tell its wires apart by.
     const channelKeyFor = (
       edge: FactoryEdge,
       sourceRep: string,
@@ -2379,14 +2665,8 @@ export function FactoryFlow() {
         targetRep,
         edge.resourceKind,
         edge.resourceId,
-        (sourceIsPocket
-          ? (canonicalizeResourceHandleId(edge.sourceHandle) ??
-            makeResourceHandleId("output", { kind: edge.resourceKind, id: edge.resourceId }))
-          : canonicalizeResourceHandleId(edge.sourceHandle)) ?? "",
-        (targetIsPocket
-          ? (canonicalizeResourceHandleId(edge.targetHandle) ??
-            makeResourceHandleId("input", { kind: edge.resourceKind, id: edge.resourceId }))
-          : canonicalizeResourceHandleId(edge.targetHandle)) ?? "",
+        sourceIsPocket ? "" : (canonicalizeResourceHandleId(edge.sourceHandle) ?? ""),
+        targetIsPocket ? "" : (canonicalizeResourceHandleId(edge.targetHandle) ?? ""),
       ].join("|");
 
     channelEdgeIdsByRepresentative.clear();
@@ -2433,6 +2713,31 @@ export function FactoryFlow() {
           }
         }
         channelTotals.set(group.representativeId, { transferred, demand });
+      }
+    }
+
+    // Which open frames each wire may cross: the chain of open boards its
+    // endpoint cards live inside. A wire into a member must cross that
+    // board's border to exist; every OTHER frame turns it away like a card.
+    const hasOpenFrames = pocketView.openBoards.length > 0;
+    const frameChainByLevel = new Map<string | undefined, string[]>();
+    const frameOwnerById = new Map<string, string | undefined>();
+    if (hasOpenFrames) {
+      frameChainByLevel.set(undefined, []);
+      for (const board of pocketView.openBoards) {
+        frameChainByLevel.set(board.id, [
+          ...(frameChainByLevel.get(board.parentPocketId) ?? []),
+          board.id,
+        ]);
+      }
+      for (const node of project.nodes) {
+        frameOwnerById.set(node.id, node.pocketId);
+      }
+      for (const storage of project.storages ?? []) {
+        frameOwnerById.set(storage.id, storage.pocketId);
+      }
+      for (const pocket of project.pockets ?? []) {
+        frameOwnerById.set(pocket.id, pocket.parentPocketId);
       }
     }
 
@@ -2494,33 +2799,15 @@ export function FactoryFlow() {
       // Rails render one canonical (index-less) handle per resource; stored
       // edges may carry legacy per-slot ids. Collapse them here or React Flow
       // refuses to draw the edge and the anchor lookup misses the port.
-      // A pocket end docks on the card's canonical port for this wire. The
-      // stored handle names the exact port (an oredict input keeps its
-      // oredict id even when the wire carries a concrete log); edges of
-      // older vintage carry no handle and fall back to the wire's resource.
-      // pocket-summary derives its port rows the SAME way, which is what
-      // guarantees every crossing wire has a rendered port to dock on.
-      // The card merges compatible forms into one row, so the stored handle
-      // is not always a port that got drawn: a wire carrying concrete carbon
-      // dust docks on the oredict row that survived. Ask the summary which
-      // row this wire belongs to, and only fall back to the stored handle
-      // when it has no opinion — otherwise the wire anchors to a port that
-      // was never rendered and disappears.
+      // A MINIMIZED BOARD has no ports at all: the wire ends at the card and
+      // docks wherever the route is cheapest, exactly as it would on a
+      // drawer. Its handles are inert anchors that exist only because React
+      // Flow will not draw an edge without one.
       const canonicalSourceHandle = sourceIsPocket
-        ? (resolvePocketPortHandleId(project, pocketSummaries.get(sourceRep), sourceRep, "output", {
-            kind: sourceHandle?.kind ?? edge.resourceKind,
-            id: sourceHandle?.resourceId ?? edge.resourceId,
-          }) ??
-          canonicalizeResourceHandleId(edge.sourceHandle) ??
-          makeResourceHandleId("output", { kind: edge.resourceKind, id: edge.resourceId }))
+        ? POCKET_CARD_SOURCE_HANDLE
         : canonicalizeResourceHandleId(edge.sourceHandle);
       const canonicalTargetHandle = targetIsPocket
-        ? (resolvePocketPortHandleId(project, pocketSummaries.get(targetRep), targetRep, "input", {
-            kind: targetHandle?.kind ?? edge.resourceKind,
-            id: targetHandle?.resourceId ?? edge.resourceId,
-          }) ??
-          canonicalizeResourceHandleId(edge.targetHandle) ??
-          makeResourceHandleId("input", { kind: edge.resourceKind, id: edge.resourceId }))
+        ? POCKET_CARD_TARGET_HANDLE
         : canonicalizeResourceHandleId(edge.targetHandle);
       const isSearchEdgeActive = edgeMatchesSearch(edge, resource, recipeSearch);
       // A drawer's own wires thicken when the search names them. Hovering the
@@ -2531,11 +2818,32 @@ export function FactoryFlow() {
       const isFlowHighlighted =
         activeFlowResourceKey === makeResourceKey(edge.resourceKind, edge.resourceId);
 
+      let throughBoardIds: string[] | undefined;
+      let homeBoardIds: string[] | undefined;
+      if (hasOpenFrames) {
+        const sourceChain = frameChainByLevel.get(frameOwnerById.get(sourceRep));
+        const targetChain = frameChainByLevel.get(frameOwnerById.get(targetRep));
+        if (sourceChain?.length && targetChain?.length) {
+          throughBoardIds =
+            sourceChain === targetChain
+              ? sourceChain
+              : [...new Set([...sourceChain, ...targetChain])];
+          // The rooms BOTH ends sit in: the wire stays inside these and
+          // only crosses the frames one end is outside of. Chains run
+          // outermost-first, so the shared prefix is the answer.
+          homeBoardIds = sourceChain.filter((id) => targetChain.includes(id));
+        } else if (sourceChain?.length || targetChain?.length) {
+          throughBoardIds = sourceChain?.length ? sourceChain : targetChain;
+        }
+      }
+
       gridRouteInputs.push({
         edgeId: edge.id,
         order: edgeIndex,
         sourceNodeId: sourceRep,
         targetNodeId: targetRep,
+        throughBoardIds,
+        homeBoardIds,
         // A machine end is a PORT even when the stored edge carries no handle
         // id (old plans and the demo do this): the rails publish canonical
         // ids derived from the resource, so the same derivation here finds
@@ -2547,12 +2855,13 @@ export function FactoryFlow() {
         targetHandleId:
           canonicalTargetHandle ??
           makeResourceHandleId("input", { kind: edge.resourceKind, id: edge.resourceId }),
-        // A pocket card's port is a slot endpoint like a machine rail's,
-        // whatever the hidden endpoint inside really is.
-        sourceSlotEndpoint: sourceIsPocket || !sourceStorage,
-        targetSlotEndpoint: targetIsPocket || (!targetStorage && !targetIsTrashCan),
-        sourceStorageEndpoint: !sourceIsPocket && Boolean(sourceStorage),
-        targetStorageEndpoint: !targetIsPocket && Boolean(targetStorage || targetIsTrashCan),
+        // A minimized board is an any-side card like a drawer: the wire
+        // reaches the summary, and the summary has no rows to aim at.
+        sourceSlotEndpoint: !sourceIsPocket && !sourceStorage,
+        targetSlotEndpoint: !targetIsPocket && !targetStorage && !targetIsTrashCan,
+        sourceStorageEndpoint: sourceIsPocket || Boolean(sourceStorage),
+        targetStorageEndpoint:
+          targetIsPocket || Boolean(targetStorage || targetIsTrashCan),
         // The published stroke width IS the routing width: it never carries
         // hover/highlight bumps, so a hover can never trigger a re-solve.
         routingWidth: publishedEdgeStrokeWidths.get(edge.id) ?? DEFAULT_EDGE_STROKE_WIDTH,
@@ -2724,42 +3033,15 @@ export function FactoryFlow() {
         targetHandle?: string;
       },
     ) => {
-      // A pocket card is a view: the flat graph only holds member edges, so
-      // an end that names a pocket fans out to EVERY member exposing that
-      // exact resource on that side — two redstone drinkers inside means two
-      // wires, landed together as one undo entry.
-      const sourceIsPocket = isPocketId(project, sourceNodeId);
-      const targetIsPocket = isPocketId(project, targetNodeId);
-      if ((sourceIsPocket || targetIsPocket) && !resource) {
-        // A bare node-to-node connect names no resource to fan out on.
+      // A minimized board is a summary, not a card you can wire: it has no
+      // ports, and guessing which machine inside a wire meant is exactly the
+      // cleverness that made the old card wrong. Open the window and wire the
+      // machine you mean.
+      if (isPocketId(project, sourceNodeId) || isPocketId(project, targetNodeId)) {
         return;
       }
-      const sourceIdentity = resource
-        ? (parseResourceHandleId(resource.sourceHandle) ?? {
-            kind: resource.kind,
-            resourceId: resource.id,
-          })
-        : undefined;
-      const targetIdentity = resource
-        ? (parseResourceHandleId(resource.targetHandle) ?? {
-            kind: resource.kind,
-            resourceId: resource.id,
-          })
-        : undefined;
-      const sourceIds =
-        sourceIsPocket && sourceIdentity
-          ? resolvePocketMemberIds(project, sourceNodeId, "output", {
-              kind: sourceIdentity.kind,
-              id: sourceIdentity.resourceId,
-            })
-          : [sourceNodeId];
-      const targetIds =
-        targetIsPocket && targetIdentity
-          ? resolvePocketMemberIds(project, targetNodeId, "input", {
-              kind: targetIdentity.kind,
-              id: targetIdentity.resourceId,
-            })
-          : [targetNodeId];
+      const sourceIds = [sourceNodeId];
+      const targetIds = [targetNodeId];
 
       const pairs: Array<{
         sourceNodeId: string;
@@ -2768,10 +3050,8 @@ export function FactoryFlow() {
       }> = [];
       for (const source of sourceIds) {
         for (const target of targetIds) {
-          // A pocket fan-out can land both ends on one member — that pair is
-          // an artefact of the expansion, not a wire anybody asked for. A self
-          // pair the user actually aimed (the same card named on both ends) is
-          // a real loop and has to survive.
+          // A self pair the user actually aimed (the same card named on both
+          // ends) is a real loop and has to survive.
           if (source === target && sourceNodeId !== targetNodeId) {
             continue;
           }
@@ -3188,17 +3468,12 @@ export function FactoryFlow() {
         return;
       }
 
-      // Dragging out of a pocket port: the one new drawer buffers every
-      // member behind the port, not the pocket card (which is no node).
-      const storageAnchorIds = isPocketId(project, draggedResource.nodeId)
-        ? resolvePocketMemberIds(project, draggedResource.nodeId, draggedResource.side, {
-            kind: draggedResource.kind,
-            id: draggedResource.id,
-          })
-        : draggedResource.nodeId;
-      if (Array.isArray(storageAnchorIds) && storageAnchorIds.length === 0) {
+      // A minimized board has no ports, so no drag can start on one and
+      // nothing can be spawned off it.
+      if (isPocketId(project, draggedResource.nodeId)) {
         return;
       }
+      const storageAnchorIds = draggedResource.nodeId;
 
       // A drag off a DRAWER into space always answers with a SOURCE feeding
       // it, whichever half the drag left from. A drawer already catches its
@@ -3286,9 +3561,7 @@ export function FactoryFlow() {
       if (event) {
         settleDesignCamera();
       }
-      // Inside a pocket the coordinates belong to that dimension, and a plan
-      // always loads at the top level, so there is nothing here worth keeping.
-      if (!isDesignCameraSettled() || activePocketId) {
+      if (!isDesignCameraSettled()) {
         return;
       }
 
@@ -3297,7 +3570,7 @@ export function FactoryFlow() {
         writeDesignCamera(designId, viewport);
       }
     },
-    [activePocketId, updateFlowViewportCenter],
+    [updateFlowViewportCenter],
   );
 
   const handleInit = useCallback(
@@ -3451,6 +3724,9 @@ export function FactoryFlow() {
                 return dockInset > 0 ? { ...bounds, top: bounds.top + dockInset } : bounds;
               })
             : []),
+          // Board chrome hides the wires under it in every mode, so the
+          // exported dashes stop at it too.
+          ...publishedBoardFrameBounds.flatMap(({ bounds }) => boardChromeOccluders(bounds)),
           ...snapshotEdgeLabelBoxes(),
         ],
         occlusionDots: snapshotEdgeWaypointDots(),
@@ -3612,41 +3888,50 @@ export function FactoryFlow() {
     return true;
   }, [deleteBoardSelection, selectNode, selectedEdgeIds, selectedNodeIds]);
 
-  const runCompact = useCallback(
-    (ids: string[]): boolean => {
-      const pocketId = compactSelectionIntoPocket(ids);
-      if (!pocketId) {
-        return false;
-      }
+  /**
+   * Whether the selection could become a board: everything in it lives on
+   * the canvas, and none of it IS a board. Nothing may sit in two boards
+   * at once, and putting a board inside a board is its own decision - so
+   * the gesture is not offered rather than half-working.
+   */
+  const selectionCanWrap = useMemo(() => {
+    if (selectedNodeIds.length < 2) {
+      return false;
+    }
+    const chosen = new Set(selectedNodeIds);
+    if ((project.pockets ?? []).some((pocket) => chosen.has(pocket.id))) {
+      return false;
+    }
+    const housed = (entry: { id: string; pocketId?: string }) =>
+      chosen.has(entry.id) && entry.pocketId !== undefined;
+    return !(
+      project.nodes.some(housed) ||
+      (project.storages ?? []).some(housed) ||
+      (project.annotations ?? []).some(housed)
+    );
+  }, [
+    project.annotations,
+    project.nodes,
+    project.pockets,
+    project.storages,
+    selectedNodeIds,
+  ]);
 
-      // The new pocket card takes the selection, ready to drag or dive into.
-      setPendingBoardSelection([pocketId]);
-      setSelectedNodeIds([pocketId]);
-      setSelectedEdgeIds([]);
-      return true;
-    },
-    [compactSelectionIntoPocket, setPendingBoardSelection],
-  );
-
-  const compactSelectedBoardItems = useCallback((): boolean => {
+  const wrapSelectedBoardItems = useCallback((): boolean => {
     if (selectedNodeIds.length === 0) {
       return false;
     }
 
-    // Two cards taking the same resource from DIFFERENT places: compacting
-    // pools those supplies behind one port. Real change, so the player gets
-    // to say no first; single-source fan-outs converge silently.
-    const warnings = collectPocketConvergenceWarnings(
-      useFactoryStore.getState().project,
-      selectedNodeIds,
-    );
-    if (warnings.length > 0) {
-      setCompactWarning({ ids: selectedNodeIds, warnings });
+    // The frame appears around the cards where they stand; nothing moves
+    // and no wire changes, so there is nothing to confirm first.
+    const boardId = wrapSelectionInBoard(selectedNodeIds);
+    if (!boardId) {
       return false;
     }
-
-    return runCompact(selectedNodeIds);
-  }, [runCompact, selectedNodeIds]);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    return true;
+  }, [selectedNodeIds, wrapSelectionInBoard]);
 
   const pasteBoardClipboard = useCallback(() => {
     if (!boardClipboard) {
@@ -3704,7 +3989,7 @@ export function FactoryFlow() {
             return;
           }
 
-          if (compactSelectedBoardItems()) {
+          if (wrapSelectedBoardItems()) {
             event.preventDefault();
           }
         }
@@ -3770,50 +4055,34 @@ export function FactoryFlow() {
           return;
         }
 
-        // Escape means "back out of whatever I'm in": first any active tool
-        // or half-made wire, and with nothing else to cancel, one level out
-        // of the pocket dimension being viewed.
-        const hadTool =
-          nodeColorPaintMode !== undefined ||
-          annotationTool !== undefined ||
-          isDeleteMode ||
-          Boolean(useFactoryStore.getState().pendingResourceConnection);
+        // Escape backs out of whatever tool or half-made wire is active.
         cancelResourceConnection();
         setNodeColorPaintMode(undefined);
         setAnnotationTool(undefined);
         setDeleteMode(false);
-        if (!hadTool && activePocketId) {
-          enterPocket(
-            (project.pockets ?? []).find((pocket) => pocket.id === activePocketId)
-              ?.parentPocketId,
-          );
-        }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    activePocketId,
     annotationTool,
     cancelResourceConnection,
-    compactSelectedBoardItems,
     copyBoardSelection,
     deleteAnnotation,
     deleteNode,
     deleteSelectedBoardItems,
     deleteStorage,
-    enterPocket,
     isDeleteMode,
     nodeColorPaintMode,
     pasteBoardClipboard,
     project.annotations,
     project.nodes,
-    project.pockets,
     project.storages,
     selectNode,
     selectedNodeId,
     setNodeColorPaintMode,
+    wrapSelectedBoardItems,
   ]);
 
   const handleSelectionChange = useCallback(
@@ -3842,7 +4111,9 @@ export function FactoryFlow() {
           deleteStorage(node.id);
         } else if (node.type === "annotationNode") {
           deleteAnnotation(node.id);
-        } else if (node.type === "pocketNode") {
+        } else if (node.type === "pocketNode" || node.type === "boardNode") {
+          // A board goes the way a pocket card does: the dimension and
+          // everything in it.
           deleteBoardSelection({ nodeIds: [node.id] });
         }
         return;
@@ -3864,6 +4135,14 @@ export function FactoryFlow() {
           return;
         }
 
+        // A board's background is paint like any card's face: the brush on
+        // the open frame's title bar (or the minimized card) recolours the
+        // floor, the frame line and the bar.
+        if (node.type === "boardNode" || node.type === "pocketNode") {
+          paintPocket(node.id, nodeColorPaintMode ?? undefined);
+          return;
+        }
+
         return;
       }
 
@@ -3876,6 +4155,7 @@ export function FactoryFlow() {
       deleteStorage,
       isDeleteMode,
       nodeColorPaintMode,
+      paintPocket,
       selectNode,
       updateAnnotation,
       updateNode,
@@ -3886,14 +4166,15 @@ export function FactoryFlow() {
   // React Flow's own double-click plumbing, not a handler on the card: the
   // node wrapper's drag machinery can swallow a hand-rolled dblclick, and
   // this path is guaranteed to coexist with it. The name field's rename
-  // double-click stops propagation before this fires.
+  // double-click stops propagation before this fires. Double-clicking a
+  // minimized board restores the window, the way a taskbar does.
   const handleNodeDoubleClick = useCallback(
     (_: unknown, node: Node) => {
       if (node.type === "pocketNode" && !isWiringConnection() && !wasRecentWireDrop()) {
-        enterPocket(node.id);
+        expandPocket(node.id);
       }
     },
-    [enterPocket],
+    [expandPocket],
   );
 
   const handleEdgeClick = useCallback(
@@ -3918,29 +4199,11 @@ export function FactoryFlow() {
     cancelResourceConnection();
   }, [cancelResourceConnection, selectNode]);
 
-  // Crossing into or out of a pocket dimension swaps what the board shows
-  // wholesale; the camera follows so the traveller lands looking at the new
-  // level, not at empty space where the old one was.
-  const previousPocketRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (previousPocketRef.current === activePocketId) {
-      return;
-    }
-    previousPocketRef.current = activePocketId;
-    const frame = requestAnimationFrame(() => frameBoardCards());
-    return () => cancelAnimationFrame(frame);
-  }, [activePocketId, frameBoardCards]);
-
   const handleShowNodes = useCallback(
     (nodeIds: string[]) => frameBoardCards(nodeIds),
     [frameBoardCards],
   );
   const handleFitView = useCallback(() => frameBoardCards(), [frameBoardCards]);
-
-  // On a phone the pocket breadcrumb takes the board's top line, because where you
-  // are is the first thing to know and it was previously stranded a fifth of the
-  // way down the screen keeping clear of these. They step down a line instead.
-  const toolsStepAside = isCompact && Boolean(activePocketId);
 
   // Whatever just landed says so, twice. Done to the DOM rather than through the
   // node objects on purpose: a transient outline is not state the board should
@@ -4018,48 +4281,45 @@ export function FactoryFlow() {
   // lives on must not re-render per project edit.
   const handleAutoArrange = useCallback(() => {
     const state = useFactoryStore.getState();
-    const view = readBoardViewSnapshot();
-    const { moves, islands, wireRoutes, resetEdgeIds, staleInkIds } = computeAutoArrangement(
-      state.project,
-      state.activePocketId,
-      state.lastResult,
-      // Tight spacing and normal island splitting, always: the dials that
-      // existed for these were both ever set one way.
-      {
-        spacing: "compact",
-        islands: "normal",
-      },
-    );
+    const {
+      moves,
+      wireRoutes,
+      resetEdgeIds,
+      staleInkIds,
+      boardSizes,
+      addBoards,
+      setOwners,
+      setBoardThemes,
+      removeBoards,
+    } = computeAutoArrangement(
+        state.project,
+        state.lastResult,
+        // Tight spacing and normal island splitting, always: the dials that
+        // existed for these were both ever set one way.
+        {
+          spacing: "compact",
+          islands: "normal",
+        },
+      );
     if (moves.length === 0) {
       return;
     }
     // An arranged board is read through three switches, so the arrange sets
     // them: lines weighted by volume, wires docking freely, rate pills off.
     writeBoardView({ lineThicknessMode: true, freeDockMode: true, lineLabelsMode: false });
-    // Islands always wear a background: a quiet textured paper in the
-    // chosen theme. Every annotation on the level goes first - old notes
+    // The arrange draws no ink: its islands become ZONES — real boards the
+    // cards move into. Old notes (and old releases' island boxes) go; they
     // point at a layout that no longer exists.
     state.applyBoardArrangement({
       moves,
       resetEdgeIds,
       setWaypoints: wireRoutes,
+      setBoardSizes: boardSizes,
+      addBoards,
+      setOwners,
+      setBoardThemes,
+      removeBoards,
       removeAnnotationIds: staleInkIds,
-      addAnnotations: islands
-        .filter((island) => island.backdrop)
-        .map((island) => ({
-          kind: "box" as const,
-          colorTag: "steel" as const,
-          position: { x: island.x - BOARD_GRID * 2, y: island.y - BOARD_GRID * 2 },
-          size: {
-            width: island.width + BOARD_GRID * 4,
-            height: island.height + BOARD_GRID * 4,
-          },
-          style: {
-            border: "none" as const,
-            fill: "tint" as const,
-            fillTheme: view.autoArrangeInkTheme,
-          },
-        })),
     });
     useFactoryStore.getState().frameBoardNodes();
   }, []);
@@ -4088,7 +4348,7 @@ export function FactoryFlow() {
     [nodeColorPaintMode, setNodeColorPaintMode],
   );
   const handleAnnotationToolChange = useCallback(
-    (tool: FactoryAnnotationKind | undefined) => {
+    (tool: BoardDrawTool | undefined) => {
       setNodeColorPaintMode(undefined);
       setDeleteMode(false);
       setAnnotationTool(tool);
@@ -4108,6 +4368,34 @@ export function FactoryFlow() {
     [setNodeColorPaintMode],
   );
 
+  /**
+   * What each held card is not allowed to be dragged onto, worked out once
+   * when the drag starts and applied to every frame of it (see
+   * handleNodesChange). Rebuilding this per frame would be the sort of
+   * O(nodes) per-frame work ARCHITECTURE.md rules out; nothing it depends
+   * on can change mid-drag anyway, since only the held cards move.
+   */
+  const dragConstraintsRef = useRef<
+    Map<
+      string,
+      {
+        blockers: PlacementRect[];
+        regions: PlacementRegion[];
+        origin: { x: number; y: number };
+      }
+    >
+  >(new Map());
+
+  /**
+   * Cards in this drag that are already being carried by a FRAME in the
+   * same drag. React Flow moves every selected node and also moves a
+   * frame's children with the frame, so a card selected inside a selected
+   * board would travel twice as far as the hand. Their own position
+   * changes are dropped for the length of the drag; the frame carries
+   * them, and their stored frame-relative positions are already right.
+   */
+  const dragPassengersRef = useRef<Set<string>>(new Set());
+
   const handleNodeDragStart = useCallback((_: unknown, node: Node, draggedNodes: Node[]) => {
     // A drag is about to move geometry; the map under it would be a distraction
     // and the pointer never leaves the node, so nothing else would clear it.
@@ -4123,6 +4411,127 @@ export function FactoryFlow() {
     dragMovesObstaclesRef.current = [node, ...draggedNodes].some(
       (dragged) => dragged.type !== "annotationNode",
     );
+    // What the held cards may not be dropped on. Furniture only: annotations
+    // are ink and never block. A CARD is blocked by other cards but not by
+    // board frames — a frame is a room you may drag into, and the drop
+    // decides membership. A FRAME is blocked by other frames and by every
+    // card that is not its own, since a board sliding over a card would
+    // swallow one it never adopted.
+    {
+      const state = useFactoryStore.getState();
+      const project = state.project;
+      const pockets = project.pockets ?? [];
+      const held = new Set<string>([node.id, ...draggedNodes.map((entry) => entry.id)]);
+      const boardIds = new Set(pockets.map((pocket) => pocket.id));
+      const ownerOf = (id: string): string | undefined =>
+        project.nodes.find((entry) => entry.id === id)?.pocketId ??
+        project.storages?.find((entry) => entry.id === id)?.pocketId ??
+        pockets.find((entry) => entry.id === id)?.parentPocketId;
+      const chainOf = (id: string | undefined): Set<string> => {
+        const chain = new Set<string>();
+        let cursor = id;
+        while (cursor !== undefined && !chain.has(cursor)) {
+          chain.add(cursor);
+          cursor = pockets.find((entry) => entry.id === cursor)?.parentPocketId;
+        }
+        return chain;
+      };
+      // Everything travelling with this drag, including whole boards.
+      const carried = new Set(held);
+      for (const id of held) {
+        if (boardIds.has(id)) {
+          for (const descendant of collectPocketDescendantIds(pockets, id)) {
+            carried.add(descendant);
+          }
+        }
+      }
+      const ridesAlong = (id: string) => {
+        for (const owner of chainOf(ownerOf(id))) {
+          if (carried.has(owner)) {
+            return true;
+          }
+        }
+        return false;
+      };
+      const inkIds = new Set((project.annotations ?? []).map((annotation) => annotation.id));
+      const solid: Array<{ id: string; isFrame: boolean; rect: PlacementRect }> = [];
+      for (const [id, geometry] of publishedBoardGeometryById) {
+        if (
+          carried.has(id) ||
+          inkIds.has(id) ||
+          ridesAlong(id) ||
+          geometry.width <= 0 ||
+          geometry.height <= 0
+        ) {
+          continue;
+        }
+        const pocket = pockets.find((entry) => entry.id === id);
+        solid.push({
+          id,
+          isFrame: pocket?.expanded === true,
+          rect: { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height },
+        });
+      }
+
+      // The rooms on the canvas, as places to be in or out of. A card
+      // straddling a board's wall belongs to neither, so the magnet treats
+      // a half-crossing as occupied ground and the card clicks in or clicks
+      // out — whichever is nearer.
+      const openFrames = computeOpenBoardRects(computeBoardLevelView(project).openBoards);
+      const constraints = new Map<
+        string,
+        {
+          blockers: PlacementRect[];
+          regions: PlacementRegion[];
+          origin: { x: number; y: number };
+        }
+      >();
+      for (const id of held) {
+        const heldPocket = pockets.find((entry) => entry.id === id);
+        const heldIsOpenFrame = heldPocket?.expanded === true;
+        const mine = heldIsOpenFrame ? chainOf(id) : new Set<string>();
+        const blockers = solid
+          .filter((other) =>
+            heldIsOpenFrame
+              ? // A frame: everything solid that is not inside it.
+                !mine.has(other.id) && !chainOf(ownerOf(other.id)).has(id)
+              : // A card: other cards, never the rooms themselves.
+                !other.isFrame,
+          )
+          .map((other) => other.rect);
+        // A frame is not asked to be in or out of anything: it is blocked
+        // outright by its neighbours. Only cards click in and out of rooms,
+        // and never into a room they are travelling with.
+        const regions: PlacementRegion[] = heldIsOpenFrame
+          ? []
+          : openFrames
+              .filter((rect) => !carried.has(rect.id))
+              .map((rect) => ({
+                outer: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                inner: boardBodyRect(rect),
+              }));
+
+        // Positions arrive in the parent's space; the blockers are in flow
+        // space, so the held card's own frame origin closes the gap.
+        const owner = ownerOf(id);
+        const frame = owner ? openFrames.find((rect) => rect.id === owner) : undefined;
+        constraints.set(id, {
+          blockers,
+          regions,
+          origin: frame ? { x: frame.x, y: frame.y } : { x: 0, y: 0 },
+        });
+      }
+      dragConstraintsRef.current = constraints;
+      // Held cards whose board is held too: the frame carries them, so
+      // their own drag deltas are dropped for the length of the drag.
+      const passengers = new Set<string>();
+      for (const id of held) {
+        if (ridesAlong(id)) {
+          passengers.add(id);
+        }
+      }
+      dragPassengersRef.current = passengers;
+    }
     // A fresh drag's first cell change solves immediately; the throttle only
     // paces the changes after it.
     lastLiveDragSolveAtRef.current = 0;
@@ -4142,9 +4551,157 @@ export function FactoryFlow() {
       // their old positions in the project, and the next store commit snapped
       // them back. One batch move is also one undo entry, not one per card.
       const dropped = draggedNodes.length > 0 ? draggedNodes : [node];
-      moveBoardItems(dropped.map((entry) => ({ id: entry.id, position: entry.position })));
+
+      // Where did each land? A drop whose centre sits inside an open board's
+      // body joins that board; one outside every frame surfaces on the
+      // canvas. Read fresh from the store so the callback stays stable.
+      const state = useFactoryStore.getState();
+      const project = state.project;
+      const view = computeBoardLevelView(project);
+      const frames = computeOpenBoardRects(view.openBoards);
+      const frameById = new Map(frames.map((frame) => [frame.id, frame]));
+      const pockets = project.pockets ?? [];
+      const pocketIdSet = new Set(pockets.map((pocket) => pocket.id));
+      // A dragged board cannot land inside itself or its own descendants.
+      const excluded = new Set<string>();
+      for (const entry of dropped) {
+        if (pocketIdSet.has(entry.id)) {
+          excluded.add(entry.id);
+          for (const id of collectPocketDescendantIds(pockets, entry.id)) {
+            excluded.add(id);
+          }
+        }
+      }
+      const ownerOf = (id: string): string | undefined => {
+        const projectNode = project.nodes.find((entry) => entry.id === id);
+        if (projectNode) {
+          return projectNode.pocketId;
+        }
+        const storage = project.storages?.find((entry) => entry.id === id);
+        if (storage) {
+          return storage.pocketId;
+        }
+        const annotation = project.annotations?.find((entry) => entry.id === id);
+        if (annotation) {
+          return annotation.pocketId;
+        }
+        return pockets.find((entry) => entry.id === id)?.parentPocketId;
+      };
+
+      // Everything that MOVES with this drag: the dragged cards, plus every
+      // board they hold and everything living on those boards. None of it
+      // can block the drop, because all of it is travelling too.
+      const carried = new Set<string>(dropped.map((entry) => entry.id));
+      for (const entry of dropped) {
+        if (pocketIdSet.has(entry.id)) {
+          for (const id of collectPocketDescendantIds(pockets, entry.id)) {
+            carried.add(id);
+          }
+        }
+      }
+      const ridesAlong = (itemId: string): boolean => {
+        let owner = ownerOf(itemId);
+        const seen = new Set<string>();
+        while (owner !== undefined && !seen.has(owner)) {
+          if (carried.has(owner)) {
+            return true;
+          }
+          seen.add(owner);
+          owner = pockets.find((entry) => entry.id === owner)?.parentPocketId;
+        }
+        return false;
+      };
+
+      // The furniture already on the surface. Annotations are ink and never
+      // block anything — a note over a machine and a box around a cluster
+      // are both what they are for.
+      const inkIds = new Set((project.annotations ?? []).map((annotation) => annotation.id));
+      const surface: Array<{ id: string; rect: PlacementRect }> = [];
+      for (const [id, geometry] of publishedBoardGeometryById) {
+        if (
+          carried.has(id) ||
+          inkIds.has(id) ||
+          ridesAlong(id) ||
+          geometry.width <= 0 ||
+          geometry.height <= 0
+        ) {
+          continue;
+        }
+        surface.push({
+          id,
+          rect: { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height },
+        });
+      }
+      // The chain of frames a landing sits inside: a card dropped ON a board
+      // is not landing on top of it, it is landing IN it.
+      const chainOf = (boardId: string | undefined): Set<string> => {
+        const chain = new Set<string>();
+        let cursor = boardId;
+        while (cursor !== undefined && !chain.has(cursor)) {
+          chain.add(cursor);
+          cursor = pockets.find((entry) => entry.id === cursor)?.parentPocketId;
+        }
+        return chain;
+      };
+
+      const instance = flowInstanceRef.current;
+      // Resolved rects of the cards already placed by this same drop, so a
+      // multi-card drag does not stack its own cards.
+      const placedThisDrop: PlacementRect[] = [];
+      const moves = dropped.map((entry) => {
+        const internal = instance?.getInternalNode(entry.id);
+        const absolute = internal?.internals.positionAbsolute ?? entry.position;
+        const width = internal?.measured?.width ?? 0;
+        const height = internal?.measured?.height ?? 0;
+        const currentOwner = ownerOf(entry.id);
+        // A card belongs to the room it is WHOLLY inside — the magnet has
+        // already refused to leave it lying across a wall, so this reads
+        // where it ended up rather than judging where it mostly is. A card
+        // dragged clear of every frame leaves its board behind.
+        const landing = pickBoardOwnerFor(
+          frames,
+          { x: absolute.x, y: absolute.y, width, height },
+          excluded,
+        );
+        const origin = landing !== undefined ? frameById.get(landing) : undefined;
+
+        // The magnet, in flow space: slide off anything solid, then convert
+        // back into whichever board the drop belongs to.
+        const inside = chainOf(landing);
+        const blockers = [
+          ...surface
+            .filter((other) => !inside.has(other.id))
+            .map((other) => other.rect),
+          ...placedThisDrop,
+        ];
+        // The live magnet has already kept this card off everything solid
+        // and out of every wall, so this is a safety net for drops that
+        // never went through a drag frame — and it leaves an honest drop
+        // exactly where it was let go.
+        const wanted = snapPositionToGrid({ x: absolute.x, y: absolute.y });
+        const free =
+          width > 0 && height > 0
+            ? nearestFreeSpot({ x: wanted.x, y: wanted.y, width, height }, blockers)
+            : wanted;
+        placedThisDrop.push({ x: free.x, y: free.y, width, height });
+
+        const position = snapPositionToGrid({
+          x: free.x - (origin?.x ?? 0),
+          y: free.y - (origin?.y ?? 0),
+        });
+        return landing === currentOwner
+          ? { id: entry.id, position }
+          : { id: entry.id, position, owner: { pocketId: landing } };
+      });
+
+      // A board's territory is the player's to set, never the drop's: a
+      // card is in the room or it is not, and the walls do not move to
+      // swallow one that would not fit.
+      moveBoardItems(moves);
 
       activelyDraggedNodeIds.clear();
+      dragConstraintsRef.current = new Map();
+      dragPassengersRef.current = new Set();
       draggingNodeRef.current = false;
       // The drop's own publish below supersedes any trailing live-drag solve.
       window.clearTimeout(liveDragTrailingTimerRef.current);
@@ -4187,13 +4744,63 @@ export function FactoryFlow() {
   );
 
   const commitAnnotationDraft = useCallback(
-    (tool: FactoryAnnotationKind, draft: AnnotationDraft) => {
+    (tool: BoardDrawTool, draft: AnnotationDraft) => {
       const width = Math.abs(draft.end.x - draft.start.x);
       const height = Math.abs(draft.end.y - draft.start.y);
       const corner = {
         x: Math.min(draft.start.x, draft.end.x),
         y: Math.min(draft.start.y, draft.end.y),
       };
+
+      if (tool === "board") {
+        // Drawn like a box, lands as a pocket standing open. Cards whose
+        // centre the frame's body covers become members where they stand.
+        const isClick = width < 12 && height < 12;
+        const position = snapPositionToGrid(isClick ? draft.start : corner);
+        const size = isClick
+          ? BOARD_WINDOW_DEFAULT_SIZE
+          : {
+              width: Math.max(BOARD_WINDOW_MIN_WIDTH, snapSizeUpToGrid(width)),
+              height: Math.max(BOARD_WINDOW_MIN_HEIGHT, snapSizeUpToGrid(height)),
+            };
+        const state = useFactoryStore.getState();
+        const body = {
+          left: position.x,
+          top: position.y + BOARD_WINDOW_TITLE_HEIGHT,
+          right: position.x + size.width,
+          bottom: position.y + size.height,
+        };
+        const covers = (id: string): boolean => {
+          const geometry = publishedBoardGeometryById.get(id);
+          if (!geometry) {
+            return false;
+          }
+          const centreX = geometry.x + geometry.width / 2;
+          const centreY = geometry.y + geometry.height / 2;
+          return (
+            centreX >= body.left &&
+            centreX <= body.right &&
+            centreY >= body.top &&
+            centreY <= body.bottom
+          );
+        };
+        const memberIds = [
+          ...state.project.nodes
+            .filter((node) => node.pocketId === undefined && covers(node.id))
+            .map((node) => node.id),
+          ...(state.project.storages ?? [])
+            .filter((storage) => storage.pocketId === undefined && covers(storage.id))
+            .map((storage) => storage.id),
+          ...(state.project.annotations ?? [])
+            .filter((annotation) => annotation.pocketId === undefined && covers(annotation.id))
+            .map((annotation) => annotation.id),
+          ...(state.project.pockets ?? [])
+            .filter((pocket) => pocket.parentPocketId === undefined && covers(pocket.id))
+            .map((pocket) => pocket.id),
+        ];
+        createBoard({ position, size, memberIds });
+        return;
+      }
 
       if (tool === "box") {
         // A bare click (no meaningful drag) drops a default-sized shape.
@@ -4510,8 +5117,12 @@ export function FactoryFlow() {
         boardMotion.valueMotion ? "factory-flow-board--value-motion" : "",
         // Inside a pocket dimension the room itself says where you are:
         // purple canvas, purple dots, purple window frame (globals.css).
-        activePocketId ? "factory-flow-board--pocket-view" : "",
         overwritePicking ? "factory-flow-board--blueprint-picking" : "",
+        // A board's chrome must occlude the wires crossing it while its
+        // floor stays under them, and node/edge depths are only compared
+        // when the two layers stop being stacking contexts of their own.
+        // Same lever thickness mode pulls; see globals.css.
+        pocketView.openBoards.length > 0 ? "factory-flow-board--edges-under" : "",
       ].join(" ")}
       style={
         {
@@ -4520,16 +5131,11 @@ export function FactoryFlow() {
           // The theme paints the room: base colour, the screen-space edge
           // vignette (grain moved into the viewport — see GrainBackground),
           // and the --canvas var every canvas-matching surface (edge label
-          // backgrounds) reads. Inside a pocket the violet room always wins -
-          // the pocket look is a landmark, not a taste.
-          ...(activePocketId
-            ? undefined
-            : {
-                backgroundColor: canvasTheme.base,
-                backgroundImage: canvasTheme.vignette,
-                "--canvas": canvasTheme.base,
-                "--canvas-dot": canvasTheme.patternColor,
-              }),
+          // backgrounds) reads.
+          backgroundColor: canvasTheme.base,
+          backgroundImage: canvasTheme.vignette,
+          "--canvas": canvasTheme.base,
+          "--canvas-dot": canvasTheme.patternColor,
         } as CSSProperties
       }
       onPointerDownCapture={handleAnnotationPointerDown}
@@ -4643,19 +5249,19 @@ export function FactoryFlow() {
       >
         <NodeDetailController boardRef={boardRef} />
         <HopMapController boardRef={boardRef} />
-        <SelectionHandoffController signal={selectionHandoffCount} activePocketId={activePocketId} />
+        <SelectionHandoffController signal={selectionHandoffCount} />
         {linePulseMode ? <EdgePulseCanvas edgesUnderNodes={lineThicknessMode} /> : null}
         {/* The paper's tooth, in board space so it pans and zooms with the
             factory. Mounted before the pattern so dots ink OVER the grain.
             A pocket keeps its flat violet room. */}
-        {!activePocketId && canvasTheme.grain ? (
+        {canvasTheme.grain ? (
           <GrainBackground layers={canvasTheme.grain} />
         ) : null}
         {boardView.canvasPattern === "none" ? null : boardView.canvasPattern === "ruled" ||
           boardView.canvasPattern === "graph" ? (
           <RuledBackground
             mode={boardView.canvasPattern}
-            color={activePocketId ? POCKET_CANVAS_DOT_COLOR : canvasTheme.patternColor}
+            color={canvasTheme.patternColor}
           />
         ) : (
           <Background
@@ -4664,12 +5270,13 @@ export function FactoryFlow() {
             // Lines tile edge to edge, so they need to be thinner than a dot
             // to read as a background instead of as graph paper.
             size={boardView.canvasPattern === "lines" ? 1 : 2}
-            color={activePocketId ? POCKET_CANVAS_DOT_COLOR : canvasTheme.patternColor}
+            color={canvasTheme.patternColor}
             // Like the wrapper: the pattern SVG must not lay its own dark
             // paper over the themed board div underneath.
             bgColor="transparent"
           />
         )}
+        <BoardFloors />
         {annotationDraft && annotationTool ? (
           <AnnotationDraftPreview
             tool={annotationTool}
@@ -4691,7 +5298,7 @@ export function FactoryFlow() {
         compact={isCompact}
         openGroup={openToolGroup}
         onToggleGroup={handleToolGroupToggle}
-        shiftedDown={toolsStepAside}
+        shiftedDown={false}
       />
       <BoardViewToolbar
         view={boardView}
@@ -4700,13 +5307,13 @@ export function FactoryFlow() {
         compact={isCompact}
         openGroup={openToolGroup}
         onToggleGroup={handleToolGroupToggle}
-        shiftedDown={toolsStepAside}
+        shiftedDown={false}
       />
       <SourceToolbar
         compact={isCompact}
         openGroup={openToolGroup}
         onToggleGroup={handleToolGroupToggle}
-        shiftedDown={toolsStepAside}
+        shiftedDown={false}
         onAutoArrange={handleAutoArrange}
       />
       <BoardHelp compact={isCompact} />
@@ -4729,54 +5336,10 @@ export function FactoryFlow() {
           )}
         </div>
       ) : null}
-      {compactWarning ? (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55">
-          <div className="max-w-[560px] border-2 border-amber-500 bg-[#1b1d21] p-5 font-mono text-neutral-100 shadow-[8px_8px_0_rgba(0,0,0,0.55)]">
-            <p className="text-[17px] font-bold text-amber-300">One port per resource</p>
-            <p className="mt-3 text-[14px] leading-relaxed text-neutral-300">
-              Pockets allow one connection per resource. This selection has more:
-            </p>
-            <ul className="mt-2 flex flex-col gap-1 text-[15px] font-bold text-amber-200">
-              {compactWarning.warnings.map((warning) => (
-                <li key={`${warning.side}:${warning.kind}:${warning.resourceId}`}>
-                  {warning.side === "input"
-                    ? `${warning.label} will be shared between all ${warning.memberCount} machines`
-                    : `${warning.label} will be collected from all ${warning.memberCount} machines`}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-[14px] leading-relaxed text-neutral-300">
-              Making the pocket merges these wires: every machine that asks gets a share, and the
-              planner decides the split. Unpacking keeps this wiring.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setCompactWarning(undefined)}
-                className="h-9 rounded-[4px] border border-neutral-700 bg-[#17191d] px-3 text-[14px] text-neutral-300 hover:text-neutral-100"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                autoFocus
-                onClick={() => {
-                  const ids = compactWarning.ids;
-                  setCompactWarning(undefined);
-                  runCompact(ids);
-                }}
-                className="h-9 rounded-[4px] border border-amber-600 bg-amber-950 px-3 text-[14px] font-medium text-amber-200 hover:bg-amber-900"
-              >
-                Make the pocket
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      <PocketBreadcrumbs />
       <SelectionActionsBar
         selectionCount={selectedNodeIds.length}
-        onCompact={compactSelectedBoardItems}
+        canWrap={selectionCanWrap}
+        onWrap={wrapSelectedBoardItems}
       />
       <SmartViewToolbar
         glanceMode={boardView.glanceMode}
@@ -5065,23 +5628,92 @@ const TourLoopNoticeExample = memo(function TourLoopNoticeExample() {
  * map on hover).
  */
 /**
+ * Every open board's paper, painted in one viewport-space layer parked under
+ * the wires.
+ *
+ * Not the boards' own nodes: a board's chrome sits OVER the wires crossing
+ * it (so its bar and rim occlude them) while its floor sits UNDER them, and
+ * one node cannot be in two places in the stack — React Flow also pins every
+ * child node above its parent, so a floor child could not go below either.
+ * Positions come from the live node lookup rather than from the project, so
+ * the paper tracks a dragged board frame-perfectly instead of lagging a
+ * commit behind.
+ */
+const BoardFloors = memo(function BoardFloors() {
+  const floors = useStore(
+    (state) => {
+      const open: Array<{ pocket: FactoryPocket; width: number; height: number }> = [];
+      for (const [, node] of state.nodeLookup) {
+        if (node.type !== "boardNode") {
+          continue;
+        }
+        const data = node.data as BoardNodeData | undefined;
+        const pocket = data?.pocket;
+        if (!pocket?.expanded) {
+          continue;
+        }
+        const size = boardWindowSize(pocket);
+        open.push({
+          // The live absolute position, so a nested board's paper follows
+          // its parent as well as its own drag.
+          pocket: { ...pocket, position: node.internals.positionAbsolute },
+          width: node.measured?.width ?? size.width,
+          height: node.measured?.height ?? size.height,
+        });
+      }
+      return open;
+    },
+    (left, right) =>
+      left.length === right.length &&
+      left.every((entry, index) => {
+        const other = right[index];
+        return (
+          entry.pocket.id === other.pocket.id &&
+          entry.pocket.position.x === other.pocket.position.x &&
+          entry.pocket.position.y === other.pocket.position.y &&
+          entry.pocket.theme === other.pocket.theme &&
+          entry.pocket.pattern === other.pocket.pattern &&
+          entry.pocket.colorTag === other.pocket.colorTag &&
+          entry.width === other.width &&
+          entry.height === other.height
+        );
+      }),
+  );
+
+  if (floors.length === 0) {
+    return null;
+  }
+
+  return (
+    <ViewportPortal>
+      {/* Under the wires (10) and above the backdrop ink (-5): the same
+          depth the floors held when they were nodes. */}
+      <div className="pointer-events-none absolute left-0 top-0" style={{ zIndex: -4 }}>
+        {floors.map((floor) => (
+          <BoardFloor
+            key={floor.pocket.id}
+            pocket={floor.pocket}
+            width={floor.width}
+            height={floor.height}
+          />
+        ))}
+      </div>
+    </ViewportPortal>
+  );
+});
+
+/**
  * Lives inside the ReactFlow tree for its store access. After a band select,
  * React Flow overlays the selection with a group-drag rectangle and keeps it
  * up until a pane click — but when a compact/paste/blueprint-load hands the
  * selection to freshly created cards, that rectangle would sit over the new
  * card and swallow every click. Any handoff or level change dismisses it.
  */
-function SelectionHandoffController({
-  signal,
-  activePocketId,
-}: {
-  signal: number;
-  activePocketId?: string;
-}) {
+function SelectionHandoffController({ signal }: { signal: number }) {
   const storeApi = useStoreApi();
   useEffect(() => {
     storeApi.setState({ nodesSelectionActive: false });
-  }, [signal, activePocketId, storeApi]);
+  }, [signal, storeApi]);
   return null;
 }
 
@@ -5120,110 +5752,43 @@ function actionBarPosition(compact: boolean, second: boolean): string {
 }
 
 /**
- * Where in the multiverse the board is: "Board ▸ Pocket ▸ Inner pocket",
- * top-centre, every segment a jump. Hidden entirely on the root board — the
- * common case pays nothing for the feature.
- */
-const PocketBreadcrumbs = memo(function PocketBreadcrumbs() {
-  const activePocketId = useFactoryStore((state) => state.activePocketId);
-  const pockets = useFactoryStore((state) => state.project.pockets);
-  const enterPocket = useFactoryStore((state) => state.enterPocket);
-  const isCompact = useIsCompactViewport();
-  if (!activePocketId) {
-    return null;
-  }
-
-  const byId = new Map((pockets ?? []).map((pocket) => [pocket.id, pocket]));
-  const trail: { id: string | undefined; name: string }[] = [];
-  let cursor: string | undefined = activePocketId;
-  const seen = new Set<string>();
-  while (cursor !== undefined && !seen.has(cursor)) {
-    seen.add(cursor);
-    const pocket = byId.get(cursor);
-    if (!pocket) {
-      break;
-    }
-    trail.unshift({ id: pocket.id, name: pocket.name });
-    cursor = pocket.parentPocketId;
-  }
-  trail.unshift({ id: undefined, name: "Board" });
-
-  return (
-    <div
-      data-board-toolbar
-      className={[
-        "nodrag pointer-events-auto absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 border-2 border-[#8d6fd1] bg-[#241b33]/95 px-2 py-1.5 font-mono text-[12px] text-white shadow-[inset_2px_2px_0_#3b2d52,inset_-2px_-2px_0_#1a1326]",
-        centredBannerTop(isCompact, false),
-      ].join(" ")}
-    >
-      <button
-        type="button"
-        onClick={() => {
-          const parent = byId.get(activePocketId)?.parentPocketId;
-          enterPocket(parent);
-        }}
-        title="Back out one level (Esc)"
-        aria-label="Exit this pocket dimension"
-        className="mr-1 flex h-6 w-6 items-center justify-center border border-[#8d6fd1] bg-[#3b2d52] hover:bg-[#5e4a85]"
-      >
-        ↩
-      </button>
-      {trail.map((segment, index) => (
-        <span key={segment.id ?? "root"} className="flex items-center gap-1">
-          {index > 0 ? <span className="text-[#8d7ab0]">▸</span> : null}
-          {index === trail.length - 1 ? (
-            <span className="font-bold text-[#e6dcff]">✦ {segment.name}</span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => enterPocket(segment.id)}
-              className="text-[#c9b8ec] underline-offset-2 hover:underline"
-            >
-              {segment.name}
-            </button>
-          )}
-        </span>
-      ))}
-    </div>
-  );
-});
-
-/**
- * Appears only while several cards are selected: the one gesture that turns
- * a selection into a pocket dimension. Lives on the board (not a toolbar
- * dock) so it reads as acting on the selection under it.
+ * Appears only while several cards are selected: the one gesture that wraps
+ * a selection in a board. Lives on the board (not a toolbar dock) so it
+ * reads as acting on the selection under it.
  */
 const SelectionActionsBar = memo(function SelectionActionsBar({
   selectionCount,
-  onCompact,
+  canWrap,
+  onWrap,
 }: {
   selectionCount: number;
-  onCompact: () => boolean;
+  /** False when something selected is already on a board, or is one. */
+  canWrap: boolean;
+  onWrap: () => boolean;
 }) {
-  const activePocketId = useFactoryStore((state) => state.activePocketId);
   const isCompact = useIsCompactViewport();
-  if (selectionCount < 2) {
+  if (selectionCount < 2 || !canWrap) {
     return null;
   }
 
   return (
     <div
       data-board-toolbar
-      // A button, so on a phone it sits at the bottom in reach of a thumb; on a
-      // desktop it stays at the top, below the breadcrumb strip when both are up.
+      // A button, so on a phone it sits at the bottom in reach of a thumb;
+      // on a desktop it stays at the top.
       className={[
         "nodrag pointer-events-auto absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2",
-        actionBarPosition(isCompact, Boolean(activePocketId)),
+        actionBarPosition(isCompact, false),
       ].join(" ")}
     >
       <button
         type="button"
-        onClick={onCompact}
-        title="Compact the selected cards into a pocket dimension (Ctrl+G): they become one card with the group's inputs and outputs. Double-click it to step inside"
+        onClick={onWrap}
+        title="Wrap in a board (Ctrl+G)"
         className="flex h-9 items-center gap-1.5 whitespace-nowrap border-2 border-[#8d6fd1] bg-[#3b2d52] px-3 font-mono text-[12px] font-bold text-white shadow-[inset_2px_2px_0_#5e4a85,inset_-2px_-2px_0_#241b33] hover:brightness-110"
       >
         <Box className="h-4 w-4" />
-        Compact {selectionCount} into pocket
+        Wrap {selectionCount} in a board
       </button>
     </div>
   );
@@ -5393,7 +5958,7 @@ const SmartViewToolbar = memo(function SmartViewToolbar({
           type="button"
           onClick={onFitView}
           className={buttonClass(false)}
-          title="Fit the whole plan on the screen"
+          title="Fit on screen"
           aria-label="Fit the plan on the screen"
         >
           <Focus className="h-4 w-4" />
@@ -5406,7 +5971,7 @@ const SmartViewToolbar = memo(function SmartViewToolbar({
           type="button"
           onClick={() => onModeChange("identity")}
           className={buttonClass(glanceMode === "identity")}
-          title="Big icons: each card shows its machine"
+          title="Big icons"
           aria-label="Big icons"
           aria-pressed={glanceMode === "identity"}
         >
@@ -5416,7 +5981,7 @@ const SmartViewToolbar = memo(function SmartViewToolbar({
           type="button"
           onClick={() => onModeChange("status")}
           className={buttonClass(glanceMode === "status")}
-          title="Speed: red is idle, green is full speed"
+          title="Speed"
           aria-label="Speed"
           aria-pressed={glanceMode === "status"}
         >
@@ -5426,7 +5991,7 @@ const SmartViewToolbar = memo(function SmartViewToolbar({
           type="button"
           onClick={() => onModeChange("usage")}
           className={buttonClass(glanceMode === "usage")}
-          title="Usage: coloured by the reason word"
+          title="Usage"
           aria-label="Usage"
           aria-pressed={glanceMode === "usage"}
         >
@@ -5436,7 +6001,7 @@ const SmartViewToolbar = memo(function SmartViewToolbar({
           type="button"
           onClick={() => onModeChange("power")}
           className={buttonClass(glanceMode === "power")}
-          title="Power: coloured by voltage tier"
+          title="Power"
           aria-label="Power"
           aria-pressed={glanceMode === "power"}
         >
@@ -5452,10 +6017,10 @@ const SmartViewToolbar = memo(function SmartViewToolbar({
  * crafting, like crop farms). Lives top-left, mirroring the paint toolbar.
  */
 const RATE_UNIT_CHOICES: Array<{ unit: RateUnit; label: string; title: string }> = [
-  { unit: "tick", label: "/t", title: "Show all rates per tick, the game's own unit: 20 ticks a second" },
-  { unit: "second", label: "/s", title: "Show all rates per second" },
-  { unit: "minute", label: "/m", title: "Show all rates per minute" },
-  { unit: "hour", label: "/h", title: "Show all rates per hour" },
+  { unit: "tick", label: "/t", title: "Per tick" },
+  { unit: "second", label: "/s", title: "Per second" },
+  { unit: "minute", label: "/m", title: "Per minute" },
+  { unit: "hour", label: "/h", title: "Per hour" },
 ];
 
 const SourceToolbar = memo(function SourceToolbar({
@@ -5477,30 +6042,6 @@ const SourceToolbar = memo(function SourceToolbar({
   const addTrashNode = useFactoryStore((state) => state.addTrashNode);
   const addCustomRateNode = useFactoryStore((state) => state.addCustomRateNode);
   const boardView = useBoardView();
-  const [arrangeOpen, setArrangeOpen] = useState(false);
-  // A pop-over, not a mode: clicking anywhere off it (or Escape) puts it away.
-  const arrangeRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!arrangeOpen) {
-      return;
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      if (!arrangeRef.current?.contains(event.target as Element | null)) {
-        setArrangeOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setArrangeOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [arrangeOpen]);
   const rateUnit = useFactoryStore((state) => state.rateUnit);
   const setRateUnit = useFactoryStore((state) => state.setRateUnit);
   const assumeBoundaries = useFactoryStore((state) => Boolean(state.project.assumeBoundaries));
@@ -5522,10 +6063,7 @@ const SourceToolbar = memo(function SourceToolbar({
       data-board-toolbar
       data-help-anchor="build"
       className={[
-        "nodrag pointer-events-none absolute left-3 flex items-start gap-2",
-        // Lifted while the arrange panel is out so no later toolbar paints
-        // over it - the same trap the theme picker once fell into.
-        arrangeOpen ? "z-40" : "z-20",
+        "nodrag pointer-events-none absolute left-3 flex items-start gap-2 z-20",
         // Inside a pocket the breadcrumb takes the top line and every trigger row
         // steps down to make room; its fold-out follows, since that is positioned
         // against this root.
@@ -5596,7 +6134,7 @@ const SourceToolbar = memo(function SourceToolbar({
             "pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)]",
             assumeBoundaries ? TOOL_FACE_ON : TOOL_FACE_OFF,
           ].join(" ")}
-          title="Sketch mode: every unwired input is supplied for free and every unwired output is exported. Quick math without drawing the boundary. Anything you do wire still behaves as wired."
+          title="Sketch mode"
           aria-label="Sketch mode"
           aria-pressed={assumeBoundaries}
         >
@@ -5609,7 +6147,7 @@ const SourceToolbar = memo(function SourceToolbar({
           type="button"
           onClick={addCropFarmNode}
           className="pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
-          title="Add crop farm: pick a crop and its stats. It produces at the computed rate"
+          title="Add crop farm"
           aria-label="Add crop farm"
         >
           <Sprout className="h-4 w-4" />
@@ -5618,7 +6156,7 @@ const SourceToolbar = memo(function SourceToolbar({
           type="button"
           onClick={addTrashNode}
           className="pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
-          title="Add trash can: wire any output into it. Whatever flows in is voided and never shows as an output"
+          title="Add trash can"
           aria-label="Add trash can"
         >
           <Trash className="h-4 w-4" />
@@ -5627,80 +6165,27 @@ const SourceToolbar = memo(function SourceToolbar({
           type="button"
           onClick={addCustomRateNode}
           className="pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
-          title="Add custom rate node: wire it to any port and dial a rate. It supplies the resource, or flips to a constant request drain"
+          title="Add custom rate node"
           aria-label="Add custom rate node"
         >
           <Gauge className="h-4 w-4" />
         </button>
       </ToolTray>
-      {/* The tidy-up: the button opens the arrange settings pop-over, and
-          the panel's own button does the arranging. Every dial is
-          remembered; clicking anywhere off the panel puts it away. */}
+      {/* The tidy-up, one click. It used to open a pop-over holding a
+          single dial - the paper the arrange drew its island backdrops on
+          - and the arrange stopped drawing backdrops when it started
+          building boards, each of which picks its own paper. A menu with
+          nothing in it is worse than no menu. */}
       <ToolTray>
-        <div ref={arrangeRef} className="relative">
         <button
           type="button"
-          onClick={() => setArrangeOpen((open) => !open)}
-          className={[
-            "pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)]",
-            arrangeOpen ? TOOL_FACE_ON : TOOL_FACE_OFF,
-          ].join(" ")}
-          title="Auto-arrange: choose how the board is laid out, then arrange it"
-          aria-label="Auto-arrange settings"
-          aria-pressed={arrangeOpen}
+          onClick={onAutoArrange}
+          className="pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
+          title="Auto-arrange"
+          aria-label="Auto-arrange the board"
         >
           <Network className="h-4 w-4" />
         </button>
-        <div
-          className={[
-            "absolute left-0 top-full mt-2 w-[264px] border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-2 shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-33)] transition-[opacity,transform] duration-100",
-            arrangeOpen
-              ? "pointer-events-auto translate-y-0 opacity-100"
-              : "pointer-events-none -translate-y-1 opacity-0",
-          ].join(" ")}
-        >
-          <div className="mb-1 text-[11px] font-black tracking-wide text-[var(--mc-ink)]">
-            Auto layout
-          </div>
-          <div className="py-1" title="The paper each island's background is drawn on">
-            <div className="mb-1 text-[11px] font-bold text-[var(--mc-ink)]">
-              Island background
-            </div>
-            <div className="grid grid-cols-5 gap-1">
-              {CANVAS_THEMES.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  onClick={() => writeBoardView({ autoArrangeInkTheme: theme.id })}
-                  className={[
-                    "flex items-center justify-center border-2 p-0.5",
-                    boardView.autoArrangeInkTheme === theme.id
-                      ? "border-white ring-1 ring-cyan-300"
-                      : "border-[var(--mc-15)]",
-                  ].join(" ")}
-                  title={theme.name}
-                  aria-label={`Island background: ${theme.name}`}
-                  aria-pressed={boardView.autoArrangeInkTheme === theme.id}
-                >
-                  <ThemeSwatch theme={theme} />
-                </button>
-              ))}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setArrangeOpen(false);
-              onAutoArrange();
-            }}
-            className="mt-2 w-full border-2 border-[var(--mc-15)] bg-cyan-700 py-2 font-mono text-[13px] font-black text-white shadow-[inset_2px_2px_0_rgba(255,255,255,0.25),inset_-2px_-2px_0_rgba(0,0,0,0.4)] hover:brightness-110"
-            title="Lay every card out left to right by what feeds what. Undo puts the old layout back"
-            aria-label="Auto-arrange the board"
-          >
-            Arrange the board
-          </button>
-        </div>
-        </div>
       </ToolTray>
       </ToolGroup>
     </div>
@@ -5822,6 +6307,15 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
         right: number;
         bottom: number;
       }> = [];
+      // A board's bar and rim occlude the wires in EVERY mode, so the dashes
+      // stop at them in every mode too — this is not part of the thickness
+      // mode's cards-on-pipes trade.
+      for (const entry of publishedBoardFrameBounds) {
+        if (dragging && activelyDraggedNodeIds.has(entry.id)) {
+          continue;
+        }
+        occlusionBounds.push(...boardChromeOccluders(entry.bounds));
+      }
       if (edgesUnderNodesRef.current || dragging) {
         for (const entry of publishedBoardBounds ?? []) {
           if (dragging && activelyDraggedNodeIds.has(entry.id)) {
@@ -5846,14 +6340,22 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
               draggedNode.internals?.positionAbsolute ?? draggedNode.position;
             const nodeWidth = draggedNode.measured?.width ?? 0;
             const nodeHeight = draggedNode.measured?.height ?? 0;
-            if (nodeWidth > 0 && nodeHeight > 0) {
-              occlusionBounds.push({
-                left: position.x,
-                top: position.y + getDockTopInset(draggedId),
-                right: position.x + nodeWidth,
-                bottom: position.y + nodeHeight,
-              });
+            if (nodeWidth <= 0 || nodeHeight <= 0) {
+              continue;
             }
+            const rect = {
+              left: position.x,
+              top: position.y,
+              right: position.x + nodeWidth,
+              bottom: position.y + nodeHeight,
+            };
+            // A dragged FRAME is mostly a window: only its chrome is solid,
+            // and the wires inside it keep their dashes.
+            if (draggedNode.type === "boardNode") {
+              occlusionBounds.push(...boardChromeOccluders(rect));
+              continue;
+            }
+            occlusionBounds.push({ ...rect, top: rect.top + getDockTopInset(draggedId) });
           }
         }
       }
@@ -6184,7 +6686,7 @@ function AnnotationDraftPreview({
   draft,
   swatch,
 }: {
-  tool: FactoryAnnotationKind;
+  tool: BoardDrawTool;
   draft: AnnotationDraft;
   swatch: string;
 }) {
@@ -6262,6 +6764,12 @@ function AnnotationDraftPreview({
             className="h-full w-full border-4"
             style={{ borderColor: swatch, backgroundColor: `${swatch}14` }}
           />
+        ) : tool === "board" ? (
+          // The window as it will land: title bar up top, wash below, in the
+          // pocket purple rather than the ink colour — a board is furniture.
+          <div className="h-full w-full border-2 border-[#5e4a85] bg-[#3b2d52]/15">
+            <div className="h-[40px] w-full border-b-2 border-[#241b33] bg-[#3b2d52]" />
+          </div>
         ) : (
           <div
             className="h-full w-full border-2"
@@ -6317,7 +6825,7 @@ function AddImageButton({ onPlaceImage }: { onPlaceImage: (file: File) => Promis
           TOOL_FACE_OFF,
           busy ? "cursor-wait opacity-70" : "",
         ].join(" ")}
-        title="Add an image: pick a picture and it lands on the board"
+        title="Add an image"
         aria-label="Add an image"
       >
         {busy ? (
@@ -6331,12 +6839,13 @@ function AddImageButton({ onPlaceImage }: { onPlaceImage: (file: File) => Promis
 }
 
 const ANNOTATION_TOOLS: Array<{
-  kind: FactoryAnnotationKind;
+  kind: BoardDrawTool;
   label: string;
   Icon: typeof Square;
 }> = [
+  { kind: "board", label: "Draw board", Icon: AppWindow },
   { kind: "box", label: "Draw box", Icon: Square },
-  { kind: "zone", label: "Draw zone: click its corners, then click the first one to close", Icon: Hexagon },
+  { kind: "zone", label: "Draw zone", Icon: Hexagon },
   { kind: "arrow", label: "Draw arrow", Icon: MoveUpRight },
   { kind: "text", label: "Add text note", Icon: Type },
 ];
@@ -6496,7 +7005,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
           type="button"
           onClick={() => setThemePickerOpen((open) => !open)}
           className={buttonClass(isThemePickerOpen)}
-          title={`Background style: ${activeTheme.name}. Click to choose another.`}
+          title={`Background: ${activeTheme.name}`}
           aria-label="Choose background style"
         >
           <Wallpaper className="h-4 w-4" />
@@ -6513,7 +7022,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
           })
         }
         className={buttonClass(false)}
-        title={`${CANVAS_PATTERN_LABEL[canvasPattern]}: click to change`}
+        title={CANVAS_PATTERN_LABEL[canvasPattern]}
         aria-label={CANVAS_PATTERN_LABEL[canvasPattern]}
       >
         <PatternIcon className="h-4 w-4" />
@@ -6531,11 +7040,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
         type="button"
         onClick={() => onChange({ lineThicknessMode: !lineThicknessMode })}
         className={buttonClass(lineThicknessMode)}
-        title={
-          lineThicknessMode
-            ? "Line thickness: by volume. Click to restore normal widths."
-            : "Thicken every line by how much moves through it"
-        }
+        title="Line thickness"
         aria-label={lineThicknessMode ? "Turn line thickness off" : "Thicken lines by volume"}
         aria-pressed={lineThicknessMode}
       >
@@ -6545,11 +7050,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
         type="button"
         onClick={() => onChange({ linePulseMode: !linePulseMode })}
         className={buttonClass(linePulseMode)}
-        title={
-          linePulseMode
-            ? "Moving dashes: on. Click to stop them."
-            : "Show which way each line flows, with dashes that march faster on busier lines"
-        }
+        title="Moving dashes"
         aria-label={linePulseMode ? "Stop the moving dashes" : "Show moving dashes"}
         aria-pressed={linePulseMode}
       >
@@ -6559,11 +7060,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
         type="button"
         onClick={() => onChange({ lineLabelsMode: !lineLabelsMode })}
         className={buttonClass(lineLabelsMode)}
-        title={
-          lineLabelsMode
-            ? "Line labels: on. Click to hide the rate pills."
-            : "Show what each line carries and how fast, as a pill on the line"
-        }
+        title="Line labels"
         aria-label={lineLabelsMode ? "Hide line labels" : "Show line labels"}
         aria-pressed={lineLabelsMode}
       >
@@ -6578,11 +7075,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
           onChange({ freeDockMode: !freeDockMode });
         }}
         className={buttonClass(freeDockMode)}
-        title={
-          freeDockMode
-            ? "Free docking: wires attach wherever routes best. Click to pin them to their ports."
-            : "Port docking: wires attach at their ports. Click to let them attach anywhere."
-        }
+        title={freeDockMode ? "Free docking" : "Port docking"}
         aria-label={freeDockMode ? "Pin wires to their ports" : "Let wires attach anywhere"}
         aria-pressed={freeDockMode}
       >
@@ -6592,11 +7085,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
         type="button"
         onClick={() => onChange({ calmMode: !calmMode })}
         className={buttonClass(calmMode)}
-        title={
-          calmMode
-            ? "Calm colours on. The board still names every problem, without the alarm reds and greens. Click to bring them back."
-            : "Calm the colours: keep every readout but drop the alarm reds, ambers and greens. Made for presenting a plan"
-        }
+        title="Calm colours"
         aria-label={calmMode ? "Turn calm colours off" : "Turn calm colours on"}
         aria-pressed={calmMode}
       >
@@ -6608,11 +7097,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
         type="button"
         onClick={() => writeBoardMotion({ moveMotion: !boardMotion.moveMotion })}
         className={buttonClass(boardMotion.moveMotion)}
-        title={
-          boardMotion.moveMotion
-            ? "Smooth movement: cards glide onto the grid and rerouted wires slide to their new line. Click for instant."
-            : "Instant movement. Click to let cards glide onto the grid and wires slide to their new lines."
-        }
+        title="Smooth movement"
         aria-label={boardMotion.moveMotion ? "Turn smooth movement off" : "Turn smooth movement on"}
         aria-pressed={boardMotion.moveMotion}
       >
@@ -6622,11 +7107,7 @@ const BoardViewToolbar = memo(function BoardViewToolbar({
         type="button"
         onClick={() => writeBoardMotion({ valueMotion: !boardMotion.valueMotion })}
         className={buttonClass(boardMotion.valueMotion)}
-        title={
-          boardMotion.valueMotion
-            ? "Live numbers: rates, bars, line widths and dash speeds ease into new values. Click for instant."
-            : "Instant numbers. Click to let rates, bars, line widths and dash speeds ease into new values."
-        }
+        title="Live numbers"
         aria-label={boardMotion.valueMotion ? "Turn live numbers off" : "Turn live numbers on"}
         aria-pressed={boardMotion.valueMotion}
       >
@@ -6657,8 +7138,8 @@ const PaintToolbar = memo(function PaintToolbar({
   onPaintModeChange: (tag: FactoryNodeColorTag | null | undefined) => void;
   activeColorTag: FactoryNodeColorTag;
   onColorSelect: (tag: FactoryNodeColorTag) => void;
-  annotationTool?: FactoryAnnotationKind;
-  onAnnotationToolChange: (tool: FactoryAnnotationKind | undefined) => void;
+  annotationTool?: BoardDrawTool;
+  onAnnotationToolChange: (tool: BoardDrawTool | undefined) => void;
   onPlaceImage: (file: File) => Promise<void>;
   isDeleteMode: boolean;
   onDeleteModeChange: (enabled: boolean) => void;
@@ -6781,11 +7262,7 @@ const PaintToolbar = memo(function PaintToolbar({
           "pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)]",
           paintMode !== undefined ? TOOL_FACE_ON : TOOL_FACE_OFF,
         ].join(" ")}
-        title={
-          paintMode !== undefined
-            ? "Stop painting"
-            : `Paint nodes ${activeColorTag}`
-        }
+        title={paintMode !== undefined ? "Stop painting" : "Paint"}
         aria-label={paintMode !== undefined ? "Stop painting" : "Paint nodes"}
       >
         {paintMode === null ? <X className="h-4 w-4" /> : <Paintbrush className="h-4 w-4" />}
@@ -6818,7 +7295,7 @@ const PaintToolbar = memo(function PaintToolbar({
             "pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)]",
             isDeleteMode ? TOOL_FACE_ON : TOOL_FACE_OFF,
           ].join(" ")}
-          title={isDeleteMode ? "Stop deleting" : "Delete tool: click anything to remove it"}
+          title={isDeleteMode ? "Stop deleting" : "Delete tool"}
           aria-label={isDeleteMode ? "Stop deleting" : "Delete tool"}
         >
           {/* The pressed face says "on"; the red icon still says what is armed. */}
@@ -8384,8 +8861,13 @@ function getMeasuredAvoidanceSweep() {
   } else if (typeof document !== "undefined") {
     for (const element of document.querySelectorAll<HTMLElement>(".react-flow__node")) {
       const id = element.dataset.id;
-      // Same rule as the published set above: annotations never block a wire.
-      if (!id || element.classList.contains("react-flow__node-annotationNode")) {
+      // Same rule as the published set above: annotations and board frames
+      // never block a wire.
+      if (
+        !id ||
+        element.classList.contains("react-flow__node-annotationNode") ||
+        element.classList.contains("react-flow__node-boardNode")
+      ) {
         continue;
       }
 
@@ -8929,163 +9411,556 @@ function estimateNodeCardSize(
 }
 
 /**
- * Gather the level the board is showing into auto-arrange's terms and lay it
- * out: every visible card with its best-known size, every wire mapped onto
- * the cards that stand for its ends here (an edge into a collapsed pocket
- * pulls on the pocket card), and the level's ink. Also names the wires whose
- * hand-pinned steering should be reset - waypoints aimed at the old layout
+ * Gather the whole plan into auto-arrange's terms and lay it out, building
+ * ZONES as it goes.
+ *
+ * Phase 0 scouts the root: a throwaway arrange finds the natural islands,
+ * and each island of loose cards BECOMES a zone — a real open board wrapped
+ * around them. A cluster wired around exactly one open board joins that
+ * board instead of getting a new one; islands that are already boards stay
+ * as they are, so running the arrange twice builds nothing twice. The
+ * arrange draws no ink any more — the zones are the grouping.
+ *
+ * Then the layout passes: every open board arranges its own members inside
+ * its frame, deepest board first (flow left to right, so what a board takes
+ * sits by its left edge and what it offers by its right), and the frame
+ * refits around the result. Finally the root arranges with every board as
+ * ONE meta card at its fresh size — wire length between the blocks does
+ * the placing, exactly as it does for machines, and the router keeps
+ * foreign wires from cutting through any frame. Wires the arranged view
+ * draws lose their hand-pinned steering; pins aimed at the old layout
  * would only fight the router on the new one.
  */
+/**
+ * The papers zones are laid on when the arrange dresses them, in order.
+ *
+ * Canvas themes, not dyes: these are the same subdued papers the board
+ * itself offers, so a plan full of zones reads as a workshop of quiet
+ * surfaces rather than a bag of highlighters. Neighbouring entries are
+ * chosen to sit a step apart in tone, since adjacent zones usually get
+ * adjacent papers.
+ */
+const ZONE_PAPERS: readonly string[] = BOARD_PAPER_IDS;
+
 function computeAutoArrangement(
-  project: FactoryProject,
-  activePocketId: string | undefined,
+  baseProject: FactoryProject,
   result: ThroughputResult | undefined,
   taste: ArrangeTaste,
 ): {
   moves: Array<{ id: string; position: { x: number; y: number } }>;
-  islands: Array<{ x: number; y: number; width: number; height: number; backdrop: boolean }>;
   wireRoutes: Array<{ id: string; waypoints: Array<{ x: number; y: number }> }>;
   resetEdgeIds: string[];
   staleInkIds: string[];
+  boardSizes: Array<{ id: string; size: { width: number; height: number } }>;
+  addBoards: FactoryPocket[];
+  setOwners: Array<{ id: string; pocketId?: string }>;
+  setBoardThemes: Array<{ id: string; theme: string }>;
+  removeBoards: string[];
 } {
-  const pockets = project.pockets ?? [];
-  const parentById = new Map(pockets.map((pocket) => [pocket.id, pocket.parentPocketId]));
-  const itemPocketById = new Map<string, string | undefined>();
-  for (const node of project.nodes) {
-    itemPocketById.set(node.id, node.pocketId);
-  }
-  for (const storage of project.storages ?? []) {
-    itemPocketById.set(storage.id, storage.pocketId);
-  }
-  // The same walk the board's pocket view does: the card that stands for an
-  // item at this level, or undefined when the item is outside the view.
-  const representativeOf = (itemId: string): string | undefined => {
-    let level = itemPocketById.get(itemId);
-    if (level === activePocketId) {
-      return itemId;
+  const recipesById = new Map(baseProject.recipes.map((recipe) => [recipe.id, recipe]));
+  // Frames refitted by the interior passes, read by every OUTER pass so a
+  // parent sizes its nested board by the frame it is about to wear.
+  const refitSizes = new Map<string, { width: number; height: number }>();
+  // Where each crossing wire's member landed inside its frame, keyed
+  // "edgeId:boardId" and measured from the frame's top edge. Recorded by
+  // the interior passes, read by every outer pass as the board card's port
+  // height — which is what lets the outer layout line frames up so wires
+  // between boards run straight instead of crossing.
+  const boundaryPortY = new Map<string, number>();
+
+  // Everything one level of one project holds, in arrange terms. Every
+  // board on the level is ONE meta card: open, its window; minimized, its
+  // I/O card. Built as a factory because the zoning scout reads the plan as
+  // it stands while the layout passes read it with the new zones in place.
+  const makeGatherer = (project: FactoryProject) => {
+    const pockets = project.pockets ?? [];
+    const parentById = new Map(pockets.map((pocket) => [pocket.id, pocket.parentPocketId]));
+    const itemPocketById = new Map<string, string | undefined>();
+    for (const node of project.nodes) {
+      itemPocketById.set(node.id, node.pocketId);
     }
-    const seen = new Set<string>();
-    while (level !== undefined && !seen.has(level)) {
-      seen.add(level);
-      const parent = parentById.get(level);
-      if (parent === activePocketId) {
-        return level;
+    for (const storage of project.storages ?? []) {
+      itemPocketById.set(storage.id, storage.pocketId);
+    }
+
+    // The card that stands for an item at a LEVEL (the root, or one open
+    // board's floor): the item itself when it sits there, else the board
+    // standing between them, else undefined — the item lives elsewhere.
+    const representativeAt = (
+      level: string | undefined,
+      itemId: string,
+    ): string | undefined => {
+      let owner = itemPocketById.get(itemId);
+      if (owner === level) {
+        return itemId;
       }
-      level = parent;
-    }
-    return undefined;
-  };
+      const seen = new Set<string>();
+      while (owner !== undefined && !seen.has(owner)) {
+        seen.add(owner);
+        const parent = parentById.get(owner);
+        if (parent === level) {
+          return owner;
+        }
+        owner = parent;
+      }
+      return undefined;
+    };
 
-  const recipesById = new Map(project.recipes.map((recipe) => [recipe.id, recipe]));
-  const cards: ArrangeCard[] = [];
-  const pushCard = (
-    id: string,
-    position: { x: number; y: number },
-    estimate: { width: number; height: number },
-    role: "machine" | "storage",
-  ) => {
-    const measured = publishedBoardGeometryById.get(id);
-    cards.push({
-      id,
-      x: position.x,
-      y: position.y,
-      width: measured?.width ? snapSizeUpToGrid(measured.width) : estimate.width,
-      height: measured?.height ? snapSizeUpToGrid(measured.height) : estimate.height,
-      role,
+    const minimizedCardSize = (pocketId: string) => ({
+      width: RECIPE_NODE_WIDTH,
+      height: pocketCardHeight(countPocketCrossings(project, pocketId)),
     });
+
+    const gatherLevel = (level: string | undefined) => {
+      const cards: ArrangeCard[] = [];
+      const sizeById = new Map<string, { width: number; height: number }>();
+      const pushCard = (
+        id: string,
+        position: { x: number; y: number },
+        estimate: { width: number; height: number },
+        role: "machine" | "storage",
+        exactSize?: { width: number; height: number },
+      ) => {
+        // Measured sizes win where they exist — except a frame the interior
+        // pass just refitted, whose fresh size is the truth.
+        const measured = exactSize ? undefined : publishedBoardGeometryById.get(id);
+        const width =
+          exactSize?.width ??
+          (measured?.width ? snapSizeUpToGrid(measured.width) : estimate.width);
+        const height =
+          exactSize?.height ??
+          (measured?.height ? snapSizeUpToGrid(measured.height) : estimate.height);
+        sizeById.set(id, { width, height });
+        cards.push({ id, x: position.x, y: position.y, width, height, role });
+      };
+      for (const node of project.nodes) {
+        if (node.pocketId !== level) {
+          continue;
+        }
+        const recipe = recipesById.get(node.recipeId);
+        // Trash cans are storage-shaped furniture: small tiles that want to
+        // ride beside the machine feeding them.
+        pushCard(
+          node.id,
+          node.position,
+          estimateNodeCardSize(node, recipe),
+          recipe && isTrashRecipe(recipe) ? "storage" : "machine",
+        );
+      }
+      for (const storage of project.storages ?? []) {
+        if (storage.pocketId !== level) {
+          continue;
+        }
+        pushCard(
+          storage.id,
+          storage.position,
+          { width: STORAGE_NODE_WIDTH, height: STORAGE_NODE_HEIGHT },
+          "storage",
+        );
+      }
+      for (const pocket of pockets) {
+        if (pocket.parentPocketId !== level) {
+          continue;
+        }
+        pushCard(
+          pocket.id,
+          pocket.position,
+          pocket.expanded ? boardWindowSize(pocket) : minimizedCardSize(pocket.id),
+          "machine",
+          refitSizes.get(pocket.id),
+        );
+      }
+
+      const cardIds = new Set(cards.map((card) => card.id));
+      const wires: ArrangeWire[] = [];
+      for (const edge of project.edges) {
+        const sourceRep = representativeAt(level, edge.source);
+        const targetRep = representativeAt(level, edge.target);
+        if (!sourceRep || !targetRep || sourceRep === targetRep) {
+          continue;
+        }
+        if (!cardIds.has(sourceRep) || !cardIds.has(targetRep)) {
+          continue;
+        }
+        // The live flow, log-compressed so a 10,000 L/s trunk outranks a
+        // 2/s side feed without flattening every other distinction.
+        const transferred =
+          result?.edges[edge.id]?.transferredPerSecond ?? edge.ratePerSecond ?? 0;
+        wires.push({
+          id: edge.id,
+          source: sourceRep,
+          target: targetRep,
+          // A machine end aligns by its measured port row; a board end by
+          // where the interior pass parked the member this wire reaches —
+          // falling back to centre only when nothing recorded one (a
+          // minimized board, an empty frame).
+          sourcePortY:
+            sourceRep === edge.source
+              ? measuredPortOffsetY(edge.source, edge.sourceHandle, Position.Right)
+              : boundaryPortY.get(`${edge.id}:${sourceRep}`),
+          targetPortY:
+            targetRep === edge.target
+              ? measuredPortOffsetY(edge.target, edge.targetHandle, Position.Left)
+              : boundaryPortY.get(`${edge.id}:${targetRep}`),
+          weight: 1 + Math.log10(1 + Math.max(transferred, 0)),
+        });
+      }
+      return { cards, wires, sizeById };
+    };
+
+    return { gatherLevel, representativeAt };
   };
-  for (const node of project.nodes) {
-    if (node.pocketId !== activePocketId) {
-      continue;
+
+  // ---- Phase 0: dump every board, then zone from scratch. ----
+  //
+  // The arrange lays the plan out as if no board had ever been drawn: every
+  // frame is dumped, its cards spilled onto the canvas where they stand,
+  // and the zoning below decides the rooms afresh from the wiring alone. A
+  // board that survives is a board the arrange would have built anyway — so
+  // hand-drawn frames never fence the layout in, and the button always
+  // gives the same answer for the same factory.
+  const basePockets = baseProject.pockets ?? [];
+  const removeBoards = basePockets.map((pocket) => pocket.id);
+
+  // Absolute origin of every frame, so a dumped card lands where it looked
+  // like it was. A board that never stood open (no size) kept its members
+  // in their own old space, which is nobody's coordinates — those spill as
+  // they are, exactly as unwrapping one by hand does.
+  const originById = new Map<string, { x: number; y: number }>();
+  const originOf = (pocketId: string): { x: number; y: number } => {
+    const cached = originById.get(pocketId);
+    if (cached) {
+      return cached;
     }
-    const recipe = recipesById.get(node.recipeId);
-    // Trash cans are storage-shaped furniture: small tiles that want to ride
-    // beside the machine feeding them.
-    pushCard(
-      node.id,
-      node.position,
-      estimateNodeCardSize(node, recipe),
-      recipe && isTrashRecipe(recipe) ? "storage" : "machine",
-    );
-  }
-  for (const storage of project.storages ?? []) {
-    if (storage.pocketId !== activePocketId) {
-      continue;
+    originById.set(pocketId, { x: 0, y: 0 });
+    const pocket = basePockets.find((entry) => entry.id === pocketId);
+    if (!pocket) {
+      return { x: 0, y: 0 };
     }
-    pushCard(
-      storage.id,
-      storage.position,
-      { width: STORAGE_NODE_WIDTH, height: STORAGE_NODE_HEIGHT },
-      "storage",
-    );
-  }
-  for (const pocket of pockets) {
-    if (pocket.parentPocketId !== activePocketId) {
-      continue;
+    const parent = pocket.parentPocketId ? originOf(pocket.parentPocketId) : { x: 0, y: 0 };
+    const origin =
+      pocket.size === undefined
+        ? parent
+        : { x: parent.x + pocket.position.x, y: parent.y + pocket.position.y };
+    originById.set(pocketId, origin);
+    return origin;
+  };
+  const spill = <T extends { pocketId?: string; position: { x: number; y: number } }>(
+    items: T[],
+  ): T[] =>
+    items.map((item) => {
+      if (item.pocketId === undefined) {
+        return item;
+      }
+      const origin = originOf(item.pocketId);
+      return {
+        ...item,
+        pocketId: undefined,
+        position: { x: item.position.x + origin.x, y: item.position.y + origin.y },
+      };
+    });
+
+  const flat: FactoryProject = {
+    ...baseProject,
+    nodes: spill(baseProject.nodes),
+    storages: baseProject.storages ? spill(baseProject.storages) : undefined,
+    annotations: baseProject.annotations ? spill(baseProject.annotations) : undefined,
+    pockets: [],
+  };
+
+  // What each dumped board held and what it was wearing. A rebuilt zone
+  // covering exactly the same cards inherits the name and paper: the layout
+  // is decided from scratch either way, and silently renaming somebody's
+  // "Platline" to "Zone 3" on every arrange would be its own small betrayal.
+  const clothesByMembers = new Map<
+    string,
+    { name: string; theme?: string; colorTag?: FactoryNodeColorTag }
+  >();
+  const memberKey = (ids: string[]) => [...ids].sort().join("|");
+  for (const pocket of basePockets) {
+    const members = collectPocketMembers(baseProject, pocket.id);
+    const ids = [
+      ...members.nodes.map((node) => node.id),
+      ...members.storages.map((storage) => storage.id),
+    ];
+    if (ids.length > 0) {
+      clothesByMembers.set(memberKey(ids), {
+        name: pocket.name,
+        theme: pocket.theme,
+        colorTag: pocket.colorTag,
+      });
     }
-    const rows = Math.max(
-      1,
-      listPocketPortResources(project, pocket.id, "input").length,
-      listPocketPortResources(project, pocket.id, "output").length,
-    );
-    pushCard(
-      pocket.id,
-      pocket.position,
-      { width: RECIPE_NODE_WIDTH, height: cells(4) + cells(2) * rows + cells(2) },
-      "machine",
-    );
   }
 
-  const cardIds = new Set(cards.map((card) => card.id));
-  const wires: ArrangeWire[] = [];
+  const mintZoneId = () =>
+    `pocket-${
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`
+    }`;
+  const addBoards: FactoryPocket[] = [];
+  const setOwners: Array<{ id: string; pocketId?: string }> = [];
+  const scout = makeGatherer(flat).gatherLevel(undefined);
+  if (scout.cards.length > 0) {
+    const scouted = arrangeBoard({ cards: scout.cards, wires: scout.wires, taste });
+    const scoutPositionById = new Map(
+      scouted.moves.map((move) => [move.id, move.position] as const),
+    );
+    // Membership falls out of the geometry: every island rect covers
+    // exactly its own cards.
+    const islandMembers: string[][] = scouted.islands.map(() => []);
+    for (const card of scout.cards) {
+      const position = scoutPositionById.get(card.id);
+      const size = scout.sizeById.get(card.id);
+      if (!position || !size) {
+        continue;
+      }
+      const centreX = position.x + size.width / 2;
+      const centreY = position.y + size.height / 2;
+      const index = scouted.islands.findIndex(
+        (island) =>
+          // The stray shelf and interchange buffers wear no backdrop; their
+          // cards stay loose between the zones on purpose.
+          island.backdrop &&
+          centreX >= island.x &&
+          centreX <= island.x + island.width &&
+          centreY >= island.y &&
+          centreY <= island.y + island.height,
+      );
+      if (index >= 0) {
+        islandMembers[index].push(card.id);
+      }
+    }
+    let zoneNumber = 1;
+    for (const members of islandMembers) {
+      if (members.length < 2) {
+        continue;
+      }
+      const clothes = clothesByMembers.get(memberKey(members));
+      const zone: FactoryPocket = {
+        id: mintZoneId(),
+        name: clothes?.name ?? `Zone ${zoneNumber}`,
+        position: { x: 0, y: 0 },
+        expanded: true,
+        ...(clothes?.theme ? { theme: clothes.theme } : undefined),
+        ...(clothes?.colorTag ? { colorTag: clothes.colorTag } : undefined),
+      };
+      zoneNumber += 1;
+      addBoards.push(zone);
+      for (const id of members) {
+        setOwners.push({ id, pocketId: zone.id });
+      }
+    }
+  }
+
+  // Everything the zoning did not claim goes on the canvas — which, since
+  // every board was dumped, is where it already is.
+  const zoneOwner = new Map(setOwners.map((owner) => [owner.id, owner.pocketId]));
+
+  // The plan as the layout passes see it: no old frames, the fresh zones in
+  // place, cards moved into them. Positions are stale here, which is fine —
+  // every arranged card gets a new one, and the passes read positions only
+  // for the default-origin anchor.
+  const project: FactoryProject = {
+    ...flat,
+    nodes: flat.nodes.map((node) =>
+      zoneOwner.has(node.id) ? { ...node, pocketId: zoneOwner.get(node.id) } : node,
+    ),
+    storages: flat.storages?.map((storage) =>
+      zoneOwner.has(storage.id) ? { ...storage, pocketId: zoneOwner.get(storage.id) } : storage,
+    ),
+    pockets: addBoards,
+  };
+
+  const { gatherLevel, representativeAt } = makeGatherer(project);
+  const view = computeBoardLevelView(project);
+  const moves: Array<{ id: string; position: { x: number; y: number } }> = [];
+  const boardSizes: Array<{ id: string; size: { width: number; height: number } }> = [];
+
+  // Interior passes, deepest board first (openBoards comes parents-first),
+  // so every parent already knows its nested boards' fresh frames. Member
+  // positions are frame-relative, so the arrange happens IN frame space:
+  // content starts one cell in, under the title bar. Interior bridges pin
+  // no waypoints — stored waypoints live in flow space, not the frame's.
+  for (const board of [...view.openBoards].reverse()) {
+    const bundle = gatherLevel(board.id);
+    if (bundle.cards.length === 0) {
+      continue;
+    }
+
+    // Boundary pulls. A member whose wires cross the frame must end up by
+    // the edge those wires leave through: every crossing edge gets a
+    // phantom partner standing outside the interior flow — an upstream
+    // partner becomes a phantom source (pulling its member toward the left
+    // edge), a downstream one a phantom sink (pulling right) — weighted
+    // well above the interior wires so the border wins the argument.
+    // Phantoms are discarded after the solve; only the pull is real.
+    const cardIds = new Set(bundle.cards.map((card) => card.id));
+    const crossings: Array<{ edge: FactoryEdge; memberRep: string }> = [];
+    const phantomCards = new Map<string, ArrangeCard>();
+    const phantomWires: ArrangeWire[] = [];
+    for (const edge of project.edges) {
+      const sourceRep = representativeAt(board.id, edge.source);
+      const targetRep = representativeAt(board.id, edge.target);
+      const inbound = targetRep !== undefined && sourceRep === undefined;
+      const outbound = sourceRep !== undefined && targetRep === undefined;
+      if (!inbound && !outbound) {
+        continue;
+      }
+      const memberRep = (inbound ? targetRep : sourceRep) as string;
+      if (!cardIds.has(memberRep)) {
+        continue;
+      }
+      // One phantom per distinct outer partner and direction, so members
+      // talking to different neighbours spread apart instead of piling
+      // onto one pull point.
+      const outerEnd = inbound ? edge.source : edge.target;
+      const outerRep = representativeAt(undefined, outerEnd) ?? "outside";
+      const phantomId = `__phantom:${inbound ? "in" : "out"}:${outerRep}`;
+      if (!phantomCards.has(phantomId)) {
+        phantomCards.set(phantomId, {
+          id: phantomId,
+          x: 0,
+          y: 0,
+          width: STORAGE_NODE_WIDTH,
+          height: STORAGE_NODE_HEIGHT,
+          role: "machine",
+        });
+      }
+      const transferred =
+        result?.edges[edge.id]?.transferredPerSecond ?? edge.ratePerSecond ?? 0;
+      const weight = (1 + Math.log10(1 + Math.max(transferred, 0))) * 3;
+      phantomWires.push(
+        inbound
+          ? { source: phantomId, target: memberRep, weight }
+          : { source: memberRep, target: phantomId, weight },
+      );
+      crossings.push({ edge, memberRep });
+    }
+
+    const arranged = arrangeBoard({
+      cards: [...bundle.cards, ...phantomCards.values()],
+      wires: [...bundle.wires, ...phantomWires],
+      taste,
+      origin: { x: BOARD_WINDOW_FIT_PAD, y: BOARD_WINDOW_TITLE_HEIGHT + BOARD_WINDOW_FIT_PAD },
+    });
+
+    // Phantoms go; the real members re-normalise so the content corner
+    // lands one cell in, under the title bar, however wide the discarded
+    // phantom columns were.
+    const memberMoves = arranged.moves.filter((move) => bundle.sizeById.has(move.id));
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const move of memberMoves) {
+      minX = Math.min(minX, move.position.x);
+      minY = Math.min(minY, move.position.y);
+    }
+    const shiftX = BOARD_WINDOW_FIT_PAD - minX;
+    const shiftY = BOARD_WINDOW_TITLE_HEIGHT + BOARD_WINDOW_FIT_PAD - minY;
+    const placed = new Map<string, { x: number; y: number }>();
+    for (const move of memberMoves) {
+      const position = { x: move.position.x + shiftX, y: move.position.y + shiftY };
+      placed.set(move.id, position);
+      moves.push({ id: move.id, position });
+    }
+    let maxX = 0;
+    let maxY = 0;
+    for (const [id, position] of placed) {
+      const size = bundle.sizeById.get(id)!;
+      maxX = Math.max(maxX, position.x + size.width);
+      maxY = Math.max(maxY, position.y + size.height);
+    }
+    const size = {
+      width: Math.max(BOARD_WINDOW_MIN_WIDTH, snapSizeUpToGrid(maxX + BOARD_WINDOW_FIT_PAD)),
+      height: Math.max(
+        BOARD_WINDOW_MIN_HEIGHT,
+        snapSizeUpToGrid(maxY + BOARD_WINDOW_FIT_PAD),
+      ),
+    };
+    refitSizes.set(board.id, size);
+    boardSizes.push({ id: board.id, size });
+
+    // Where each crossing wire's member stands, from the frame's top edge:
+    // the port height the outer pass lines this frame up by.
+    for (const crossing of crossings) {
+      const position = placed.get(crossing.memberRep);
+      const memberSize = bundle.sizeById.get(crossing.memberRep);
+      if (position && memberSize) {
+        boundaryPortY.set(
+          `${crossing.edge.id}:${board.id}`,
+          position.y + memberSize.height / 2,
+        );
+      }
+    }
+  }
+
+  // The root pass: boards as meta cards at their fresh sizes, wire length
+  // between the blocks doing the placing.
+  const root = gatherLevel(undefined);
+  const arranged = arrangeBoard({ cards: root.cards, wires: root.wires, taste });
+  moves.push(...arranged.moves);
+
+  // Every wire the arranged view draws loses its hand-pinned stops and
+  // dragged label — both aim at a layout that no longer exists. Wires
+  // hidden behind a minimized board keep theirs; nothing they render
+  // against moved.
   const resetEdgeIds: string[] = [];
   for (const edge of project.edges) {
-    const sourceRep = representativeOf(edge.source);
-    const targetRep = representativeOf(edge.target);
-    if (!sourceRep || !targetRep || sourceRep === targetRep) {
+    if (!edge.waypoints?.length && !edge.labelOffset) {
       continue;
     }
-    if (!cardIds.has(sourceRep) || !cardIds.has(targetRep)) {
-      continue;
-    }
-    // The live flow, log-compressed so a 10,000 L/s trunk outranks a 2/s
-    // side feed without flattening every other distinction.
-    const transferred = result?.edges[edge.id]?.transferredPerSecond ?? edge.ratePerSecond ?? 0;
-    wires.push({
-      id: edge.id,
-      source: sourceRep,
-      target: targetRep,
-      // Port rows are only meaningful on the endpoint's own card; a pocket
-      // representative remaps handles, so it aligns by its centre instead.
-      sourcePortY:
-        sourceRep === edge.source
-          ? measuredPortOffsetY(edge.source, edge.sourceHandle, Position.Right)
-          : undefined,
-      targetPortY:
-        targetRep === edge.target
-          ? measuredPortOffsetY(edge.target, edge.targetHandle, Position.Left)
-          : undefined,
-      weight: 1 + Math.log10(1 + Math.max(transferred, 0)),
-    });
-    if (edge.waypoints?.length || edge.labelOffset) {
+    const sourceRep = view.representativeOf(edge.source);
+    const targetRep = view.representativeOf(edge.target);
+    if (sourceRep && targetRep && sourceRep !== targetRep) {
       resetEdgeIds.push(edge.id);
     }
   }
 
-  // The arrange owns the level's ink: every annotation goes - old notes and
-  // boxes point at a layout that no longer exists - and fresh island
-  // grounds come back with the new one.
+  // The arrange owns the ink of every level it touched: the root and every
+  // open board. Old notes and boxes — including the island boxes earlier
+  // releases drew — point at a layout that no longer exists, and the zones
+  // themselves are the grouping now.
   const staleInkIds = (project.annotations ?? [])
-    .filter((annotation) => annotation.pocketId === activePocketId)
+    .filter((annotation) => view.isLevelShown(annotation.pocketId))
     .map((annotation) => annotation.id);
 
-  const arranged = arrangeBoard({ cards, wires, taste });
+  // Every board without paper gets one, cycling through the subdued
+  // canvas papers so the zones read apart without shouting. Papers other
+  // boards already lie on - hand-picked or from an earlier run - are passed
+  // over until the cycle runs dry, and a second run re-papers nothing.
+  const setBoardThemes: Array<{ id: string; theme: string }> = [];
+  const wornPapers = new Set(
+    (project.pockets ?? []).map((pocket) => pocket.theme).filter(Boolean),
+  );
+  let paperIndex = 0;
+  for (const pocket of project.pockets ?? []) {
+    if (pocket.theme) {
+      continue;
+    }
+    let paper = ZONE_PAPERS[paperIndex % ZONE_PAPERS.length];
+    for (let step = 0; step < ZONE_PAPERS.length; step += 1) {
+      const candidate = ZONE_PAPERS[(paperIndex + step) % ZONE_PAPERS.length];
+      if (!wornPapers.has(candidate)) {
+        paper = candidate;
+        paperIndex += step;
+        break;
+      }
+    }
+    paperIndex += 1;
+    wornPapers.add(paper);
+    setBoardThemes.push({ id: pocket.id, theme: paper });
+  }
+
   return {
-    moves: arranged.moves,
-    islands: arranged.islands,
+    moves,
     wireRoutes: arranged.wireRoutes,
     resetEdgeIds,
     staleInkIds,
+    boardSizes,
+    addBoards,
+    setOwners,
+    setBoardThemes,
+    removeBoards,
   };
 }
 
@@ -9676,7 +10551,12 @@ function getBoardNodeIdAtPosition(position: { x: number; y: number } | undefined
 }
 
 function isAnnotationNodeElement(element: HTMLElement) {
-  return element.classList.contains("react-flow__node-annotationNode");
+  // Board windows count as ink for every wire gesture too: a drag lands on
+  // the cards inside the frame, never on the frame or its floor.
+  return (
+    element.classList.contains("react-flow__node-annotationNode") ||
+    element.classList.contains("react-flow__node-boardNode")
+  );
 }
 
 /**
@@ -9733,20 +10613,10 @@ function findNodeDropTargetOnSide(
     return accepts(held) ? port(held) : undefined;
   }
 
-  // The whole pocket card is the port, same as a machine card: if any member
-  // inside takes the resource, the drop lands on that resource's pocket port
-  // and fans out to every member behind it.
+  // A minimized board takes no wires at all: it is a summary of a factory
+  // you have to open before you can change it.
   if (isPocketId(project, nodeId)) {
-    if (
-      draggedResource.id === TRASH_ANY_RESOURCE_ID ||
-      draggedResource.id === CUSTOM_RATE_ANY_RESOURCE_ID
-    ) {
-      return undefined;
-    }
-    const match = listPocketPortResources(project, nodeId, side).find((candidate) =>
-      accepts(candidate),
-    );
-    return match ? port(match) : undefined;
+    return undefined;
   }
 
   const node = project.nodes.find((entry) => entry.id === nodeId);
@@ -10153,32 +11023,10 @@ function getDraggedResourceForHandle(
     return undefined;
   }
 
-  // A pocket port drags like a machine port. The card keeps its own id as
-  // the drag origin — the fan-out onto the members behind the port happens
-  // when the wire lands, in connectResourceEdges.
   if (isPocketId(project, nodeId)) {
-    const resource = getPocketResourceForHandle(project, nodeId, handle.side, {
-      kind: handle.kind,
-      id: handle.resourceId,
-    });
-    if (!resource) {
-      return undefined;
-    }
-    return {
-      nodeId,
-      side: handle.side,
-      handleId,
-      kind: resource.kind,
-      id: resource.id,
-      displayName: resource.displayName,
-      iconPath: resource.iconPath,
-      iconAtlas: resource.iconAtlas,
-      dominantColor: resource.dominantColor ?? resource.iconAtlas?.dominantColor,
-      tooltip: resource.tooltip,
-      alternatives: resource.alternatives,
-    };
+    // A minimized board has no ports to drag from.
+    return undefined;
   }
-
   const storage = (project.storages ?? []).find((entry) => entry.id === nodeId);
   if (storage) {
     return {
@@ -10239,10 +11087,8 @@ function getResourceForHandle(
   }
 
   if (isPocketId(project, nodeId)) {
-    return getPocketResourceForHandle(project, nodeId, handle.side, {
-      kind: handle.kind,
-      id: handle.resourceId,
-    });
+    // No ports, so no resource behind one.
+    return undefined;
   }
 
   const storage = (project.storages ?? []).find((entry) => entry.id === nodeId);

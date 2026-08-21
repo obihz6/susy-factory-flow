@@ -92,6 +92,19 @@ export const STORAGE_NODE_HEIGHT = cells(4); // 80
 export const TRASH_NODE_WIDTH = cells(4); // 80
 export const TRASH_NODE_HEIGHT = cells(4); // 80
 
+/**
+ * The board window: a pocket standing OPEN on its parent board. The title bar
+ * is one head row (two cells), so a frame on a cell corner keeps every member
+ * inside it on the grid — member positions are relative to the frame's
+ * top-left corner, not to the content area under the bar.
+ */
+export const BOARD_WINDOW_TITLE_HEIGHT = cells(2); // 40
+export const BOARD_WINDOW_DEFAULT_SIZE = { width: cells(24), height: cells(16) }; // 480×320
+export const BOARD_WINDOW_MIN_WIDTH = cells(10); // 200
+export const BOARD_WINDOW_MIN_HEIGHT = cells(6); // 120
+/** Air between the frame and the members fitted into it on expand. */
+export const BOARD_WINDOW_FIT_PAD = cells(1); // 20
+
 /** Default sizes for the annotation shapes, all whole cells. */
 export const ANNOTATION_DEFAULT_BOX = { width: cells(14), height: cells(9) }; // 280×180
 export const ANNOTATION_DEFAULT_TEXT = { width: cells(12), height: cells(4) }; // 240×80

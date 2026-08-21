@@ -136,7 +136,7 @@ const CALLOUTS: Array<{
     title: "The left column",
     rows: [
       { icon: Search, text: "*Items*: search the whole pack" },
-      { chip: "✦", text: "*Pockets*: saved chunks" },
+      { chip: "✦", text: "*Boards*: saved chunks" },
       { icon: Factory, text: "*Setups*: shared factories" },
     ],
   },
@@ -257,7 +257,7 @@ const MOVES: GlanceRow[] = [
   { mouse: "left", text: "Click a port row: *what makes it*" },
   { mouse: "right", text: "Right click: *what uses it*" },
   { chip: "Shift", text: "Box-select, or add one" },
-  { chip: "Ctrl+G", text: "Pack it into *a pocket*" },
+  { chip: "Ctrl+G", text: "Wrap it in *a board*" },
 ];
 
 /** The same reminder for a finger: the compact world has no hover and no

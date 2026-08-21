@@ -23,7 +23,7 @@ export function AppIdentity({ onLoadDatasetVersion }: AppIdentityProps) {
   return (
     <label
       className="flex min-w-0 items-center gap-1.5"
-      title="Which GTNH pack version every recipe is loaded from. Changing it reloads the recipe list and re-resolves the recipes already on your board."
+      title="Pack version"
     >
       <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
         Game

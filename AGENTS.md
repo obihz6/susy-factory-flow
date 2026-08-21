@@ -237,9 +237,8 @@ gh run watch <run-id> --exit-status
   `src/lib/designs/design-camera.ts`, localStorage keyed by design id. It is
   deliberately NOT part of the plan - a shared setup carries positions and view
   settings and no viewport, so someone opening one gets it framed.
-  - Not recorded inside a pocket (those coordinates are their own space, and a
-    plan always loads at the top level) and not recorded during a design
-    handover, which is what the latch in that file is for.
+  - Not recorded during a design handover, which is what the latch in that
+    file is for.
   - A tab with no camera stored yet is framed, which is what every tab used to
     get.
 - The board has NO `fitView` prop, on purpose. React Flow's fit-on-init waits
@@ -247,6 +246,228 @@ gh run watch <run-id> --exit-status
   and stamps over the restored camera. The app frames for itself on every path
   that puts cards on the board (design store, plan import, blueprint paste,
   tours); do not add the prop back.
+
+## Boards (And Their Minimized State, Formerly Pockets)
+
+- A board is the ONLY container: a `FactoryPocket` record, two states.
+  `expanded: true` plus a `size` renders it as a window frame (`BoardNode`)
+  with its members inside; minimized it renders as a SUMMARY CARD
+  (`PocketNode`). That card is ALL a "pocket" is now - there is no dive-in
+  view, no breadcrumbs, no Esc-up, no violet room, no unpack button, and no
+  convergence rewiring anywhere. Old plans load their pockets as minimized
+  boards.
+- A MINIMIZED BOARD IS A SUMMARY, NOT A MACHINE. It has NO PORTS: you
+  cannot drop a wire on it (`findNodeDropTarget` returns undefined, so it
+  washes red like any card refusing a resource), no drag starts on it, and
+  `connectResourceEdges` refuses any end that names one. It stacks two
+  readings and a stat line, and every figure comes from the PLAN-WIDE
+  solve (`computePocketSummaries`). To change anything you open the
+  window.
+  - NEEDS / MAKES: the board read as a little factory, WIRES IGNORED -
+    the members' flows netted against each other, so a board whose own
+    mine feeds its own macerator asks the world for no ore. These are
+    FULL SPEED figures on purpose: a board stalled because a need is
+    unmet must still say what it is missing, and scaling by utilization
+    erases exactly that line.
+  - COMING IN / GOING OUT: what actually crosses the border on wires
+    right now, one line per resource per direction with its wire count.
+  - Only the BALANCE is painted: red ground under NEEDS, green under
+    MAKES, each with a centred title chip. The wire crossings are plain
+    paper - colouring them too made the card two stacks of the same two
+    colours saying different things. A ground ends with its own last
+    line (`items-start`), never running down past the taller column, and
+    a rule (one cell, charged for in `pocketCardHeight`) separates the
+    two sections. NO CAP and no "and N more" - a summary that hides half
+    of itself is not one - so the card grows a row per line and
+    `sectionCells` charges for every one of them.
+  - The footer is what is inside: machines, cards, EU/t.
+  - The card used to run a SCOPED solve over its members with the outside
+    world unhooked and wear the result as input/output rails. It read like
+    a machine and lied like one: a board holding its own source was told it
+    was starving, a board exporting a byproduct was told it was clogged.
+    That whole apparatus is gone - the scoped solve, `buildPocketRailPorts`,
+    `resolvePocketPortHandleId`, the port fan-out
+    (`resolvePocketMemberIds`, `listPocketPortResources`,
+    `getPocketResourceForHandle`). Do not rebuild it.
+  - Crossing wires still land on the card, as ANY-SIDE endpoints (like a
+    drawer's), on two inert handles that exist only because React Flow will
+    not draw an edge without one. Several wires carrying one resource across
+    one border are still drawn as ONE line (the channel grouping, now keyed
+    on resource alone) and counted as one summary row with its wire count.
+  - `pocketCardHeight` is the one place the card's height is decided, so
+    the auto-arranger can size a minimized board from
+    `countPocketCrossings` before it has ever been measured.
+- The canvas always shows the ROOT plus the contents of every open board,
+  recursively (`computeBoardLevelView` in `src/lib/model/board-windows.ts`:
+  shown levels, representatives, frame rects, drop-owner picking).
+  Double-click or the restore button opens a minimized board in place;
+  Ctrl+G wraps a selection in an OPEN board fitted around it, moving
+  nothing and touching no wire.
+- While open, member positions are FRAME-RELATIVE and members are React
+  Flow children (`parentId`), which is what makes a dragged title bar carry
+  the household. Everything downstream speaks flow space:
+  `publishBoardGeometry` and `cameraCards` resolve the parent chain once.
+- Wires belong to cards. An open board's members wire directly, and the
+  frame is invisible to wire GESTURES (drops land on the cards inside) -
+  but to ROUTING a frame is as solid as a card: foreign wires go around it
+  with the same one-cell clearance, and only wires whose endpoints live
+  inside it are exempt (`throughBoardIds` on the route inputs,
+  `exemptObstacleIds` in grid-edge-router.ts) - they have to cross the
+  border to exist. Frames publish through `publishedBoardFrameBounds`,
+  separate from the card set, and exemptions ride the solve signature so
+  adopting a card reroutes its wires without anything moving. A wire whose far
+  end is a MINIMIZED board lands on the summary card as an any-side
+  endpoint, and same-resource crossings collapse into one drawn channel -
+  presentation, never stored rewiring.
+- Membership changes by drop (`handleNodeDragStop`): a card WHOLLY inside a
+  frame's floor joins that board (deepest frame wins), a card dragged clear
+  of every frame leaves its board and surfaces on the canvas
+  (`pickBoardOwnerFor`). Coordinates convert so nothing moves on screen,
+  and the frame NEVER grows to swallow a drop - a board's walls are the
+  player's to set, and a drop that would not fit simply lands outside.
+  Drawing a board with the toolbar tool adopts the cards it covers; a
+  drawer spawned off a member's port joins the member's board.
+- Opening a legacy pocket (`size` absent - the "coordinates are their own
+  old space" signal) rebases members to fit the frame and drops waypoints
+  on wires touching them; minimize mirrors the waypoint rule.
+- Auto-arrange DUMPS EVERY BOARD FIRST and builds zones from scratch, and
+  it draws no ink (`computeAutoArrangement`). Phase 0 spills every frame's
+  cards onto the canvas at their absolute positions (`removeBoards` on
+  `applyBoardArrangement`), then scouts with a throwaway arrange: each
+  natural island becomes a fresh open board ("Zone N", `addBoards` /
+  `setOwners`, all one undo entry). A rebuilt zone holding exactly the same
+  cards as a dumped board inherits its NAME and paper — the layout is
+  decided from scratch either way, and renaming somebody's zone on every
+  arrange is its own small betrayal. Hand-drawn frames therefore never
+  fence the layout in, and the button gives the same answer for the same
+  factory. Shelf strays and interchange buffers (the arranger's
+  `backdrop: false` islands) stay loose between zones. Then the
+  layout passes: every open board arranges its own members inside its
+  frame (deepest first, in frame space, origin one cell under the title
+  bar) and the frame REFITS around the result (`setBoardSizes`); the root
+  then arranges with every board as one meta card at its fresh size, wire
+  length between blocks doing the placing. Interior passes pin no
+  waypoints (stored waypoints are flow-space); ink on every arranged level
+  is cleared and nothing replaces it - the zones are the grouping.
+- The interior passes are BOUNDARY-AWARE: every wire crossing a frame gets
+  a phantom partner card (one per outer neighbour and direction, weight
+  x3), so members that talk across the border land against the edge their
+  wires leave through; phantoms are discarded and the members re-normalise
+  to the frame corner. Each interior pass records where every crossing
+  wire's member landed (`boundaryPortY`, "edgeId:boardId" from frame top),
+  and outer passes use those as the board card's PORT heights - which is
+  what lines frames up so wires between boards run straight instead of
+  crossing. The arrange also paints every unpainted board from
+  `ZONE_PAINTS`, skipping coats other boards already wear.
+- The board title bar has a paint button (palette in a NodeToolbar portal,
+  because the frame's own layer sits under the cards); the paint TOOL works
+  on boards too. Both go through `paintPocket`.
+- A board is drawn on PAPER: `pocket.theme` is a canvas theme id, and it
+  gives the floor its base colour, its grain and its own grid dots on the
+  20px pitch (`chromeFor` in BoardNode.tsx cuts the title bar from the same
+  paper). The title bar's paper button picks one; the arrange assigns from
+  `ZONE_PAPERS`, skipping papers other boards already wear. `colorTag`
+  still works (the paint tool) and wins when there is no theme.
+  The resize grip's floor is the members' extent plus a cell - a frame can
+  never be made smaller than what it holds.
+- The paper is painted by `BoardFloors`, ONE viewport portal at z -4, not
+  by the board's node. A board's chrome sits at 15 (over the wires at 10,
+  under the cards at 20) so its bar and rim OCCLUDE the wires crossing
+  them, while the floor stays under those wires - one node cannot be in
+  two places in the stack, and React Flow pins every child node above its
+  parent, so a floor child could not go below either. The layer reads live
+  positions from the node lookup, so paper tracks a dragged frame exactly.
+  Open boards therefore also un-seal the edge/node layers
+  (`factory-flow-board--edges-under`, the lever thickness mode pulls).
+- The marching dashes are a CANVAS painted over everything, so anything the
+  wires go under has to be punched back out of it. A board's bar and rim are
+  in that set in EVERY mode (`boardChromeOccluders`, fed from
+  `publishedBoardFrameBounds` and copied into the GIF capture's
+  `occlusionRects`) - unlike the cards, which only occlude when thickness
+  mode runs the wires beneath them. Only the chrome strips are erased, never
+  the whole frame: the floor is a layer UNDER the wires, so the dashes cross
+  it, and a frame dragged by its bar erases the same strips at its live
+  position rather than blanking its own interior.
+- Two mirrored routing rules keep wires honest about rooms
+  (grid-edge-router.ts). A wire leaving a board pays `COST_INSIDE_EXEMPT`
+  per pixel spent inside it, so it makes for the nearest border instead of
+  riding the frame's own edge line on the way out. A wire whose BOTH ends
+  sit in a frame (`homeObstacleIds` — the shared prefix of the two
+  endpoints' ancestor chains, `exemptObstacleIds` being their union) pays
+  `COST_OUTSIDE_HOME` for every pixel spent OUTSIDE it, so it never ducks
+  out of its own board and back in. The second rule exists because the
+  first one alone made leaving cheaper than staying.
+- A board has NO DEFAULT COLOUR - the house purple it used to fall back to
+  is gone (`src/lib/model/board-paper.ts`). A board created now stores a
+  paper nobody else on the plan is WEARING, picked at random
+  (`pickBoardPaper` in `createBoard`/`wrapSelectionInBoard`), and a board
+  with no stored paper - every pocket made before papers existed - is drawn
+  in `paperForBoardId`, hashed from its own id so it looks the same on
+  every reload and needs no migration. The picker's clear button hands a
+  board back to that id colour rather than to a house one. The MINIMIZED
+  card wears the same paper (`boardChrome`, exported from BoardNode):
+  folding a board must not turn it into a different-coloured object, and
+  the paper is how you recognise which board it is. The house purple it
+  used to wear is gone from there too.
+- Only DARK papers are offered (`BOARD_PAPERS` filters the light canvas
+  themes out, and `BOARD_PAPER_IDS` - which `ZONE_PAPERS` now is - lists
+  the dark ids): a pale sheet under the
+  board's dark cards reads as a hole in the plan. A board already carrying
+  a light theme still renders it. `pocket.pattern` rules that paper with
+  the same six the canvas offers (`boardRuling` draws them as CSS layers,
+  and the picker previews each one at a 7px cell). The picker's popover is
+  `align="end"` — it belongs under the button that opens it, which sits at
+  the right end of a bar that can be very wide.
+- The frame line is `BOARD_EDGE` (4px), and the title bar wears the same
+  weight in the same colour so the window reads as one object: a 2px line
+  vanished at the zooms a board is actually read at.
+- `dissolvePocket` is the DUMP: the frame goes and its cards stay exactly
+  where they were (frame-relative positions get the frame's corner added
+  back when the board carries a `size`). Its button lives on both the open
+  title bar and the minimized card.
+- NOTHING SOLID OVERLAPS. `board-placement.ts` is the magnet, and it runs
+  LIVE: `handleNodesChange` rewrites each drag frame's position to the
+  nearest free grid spot, so a card is never allowed onto an occupied spot
+  rather than being tidied up after release (the drop keeps the same call
+  as a safety net for drops that never saw a drag frame). Blockers are
+  computed ONCE per drag in `handleNodeDragStart` — nothing they depend on
+  can change mid-drag — and differ by kind: a CARD is blocked by other
+  cards but never by frames (a frame is a room you drag into, and the drop
+  decides membership); a FRAME is blocked by other frames and by every card
+  that is not its own. Annotations are ink and never block anything.
+- NOTHING STRADDLES A WALL. Every open frame is also a REGION to the magnet
+  (`PlacementRegion`: the whole frame as `outer`, the floor under the title
+  bar as `inner`), and a card position that touches `outer` without fitting
+  inside `inner` is refused exactly like an occupied spot. So a card clicks
+  IN or clicks OUT as the hand crosses the wall, whichever side is nearer,
+  and the drop can then read membership as plain containment instead of
+  guessing from a centre point. A frame being dragged is not asked to be in
+  or out of anything, and a frame carried by the same drag is not a wall to
+  the cards riding with it.
+- Board frames resize from all four edges and all four corners
+  (`RESIZE_GRIPS`), each with a generous hit box straddling the wall, plus
+  permanent corner brackets. A wall never cuts into the board's own cards
+  and never crosses anything outside — the same no-overlap rule the drag
+  magnet enforces. Dragging the TOP or LEFT wall moves the origin, so
+  members are shifted by the same step the other way and stay put on the
+  canvas: live through `board-resize.ts` (the frame publishes, the board
+  applies both halves to its node state on one frame) and committed by
+  `setPocketFrame`, one undo entry, nothing written until the pointer lifts.
+- A board SELECTS like anything else: `selectable: true`, so a marquee
+  drawn round one picks up the frame (and, being a marquee, the cards
+  inside it too) and it wears the same purple ring every selected card
+  wears (`SELECTION_RING`). The frame used to be unselectable because a
+  selected frame AND its selected members both took the drag delta, so
+  the household moved twice as far as the hand. `dragPassengersRef` is
+  the fix: at drag start, any held card whose board is held too is a
+  PASSENGER, and its own position changes are dropped for the length of
+  the drag - the frame carries it, and its stored frame-relative position
+  is already right.
+- NOTHING SITS IN TWO BOARDS AT ONCE. `wrapSelectionInBoard` refuses a
+  selection where anything already has an owner or IS a board, and the
+  board hides the wrap button for such a selection (`selectionCanWrap`),
+  so Ctrl+G and the button agree. Boards inside boards is a real feature
+  and a separate decision; it must not happen by accident from a marquee.
 
 ## Compact Mode (Phones And Small Windows)
 

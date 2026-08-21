@@ -95,12 +95,6 @@ export interface BoardView {
   calmMode: boolean;
   /** What the glance (zoomed-out) view shows. See GlanceMode. */
   glanceMode: GlanceMode;
-  /**
-   * Auto-arrange: the paper each island's background is drawn on. Islands
-   * always get a background when island splitting is on; this picks its
-   * texture.
-   */
-  autoArrangeInkTheme: CanvasThemeId;
 }
 
 const BOARD_VIEW_STORAGE_KEY = "gtnh-factory-flow-board-view";
@@ -118,7 +112,6 @@ export const DEFAULT_BOARD_VIEW: BoardView = {
   linePulseMode: true,
   calmMode: false,
   glanceMode: "identity",
-  autoArrangeInkTheme: "blueprint",
 };
 
 let boardViewState: BoardView = DEFAULT_BOARD_VIEW;
@@ -154,9 +147,7 @@ function readBoardView(): BoardView {
       linePulseMode: flag(parsed.linePulseMode, DEFAULT_BOARD_VIEW.linePulseMode),
       calmMode: flag(parsed.calmMode, DEFAULT_BOARD_VIEW.calmMode),
       glanceMode,
-      autoArrangeInkTheme: isCanvasThemeId(parsed.autoArrangeInkTheme)
-        ? parsed.autoArrangeInkTheme
-        : DEFAULT_BOARD_VIEW.autoArrangeInkTheme,
+
     };
   } catch {
     // Corrupt or unreadable storage is not worth breaking the board over.

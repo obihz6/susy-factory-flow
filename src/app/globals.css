@@ -1073,6 +1073,18 @@ img {
   z-index: -5 !important;
 }
 
+/* A board window is chrome BETWEEN the wires and its members: over the
+   lines that cross it (so the bar and the rim occlude them, the way a
+   window occludes what is behind it), under the cards riding along inside
+   it. Dragging the title bar must not lift it past either. */
+.factory-flow-board .react-flow__node.board-window.selected,
+.factory-flow-board .react-flow__node.board-window.dragging {
+  z-index: 15 !important;
+}
+
+/* Its paper is painted by the floor layer instead (a viewport portal at
+   z -4, under the wires and over the backdrop ink) — see BoardFloors. */
+
 /* While a drag is live the NODES layer rides above the wires: the card in
    hand must visibly pass over them (wires hold still for the whole drag and
    reroute on drop). This used to be the other way around — the edge layer
@@ -1785,25 +1797,9 @@ img {
 }
 
 /* A pocket card's port chip: the machine chip's raised tile, in purple. */
-.pocket-port {
-  background: #463659;
-  border: 2px solid #241b33;
-  box-shadow:
-    inset 1px 1px 0 #6b549b,
-    inset -1px -1px 0 #2b2140;
-}
-
-/* Inside a pocket dimension the room itself says where you are: the canvas
-   takes a violet cast and the workspace window wears a purple frame. The
-   frame is an overlay (not a border) so the canvas keeps its exact size,
-   and it sits under the z-30 toolbars but over the board's own layers. */
-.factory-flow-board--pocket-view {
-  background-color: #261d38;
-}
-
-/* Blueprint overwrite picker: every pocket card is a target. Amber dashed
+/* Blueprint overwrite picker: every folded board is a target. Amber dashed
    ring on all of them, solid and brighter under the pointer — hover answers
-   "what happens if I click": THIS pocket becomes the waiting blueprint. */
+   "what happens if I click": THIS board becomes the waiting blueprint. */
 .factory-flow-board--blueprint-picking .react-flow__node-pocketNode {
   cursor: pointer;
 }
@@ -1816,18 +1812,6 @@ img {
 .factory-flow-board--blueprint-picking .react-flow__node-pocketNode:hover > div {
   outline-style: solid;
   filter: brightness(1.18);
-}
-
-.factory-flow-board--pocket-view::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  pointer-events: none;
-  box-shadow:
-    inset 0 0 0 3px #8d6fd1,
-    inset 0 0 0 5px #241b33,
-    inset 0 0 52px rgba(141, 111, 209, 0.3);
 }
 
 /* The input that sets the speed. Which colour it wears is the CARD's answer,

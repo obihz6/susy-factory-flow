@@ -214,7 +214,7 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
               <button
                 type="button"
                 onClick={() => void copyShareLink()}
-                title="The link opens this setup in a friend's planner"
+                title="Share link"
                 className="inline-flex items-center gap-1.5 rounded border border-line-strong px-3 py-1.5 text-sm hover:bg-surface-raised"
               >
                 {isLinkCopied ? (

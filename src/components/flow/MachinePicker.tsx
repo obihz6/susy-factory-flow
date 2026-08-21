@@ -346,7 +346,7 @@ export function MachineTabStrip({
         }}
         onPointerDown={(event) => event.stopPropagation()}
         data-compare-toggle
-        title="Compare all machines"
+        title="Compare machines"
         aria-label="Compare all machines"
         className={[
           "nodrag mb-[2px] flex h-[34px] w-[36px] items-center justify-center border-2 border-b-0 text-[18px] font-bold leading-none hover:brightness-110",

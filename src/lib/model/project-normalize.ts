@@ -257,6 +257,14 @@ function snapProjectToGrid(project: FactoryProject): FactoryProject {
     pockets: project.pockets?.map((pocket) => ({
       ...pocket,
       position: snapPositionToGrid(pocket.position),
+      ...(pocket.size
+        ? {
+            size: {
+              width: snapSizeUpToGrid(pocket.size.width),
+              height: snapSizeUpToGrid(pocket.size.height),
+            },
+          }
+        : undefined),
     })),
   };
 }

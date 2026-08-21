@@ -105,10 +105,10 @@ export function BoardActions({
   const isWelcomeCoveringBoard = useWelcomeTab().active;
   const canShare = !isWelcomeCoveringBoard && project.nodes.length > 0;
   const shareTitle = isWelcomeCoveringBoard
-    ? "Share this setup: open a design tab first"
+    ? "Share: open a design tab first"
     : project.nodes.length === 0
-      ? "Share this setup: build something on the board first"
-      : "Share this setup with everyone";
+      ? "Share: build something first"
+      : "Share";
 
   const selectedCardCount = selectedBoardIds.length;
   const diagnosticsLabel =

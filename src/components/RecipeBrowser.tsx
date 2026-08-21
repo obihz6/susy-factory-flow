@@ -239,16 +239,12 @@ const RESOURCE_FILTER_CHOICES: Array<{
   label: string;
   title: string;
 }> = [
-  { mode: "all", label: "All", title: "Every item and fluid in the loaded dataset" },
-  { mode: "item", label: "Items", title: "Items only" },
-  { mode: "fluid", label: "Fluids", title: "Fluids only" },
-  {
-    mode: "board",
-    label: "Placed",
-    title: "Only what the cards and drawers you have placed on this board use or make",
-  },
-  { mode: "plants", label: "Plants", title: "Only what a crop farm or a tree can grow" },
-  { mode: "bees", label: "Bees", title: "Only what bees produce" },
+  { mode: "all", label: "All", title: "Everything" },
+  { mode: "item", label: "Items", title: "Items" },
+  { mode: "fluid", label: "Fluids", title: "Fluids" },
+  { mode: "board", label: "Placed", title: "On this board" },
+  { mode: "plants", label: "Plants", title: "Grown" },
+  { mode: "bees", label: "Bees", title: "From bees" },
 ];
 
 /** The dataset query only knows kinds and sources; this splits the choice up. */
@@ -959,7 +955,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
             type="button"
             onClick={() => writeWorkspaceView({ leftPanelOpen: false })}
             title="Hide this column"
-            aria-label="Hide the items, pockets and setups column"
+            aria-label="Hide the items, boards and setups column"
             className="flex h-7 w-6 shrink-0 items-center justify-center rounded-[4px] border border-neutral-700 text-neutral-400 hover:border-cyan-600 hover:text-cyan-400"
           >
             <svg
@@ -976,7 +972,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           </button>
         </div>
 
-        {/* The master switch: item search, the pocket shelf, or the
+        {/* The master switch: item search, the board shelf, or the
             setups network — whole column each. Flat tabs, not buttons. Three
             iconed labels need every trick to breathe: the column runs 344px,
             and the tabs wear 12px icons with 11px text, one size under the
@@ -1006,13 +1002,13 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
                 : "border-transparent text-neutral-400 hover:text-neutral-200",
             ].join(" ")}
           >
-            {/* The pocket star, the same mark a pocket card wears in its name
-                row and at a glance. A stack icon said "some other kind of
-                thing"; every row on this shelf is a pocket. */}
+            {/* The board star, the same mark a folded board wears in its
+                name row and at a glance. A stack icon said "some other kind
+                of thing"; every row on this shelf is a board. */}
             <span aria-hidden className="text-[12px] leading-none">
               ✦
             </span>
-            Pockets
+            Boards
           </button>
           <button
             type="button"
@@ -1032,7 +1028,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           <button
             type="button"
             onClick={() => writeWorkspaceView({ leftPanelOpen: false })}
-            aria-label="Close the items, pockets and setups panel"
+            aria-label="Close the items, boards and setups panel"
             className="hidden h-7 w-8 shrink-0 items-center justify-center border-b-2 border-transparent text-neutral-400 compact:flex"
           >
             <ChevronIcon direction="left" />
@@ -1047,7 +1043,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           // the controls and the recent shelf: nothing here scrolls, so a wheel
           // that did nothing was just a panel that felt broken.
           <div className="flex min-h-0 flex-1 flex-col" onWheel={handleResourceWheel}>
-        {/* The same card the pocket and setup shelves put their search and
+        {/* The same card the board and setup shelves put their search and
             filters in. Bare, this tab's controls read as a different kind of
             thing from the other two, when they are the same thing. */}
         <ControlsCard>
@@ -2293,7 +2289,7 @@ function RecipeBookOverlay({
             <select
               value={maxTier}
               onChange={(event) => onMaxTierChange(event.target.value as TierFilter)}
-              title="Hide recipes above this voltage tier"
+              title="Highest tier"
               aria-label="Maximum machine tier"
               className="h-9 w-28 shrink-0 border-2 border-[var(--mc-33)] bg-[#17191d] px-1.5 text-sm text-neutral-100 outline-none shadow-[inset_2px_2px_0_#30343b,inset_-2px_-2px_0_#050607]"
             >

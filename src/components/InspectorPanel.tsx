@@ -541,11 +541,7 @@ function FlowIOPanel() {
             onClick={() =>
               writeWorkspaceView({ showHiddenResources: !workspace.showHiddenResources })
             }
-            title={
-              workspace.showHiddenResources
-                ? "Hidden resources are showing, greyed out. Click to drop them from the list."
-                : "Show hidden resources, greyed out, so you can unhide them."
-            }
+            title="Hidden resources"
             label={
               workspace.showHiddenResources
                 ? "Stop showing hidden resources"
@@ -567,11 +563,7 @@ function FlowIOPanel() {
             <ToolbarToggle
               on={workspace.trendsOpen}
               onClick={() => writeWorkspaceView({ trendsOpen: !workspace.trendsOpen })}
-              title={
-                workspace.trendsOpen
-                  ? "Hide the charts under starred resources."
-                  : "Show a chart under every starred resource."
-              }
+              title="Charts"
               label={workspace.trendsOpen ? "Hide all charts" : "Show all charts"}
               tone="amber"
             >
@@ -582,11 +574,7 @@ function FlowIOPanel() {
           <ToolbarToggle
             on={workspace.favouritesOnly}
             onClick={() => writeWorkspaceView({ favouritesOnly: !workspace.favouritesOnly })}
-            title={
-              workspace.favouritesOnly
-                ? "Only starred resources are listed. Click to list everything again."
-                : "List only the resources you have starred."
-            }
+            title="Starred only"
             label={
               workspace.favouritesOnly ? "List every resource again" : "List only starred resources"
             }
@@ -608,7 +596,7 @@ function FlowIOPanel() {
             <button
               type="button"
               onClick={() => writeWorkspaceView({ netFlowRates: false })}
-              title="Both sides, as they are."
+              title="Raw"
               aria-label="Show raw rates"
               aria-pressed={!workspace.netFlowRates}
               className={[
@@ -623,7 +611,7 @@ function FlowIOPanel() {
             <button
               type="button"
               onClick={() => writeWorkspaceView({ netFlowRates: true })}
-              title="Outputs minus inputs."
+              title="Net"
               aria-label="Show net rates"
               aria-pressed={workspace.netFlowRates}
               className={[
@@ -649,7 +637,7 @@ function FlowIOPanel() {
           <button
             type="button"
             onClick={() => writeWorkspaceView({ rightPanelOpen: false })}
-            title="Hide this column"
+            title="Hide"
             aria-label="Hide the resources column"
             className={[
               "flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line-strong text-fg-muted hover:border-cyan-600 hover:text-cyan-400",
@@ -1612,13 +1600,7 @@ const FlowResourceRow = memo(function FlowResourceRow({
             toggleResourceFavourite(balance.key);
             onMarkChanged?.();
           }}
-          title={
-            isFavourite
-              ? `Stop watching ${name}`
-              : isHidden
-                ? `Watch ${name}, which unhides it`
-                : `Watch ${name} and chart it`
-          }
+          title={isFavourite ? "Unwatch" : "Watch"}
           on={isFavourite}
           onClass="text-amber-300"
         >
@@ -1633,7 +1615,7 @@ const FlowResourceRow = memo(function FlowResourceRow({
               toggleResourceHidden(balance.key);
               onMarkChanged?.();
             }}
-            title={isHidden ? `Unhide ${name}` : `Hide ${name} from this list`}
+            title={isHidden ? "Unhide" : "Hide"}
             on={isHidden}
             onClass="text-cyan-300"
           >

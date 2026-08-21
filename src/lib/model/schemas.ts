@@ -397,6 +397,18 @@ export const factoryPocketSchema = z.object({
     x: z.number(),
     y: z.number(),
   }),
+  // Standing open as a board window; absent = the classic collapsed card.
+  expanded: z.boolean().optional(),
+  size: z
+    .object({
+      width: z.number().positive(),
+      height: z.number().positive(),
+    })
+    .optional(),
+  // A canvas theme id; unknown ids quietly fall back at render time.
+  theme: z.string().max(32).optional(),
+  // A canvas pattern id; unknown ids fall back to the default ruling.
+  pattern: z.string().max(16).optional(),
 });
 
 export const factoryEdgeSchema = z.object({

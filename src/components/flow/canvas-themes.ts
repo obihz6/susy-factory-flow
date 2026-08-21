@@ -10,9 +10,6 @@
  * as a dirty monitor. The vignette is the one screen-space layer allowed:
  * pure edge darkening with no landmarks, so nothing about it can be seen to
  * "stick" during a pan.
- *
- * Inside a pocket dimension none of this applies: the violet room IS the
- * pocket's theme, and it must read the same on every board.
  */
 export type CanvasThemeId =
   | "charcoal"

@@ -989,7 +989,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                   duplicateNode(projectNode.id);
                 }}
                 className="nodrag flex h-6 w-6 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:bg-[var(--mc-61)]"
-                title="Clone node (same machine and settings, no wires)"
+                title="Clone node"
                 aria-label="Clone node"
               >
                 <Copy aria-hidden className="h-3.5 w-3.5" />
@@ -2820,7 +2820,7 @@ function CustomRatePanel({
           }}
           onPointerDown={(event) => event.stopPropagation()}
           className={modeButtonClassName(mode === "supply")}
-          title="Supply: this card makes the resource at this rate. Flipping turns the card round, so its wires drop and it lets go of the resource. The rate stays."
+          title="Supply"
         >
           Supply
         </button>
@@ -2832,7 +2832,7 @@ function CustomRatePanel({
           }}
           onPointerDown={(event) => event.stopPropagation()}
           className={modeButtonClassName(mode === "request")}
-          title="Request: this card drains the resource at this rate, constantly. Flipping turns the card round, so its wires drop and it lets go of the resource. The rate stays."
+          title="Request"
         >
           Request
         </button>
@@ -2854,7 +2854,7 @@ function CustomRatePanel({
         onClick={(event) => event.stopPropagation()}
         inputMode="decimal"
         aria-label="Rate"
-        title="Rate in the board's active unit"
+        title="Rate"
         // Sized to the number, not to the row: `flex-1` made the field claim
         // every spare pixel and the card was permanently as wide as its
         // widest possible contents. In `ch` on a mono font this is exactly
@@ -3647,7 +3647,7 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
     case "cropGrowthStat":
       return (
         <CropHelpPanel
-          title="Growth: how fast it regrows"
+          title="Growth"
           finePrint={
             <>
               every 12.8 s the plant gains (6 + Growth) points, scaled by feeding. This crop is
@@ -3668,7 +3668,7 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
     case "cropGainStat":
       return (
         <CropHelpPanel
-          title="Gain: how much loot per harvest"
+          title="Gain"
           finePrint={
             <>
               drop rounds = {stats.dropChance.toFixed(3)} × 1.03^Gain, and every successful drop
@@ -3689,7 +3689,7 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
     case "cropWater":
       return (
         <CropHelpPanel
-          title="Water: keep it topped up"
+          title="Water"
           feeding={{ tier: stats.tier }}
           finePrint={<>water bonus = floor((water + 9) ÷ 10): 0 → +1, 50 → +5, 100 → +10.</>}
         >
@@ -3705,7 +3705,7 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
     case "cropFertilizer":
       return (
         <CropHelpPanel
-          title="Fertilizer: extra food"
+          title="Fertilizer"
           feeding={{ tier: stats.tier }}
           finePrint={<>fertilizer bonus = floor((fertilizer + 9) ÷ 10): 0 → +1, 50 → +5, 100 → +10.</>}
         >
@@ -3721,7 +3721,7 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
     case "cropSky":
       return (
         <CropHelpPanel
-          title="Sky: open air above the crop"
+          title="Sky"
           feeding={{ tier: stats.tier }}
           finePrint={<>sky bonus = +2 when the block above the crop can see the sky.</>}
         >
@@ -3734,7 +3734,7 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
     case "cropBiome":
       return (
         <CropHelpPanel
-          title="Biome: where it grows best"
+          title="Biome"
           feeding={{ tier: stats.tier }}
           finePrint={
             <>
@@ -4460,7 +4460,7 @@ function MachineCountStat({
           }}
           onPointerDown={(event) => event.stopPropagation()}
           className={stepButtonClassName}
-          title="Remove 1 (Shift: 100, Ctrl: 10)"
+          title="Remove 1"
           aria-label={`Decrease ${label.toLowerCase()} count`}
         >
           <Minus className="h-3 w-3" />
@@ -4492,7 +4492,7 @@ function MachineCountStat({
           }}
           onPointerDown={(event) => event.stopPropagation()}
           className={stepButtonClassName}
-          title="Add 1 (Shift: 100, Ctrl: 10)"
+          title="Add 1"
           aria-label={`Increase ${label.toLowerCase()} count`}
         >
           <Plus className="h-3 w-3" />
