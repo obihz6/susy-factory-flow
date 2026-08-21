@@ -151,4 +151,16 @@ echo "Normalizing SusyCore recipedump into the planner dataset."
 node "$repo_root/tools/dataset-pipeline/scripts/susy/normalize-susy-recipedump.mjs" \
   "$recipedump_path" "$SUSY_DATASET_OUT_DIR/recipes.json"
 
+echo "Building resource and recipe indexes."
+node "$repo_root/tools/dataset-pipeline/scripts/build-resource-index.mjs" \
+  "$SUSY_DATASET_OUT_DIR/recipes.json"
+node "$repo_root/tools/dataset-pipeline/scripts/build-recipe-index.mjs" \
+  "$SUSY_DATASET_OUT_DIR/recipes.json" "$SUSY_DATASET_OUT_DIR"
+
+# The manifest stage needs a compressed dataset whose top-level keys stay
+# one-per-line; gzip the line-oriented file only after the index builders ran.
+gzip -c "$SUSY_DATASET_OUT_DIR/recipes.json" > "$SUSY_DATASET_OUT_DIR/recipes.json.gz"
+DATASETS_ROOT="$(dirname "$SUSY_DATASET_OUT_DIR")" \
+  node "$repo_root/tools/dataset-pipeline/scripts/rebuild-manifest.mjs"
+
 echo "SUSY export completed."

@@ -553,6 +553,11 @@ const dataset = {
 };
 
 await fs.mkdir(path.dirname(path.resolve(outputPath)), { recursive: true });
+// Keep this file LINE-ORIENTED (writeDatasetJson): rebuild-manifest reads
+// datasetVersionId/gtnhVersion/generatedAt/sourceInfo with a per-line parser.
+// Run the index builders against THIS plain file and create recipes.json.gz
+// only after them (`gzip -c recipes.json > recipes.json.gz`); a gz rewritten
+// by build-resource-index comes out compact and breaks the manifest stage.
 await writeDatasetJson(outputPath, dataset);
 console.log(
   `SUSY dataset written: ${recipes.length} recipes, ${resources.size} resources, ${Object.keys(oreDictionary).length} oredict entries.`,
