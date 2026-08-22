@@ -366,15 +366,50 @@ for (const [registryKey, machine] of Object.entries(raw.gtMTEs || {})) {
   machinesByRecipeMap.set(machine.recipemapName, list);
 }
 
+// GTNH-pipeline convention: tier variants fold into ONE handler family per
+// recipe map. SusyCore metaNames carry the tier as a dotted suffix
+// ("macerator.lv"); stripping it yields the family, and the lowest-tier
+// machine represents it. Without this the alternative-machine selector fills
+// with Lv/Mv/Hv entries that duplicate the app's own tier system.
+const TIER_SUFFIX =
+  /\.(ulv|lv|mv|hv|ev|iv|luv|zpm|uv|uhv|uev|uiv|uxv|opv|max)$/i;
+const TIER_ORDER = new Map(
+  ["ulv", "lv", "mv", "hv", "ev", "iv", "luv", "zpm", "uv", "uhv"].map(
+    (tier, index) => [tier, index],
+  ),
+);
+
+function familyHandlers(machines) {
+  const byFamily = new Map();
+  for (const { registryKey, machine } of [...machines].sort((left, right) => {
+    const leftTier = TIER_ORDER.get(String(left.machine.tier ?? "").toLowerCase()) ?? 99;
+    const rightTier = TIER_ORDER.get(String(right.machine.tier ?? "").toLowerCase()) ?? 99;
+    return leftTier - rightTier;
+  })) {
+    const rawName = String(machine.metaName || registryKey.split(":").pop() || registryKey);
+    const familyName = rawName.replace(TIER_SUFFIX, "");
+    const familyKey = `${machine.isController ? "multi:" : "single:"}${familyName.toLowerCase()}`;
+    if (byFamily.has(familyKey)) continue;
+    byFamily.set(familyKey, {
+      id: familyKey,
+      label: prettyMachineName(familyName),
+      kind: machine.isController ? "multiblock" : "single",
+      ...(Number.isFinite(Number(machine.tier))
+        ? {
+            minimumTier:
+              VOLTAGE_NAMES[Math.min(Number(machine.tier), VOLTAGE_NAMES.length - 1)],
+          }
+        : {}),
+    });
+  }
+  return [...byFamily.values()];
+}
+
 for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
   // SusyCore keys the object by RecipeMap#getUnlocalizedName(); translationKey
   // ends in ".name", so it must not be used for display.
   const machineType = prettyMachineName(mapName);
-  const handlers = (machinesByRecipeMap.get(mapName) || []).map(({ registryKey, machine }) => ({
-    id: registryKey,
-    label: prettyMachineName(machine.metaName || registryKey.split(":").pop() || registryKey),
-    kind: machine.isController ? "multiblock" : "single",
-  }));
+  const handlers = familyHandlers(machinesByRecipeMap.get(mapName) || []);
 
   let index = 0;
   for (const rawRecipe of Array.isArray(map.recipes) ? map.recipes : []) {
