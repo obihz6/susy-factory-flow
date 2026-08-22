@@ -129,7 +129,7 @@ function IoSection({
               iconPixelSize={
                 stat.kind === "fluid" ? (isSwatchFluid(stat) ? 36 : fluidArtPixels(20)) : undefined
               }
-              className={stat.kind === "fluid" ? "!h-5 !w-5" : "!h-5 !w-5 origin-center scale-150"}
+              className={stat.kind === "fluid" ? "!h-5 !w-5" : "!h-5 !w-5 origin-center scale-[1.125]"}
             />
           </span>
           <span className="min-w-0 flex-1 truncate text-[12px] text-slate-200">

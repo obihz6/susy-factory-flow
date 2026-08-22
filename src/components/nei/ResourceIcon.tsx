@@ -592,7 +592,9 @@ export function isSwatchFluid(
  */
 export function spriteArtPixels(box: number): number {
   const margin = Math.max(2, Math.round(box * 0.055));
-  return (box - margin * 2) * 2;
+  // Same global icon-art zoom as machineArtPixels: icons draw at 75%.
+  const ICON_ART_SCALE = 0.75;
+  return Math.round((box - margin * 2) * 2 * ICON_ART_SCALE);
 }
 
 /**
@@ -604,7 +606,9 @@ export function spriteArtPixels(box: number): number {
  * canvas is twice its art, so the image doubles the wanted art size.
  */
 export function fluidArtPixels(box: number): number {
-  return Math.round(box * 0.78 * 2);
+  // Same global icon-art zoom as machineArtPixels: icons draw at 75%.
+  const ICON_ART_SCALE = 0.75;
+  return Math.round(box * 0.78 * 2 * ICON_ART_SCALE);
 }
 
 function getFallbackIconPath(resource: Pick<ResourceAmount, "kind" | "id">): string | undefined {

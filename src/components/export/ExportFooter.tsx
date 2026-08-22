@@ -279,7 +279,7 @@ function IoColumn({
                       : undefined
                   }
                   className={
-                    stat.kind === "fluid" ? "!h-6 !w-6" : "!h-6 !w-6 origin-center scale-150"
+                    stat.kind === "fluid" ? "!h-6 !w-6" : "!h-6 !w-6 origin-center scale-[1.125]"
                   }
                 />
               </span>
