@@ -100,9 +100,12 @@ for (const entry of [
   ...(dataset.machineHandlerIcons ?? []),
 ]) {
   const resource = entry.resource;
-  if (!resource || resource.kind !== "item") continue;
+  if (!resource) continue;
   const base = resource.id.toLowerCase();
-  const file = itemMap.get(base) ?? itemMap.get(`${base}@0`);
+  const file =
+    resource.kind === "fluid"
+      ? fluidMap.get(base)
+      : itemMap.get(base) ?? itemMap.get(`${base}@0`);
   if (!file) continue;
   const source = path.join(iconDir, file);
   const target = path.join(texturesDir, file);

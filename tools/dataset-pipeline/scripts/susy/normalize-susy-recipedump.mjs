@@ -453,8 +453,24 @@ for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
     if (handlers.length > 0) recipe.machineHandlers = handlers;
     recipeMaps.add(machineType);
     recipes.push(recipe);
-    if (familyIconResources.length > 0 && !recipeMapIcons.some((icon) => icon.recipeMap === machineType)) {
-      recipeMapIcons.push({ recipeMap: machineType, resource: familyIconResources[0] });
+    if (!recipeMapIcons.some((icon) => icon.recipeMap === machineType)) {
+      // Prefer the machine's own face; fall back to the first output so a
+      // category is never left without any icon at all.
+      // A fluid square reads worse than an item sprite at tab size, so the
+      // fallback prefers the first ITEM output when the recipe has one.
+      const primaryOutput =
+        recipe.outputs.find((output) => output.kind === "item") ?? recipe.outputs[0];
+      const resource =
+        familyIconResources[0] ??
+        (primaryOutput
+          ? {
+              kind: primaryOutput.kind,
+              id: primaryOutput.id,
+              displayName: primaryOutput.displayName,
+              modId: primaryOutput.modId,
+            }
+          : undefined);
+      if (resource) recipeMapIcons.push({ recipeMap: machineType, resource });
     }
   }
 }
@@ -496,7 +512,7 @@ for (const entry of Array.isArray(raw.smelting) ? raw.smelting : []) {
         neiSlot: { x: 102, y: 22 },
       },
     ],
-    source: { datasetVersionId, recipeMap: "electric_furnace", exporter: "gtnh-oracle" },
+    source: { datasetVersionId, recipeMap: "Electric Furnace", exporter: "gtnh-oracle" },
     metadata: { synthesizedDuration: true },
   };
   recipeMaps.add("Electric Furnace");
