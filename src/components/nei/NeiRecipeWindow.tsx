@@ -74,9 +74,9 @@ export const NeiRecipeWindow = memo(function NeiRecipeWindow({
             recipe={recipe}
             layout={layout}
             scale={scale}
-            // Icon textures draw at 75% of the slot's game-fidelity size:
+            // Icon textures draw at ~56% of the slot's game-fidelity size:
             // full-size sprites read oversized against the chrome.
-            iconPixelSize={12 * scale}
+            iconPixelSize={9 * scale}
             className={canvasClassName}
             renderHandle={renderHandle}
             getSlotConnectionAttributes={getSlotConnectionAttributes}
@@ -175,8 +175,8 @@ export const NeiRecipeWindow = memo(function NeiRecipeWindow({
             recipe={recipe}
             layout={layout}
             scale={scale}
-            // Icon textures draw at 75% of the slot's game-fidelity size.
-            iconPixelSize={12 * scale}
+            // Icon textures draw at ~56% of the slot's game-fidelity size.
+            iconPixelSize={9 * scale}
             className={canvasClassName}
             renderHandle={renderHandle}
             getSlotConnectionAttributes={getSlotConnectionAttributes}
