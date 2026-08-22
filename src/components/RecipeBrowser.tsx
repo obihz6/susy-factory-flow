@@ -210,7 +210,7 @@ const RESOURCE_GRID_GAP = 4;
  * it. The handful of sprites that fill 59% of their PNG do lose their corners
  * here; that is the trade, and much past this even ordinary items start to clip.
  */
-const RESOURCE_GRID_ART = "!h-full !w-full scale-[1.4]";
+const RESOURCE_GRID_ART = "!h-full !w-full scale-[1.05]";
 const RESOURCE_PAGER_HEIGHT = 40;
 /** One mouse notch is 100 on most platforms, so one notch is one page. */
 const RESOURCE_WHEEL_PAGE_DELTA = 80;
@@ -2002,7 +2002,7 @@ function ResourceResultPage({
                 tooltip={false}
                 // Zoom the art without growing the cell (see crop picker);
                 // the wrapper crops the overflow at the 32px cell.
-                className="!h-8 !w-8 scale-[1.5]"
+                className="!h-8 !w-8 scale-[1.125]"
               />
             </span>
             <span className="min-w-0 flex-1">
