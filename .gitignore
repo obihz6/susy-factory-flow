@@ -17,6 +17,8 @@
 /.gh-artifacts-*/
 *.tar
 /public/datasets/susy/
+/.opencode
+/temp
 
 # next.js
 /.next/
