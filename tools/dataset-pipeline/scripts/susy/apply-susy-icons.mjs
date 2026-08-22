@@ -92,11 +92,34 @@ for (const recipe of dataset.recipes ?? []) {
   }
 }
 
+// Category faces (recipe maps) and machine-selector entries carry their own
+// machine-item resources; give them the same treatment as catalog entries.
+let machineFacesStamped = 0;
+for (const entry of [
+  ...(dataset.recipeMapIcons ?? []),
+  ...(dataset.machineHandlerIcons ?? []),
+]) {
+  const resource = entry.resource;
+  if (!resource || resource.kind !== "item") continue;
+  const base = resource.id.toLowerCase();
+  const file = itemMap.get(base) ?? itemMap.get(`${base}@0`);
+  if (!file) continue;
+  const source = path.join(iconDir, file);
+  const target = path.join(texturesDir, file);
+  try {
+    await fs.copyFile(source, target);
+  } catch {
+    continue;
+  }
+  resource.iconPath = `${urlRoot}/${versionId}/textures/rendered/${file}`;
+  machineFacesStamped += 1;
+}
+
 await writePlainJson(recipesPath, dataset);
 
 console.log(
   `Icons applied: ${itemsMatched} items, ${fluidsMatched} fluids (${copied} files copied, ` +
-    `${recipeSlotsStamped} recipe slots stamped).`,
+    `${recipeSlotsStamped} recipe slots stamped, ${machineFacesStamped} machine/category faces stamped).`,
 );
 
 async function readPlainJson(filePath) {

@@ -120,6 +120,17 @@ for (const item of Array.isArray(raw.items) ? raw.items : []) {
   if (id && item.displayName) itemDisplayNames.set(id, String(item.displayName));
 }
 
+/** gtMTEs metaNames double as machine-item translationKeys ("gregtech.machine.macerator.lv"). */
+const machineItemByTranslationKey = new Map();
+for (const item of Array.isArray(raw.items) ? raw.items : []) {
+  if (!item?.resource || !String(item.itemClass || "").includes("MachineItemBlock")) continue;
+  const id = itemId(item.resource, item.metadata);
+  if (!id || !item.translationKey) continue;
+  if (!machineItemByTranslationKey.has(item.translationKey)) {
+    machineItemByTranslationKey.set(item.translationKey, { id, displayName: item.displayName });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dataset accumulators
 // ---------------------------------------------------------------------------
@@ -394,6 +405,9 @@ function familyHandlers(machines) {
       id: familyKey,
       label: prettyMachineName(familyName),
       kind: machine.isController ? "multiblock" : "single",
+      // Representative machine item (lowest tier): looked up through
+      // machineItemByTranslationKey for category / selector icons.
+      _metaName: String(machine.metaName || ""),
       ...(Number.isFinite(Number(machine.tier))
         ? {
             minimumTier:
@@ -405,11 +419,31 @@ function familyHandlers(machines) {
   return [...byFamily.values()];
 }
 
+const machineHandlerIcons = [];
+
 for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
   // SusyCore keys the object by RecipeMap#getUnlocalizedName(); translationKey
   // ends in ".name", so it must not be used for display.
   const machineType = prettyMachineName(mapName);
-  const handlers = familyHandlers(machinesByRecipeMap.get(mapName) || []);
+  const families = familyHandlers(machinesByRecipeMap.get(mapName) || []);
+  const handlers = families.map(({ _metaName, ...handler }) => handler);
+
+  // The family's lowest-tier machine ITEM is the face of both the category and
+  // its selector entries; apply-susy-icons stamps its iconPath afterwards.
+  const familyIconResources = [];
+  for (const family of families) {
+    const machineItem = machineItemByTranslationKey.get(family._metaName);
+    if (!machineItem) continue;
+    const resource = {
+      kind: "item",
+      id: machineItem.id,
+      displayName: machineItem.displayName,
+      modId: modIdOf(machineItem.id),
+    };
+    addResource({ ...resource });
+    machineHandlerIcons.push({ familyId: family.id, resource });
+    familyIconResources.push(resource);
+  }
 
   let index = 0;
   for (const rawRecipe of Array.isArray(map.recipes) ? map.recipes : []) {
@@ -419,17 +453,8 @@ for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
     if (handlers.length > 0) recipe.machineHandlers = handlers;
     recipeMaps.add(machineType);
     recipes.push(recipe);
-    const primaryOutput = recipe.outputs[0];
-    if (primaryOutput && handlers.length > 0 && !recipeMapIcons.some((icon) => icon.recipeMap === machineType)) {
-      recipeMapIcons.push({
-        recipeMap: machineType,
-        resource: {
-          kind: primaryOutput.kind,
-          id: primaryOutput.id,
-          displayName: primaryOutput.displayName,
-          modId: primaryOutput.modId,
-        },
-      });
+    if (familyIconResources.length > 0 && !recipeMapIcons.some((icon) => icon.recipeMap === machineType)) {
+      recipeMapIcons.push({ recipeMap: machineType, resource: familyIconResources[0] });
     }
   }
 }
@@ -579,6 +604,7 @@ const dataset = {
   oreDictionary,
   recipeMaps: [...recipeMaps].sort(),
   ...(recipeMapIcons.length > 0 ? { recipeMapIcons } : {}),
+  ...(machineHandlerIcons.length > 0 ? { machineHandlerIcons } : {}),
   generatedAt,
 };
 
