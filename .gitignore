@@ -17,6 +17,8 @@
 /.gh-artifacts-*/
 *.tar
 /public/datasets/gtnh/
+/temp
+/.opencode
 
 # next.js
 /.next/
