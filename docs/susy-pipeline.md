@@ -21,6 +21,8 @@ local SUSY client (susy-hei-oracle injected)
 recipedump.json + rendered icons
         ▼
 normalize-susy-recipedump.mjs      → RecipeDataset (+ plain recipes.json)
+apply-susy-icons.mjs               → stamps iconPath from HEI icon maps,
+                                     copies PNGs into textures/rendered/
 build-resource-index.mjs           → resource-index.json.gz
 build-recipe-index.mjs             → recipe-index/-lookup/shards (.gz)
 gzip -c recipes.json > recipes.json.gz   ← LAST, see below
@@ -58,6 +60,19 @@ So the index builders must run against the plain line-oriented `recipes.json`
   GTNH entries only; uncovered machines fall back to dataset statistics,
   which is safe by design. Add curated SUSY entries only after verifying them
   against the game or SusyCore source — never by guessing.
+
+## Self-containedness
+
+Raw export artifacts are archived under this repo's gitignored working area
+(`temp/raw-export/recipedump.json`, `temp/icons/`) so every pipeline stage runs
+from here; nothing at runtime references another repository or install path.
+
+## First real export (0.1.16.14.1)
+
+SusyCore dump: 171 recipe maps / 44,570 machine recipes (+ crafting/smelting →
+59,345 dataset recipes), 68k items, 19.8k resources, 13k ore-dict entries;
+HEI renderer produced 36k icons (maps: `icon-map.json`, `fluid-icon-map.json`
+keyed `registry@meta#`). Icon coverage after application: 98.9% of resources.
 
 ## Version detection
 
