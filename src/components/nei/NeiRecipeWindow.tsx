@@ -7,7 +7,9 @@ import { getNeiRecipeLayout, type NeiPositionedSlot } from "@/lib/nei/layout";
 import { NeiRecipeCanvas } from "./NeiRecipeCanvas";
 
 const QUICK_SLOT_PIXEL_SIZE = 40;
-const QUICK_SLOT_ICON_PIXEL_SIZE = 64;
+// Icon textures draw at 75% of their original size: full-size sprites read
+// oversized against the slot chrome.
+const QUICK_SLOT_ICON_PIXEL_SIZE = 48;
 
 interface NeiRecipeWindowProps {
   recipe: Recipe;
