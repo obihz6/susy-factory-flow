@@ -34,7 +34,14 @@ export function NeiRecipeCard({ recipe, compact = false }: NeiRecipeCardProps) {
           <NeiButton label=">" dark />
         </div>
 
-        <NeiRecipeCanvas recipe={recipe} scale={2} className="mt-1" />
+        <NeiRecipeCanvas
+          recipe={recipe}
+          scale={2}
+          // Icon textures draw at ~56% of the slot's game-fidelity size,
+          // matching the recipe window's treatment.
+          iconPixelSize={9 * 2}
+          className="mt-1"
+        />
 
         {!compact ? (
           <footer className="mt-2 px-1 text-[18px] leading-[22px] text-[var(--mc-ink)]">
