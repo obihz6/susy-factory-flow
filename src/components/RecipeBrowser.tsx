@@ -153,21 +153,39 @@ interface RecipeBookViewport {
 /**
  * How many cards fit across, and how big to draw each one.
  *
- * SUSY: art draws at native scale 1 — density comes from columns instead, as
- * many recipes per row as the book's width allows.
+ * Readability wins over density: the scale never drops below 2 while a single
+ * column can still hold it, so a narrow book shows one large readable recipe
+ * rather than two clipped ones.
  */
 function chooseRecipeGrid(
   width: number,
   unitWidth: number = NEI_CANVAS_WIDTH,
 ): { columns: number; scale: number } {
-  // SUSY: recipe art draws at native size (scale 1) — the previous policy
-  // forced scale >= 2 and every icon read oversized. Density now comes from
-  // columns instead: as many scale-1 recipes per row as the width allows.
-  const columns = Math.max(
-    1,
-    Math.min(RECIPE_CARD_MAX_COLUMNS, Math.floor((width - CARD_GAP * (RECIPE_CARD_MAX_COLUMNS - 1)) / unitWidth)),
-  );
-  return { columns, scale: 1 };
+  const cardAtScaleTwo = unitWidth * 2 + CARD_ADD_GUTTER;
+  const columnWidth = (columns: number) => (width - CARD_GAP * (columns - 1)) / columns;
+
+  let columns = 1;
+  for (let candidate = RECIPE_CARD_MAX_COLUMNS; candidate >= 2; candidate -= 1) {
+    if (columnWidth(candidate) >= cardAtScaleTwo) {
+      columns = candidate;
+      break;
+    }
+  }
+
+  const column = columnWidth(columns);
+  if (column < cardAtScaleTwo) {
+    // A phone. One recipe, drawn to fill the width it has rather than sitting
+    // small in the middle of it: a recipe is a grid of 18px slots, and at scale 1
+    // on a 390px screen it was a postage stamp with two thirds of the drawer
+    // empty beside it. Quantised to quarter steps, because the art is pixels and
+    // a whole-pixel-ish scale keeps slot borders from smearing.
+    const filling = Math.floor(((width - CARD_ADD_GUTTER) / unitWidth) * 4) / 4;
+    return { columns: 1, scale: Math.max(1, Math.min(3, filling)) };
+  }
+
+  // A column with room to spare draws the recipe larger rather than leaving it
+  // small in the middle of an empty card.
+  return { columns, scale: Math.min(3, Math.floor(column / unitWidth)) };
 }
 
 function recipeRowHeight(scale: number, native: boolean) {
