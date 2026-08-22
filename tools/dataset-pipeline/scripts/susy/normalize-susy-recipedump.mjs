@@ -120,6 +120,43 @@ for (const item of Array.isArray(raw.items) ? raw.items : []) {
   if (id && item.displayName) itemDisplayNames.set(id, String(item.displayName));
 }
 
+/**
+ * Multiblock CONTROLLERS indexed by the tail of their name ("quencher",
+ * "electric_blast_furnace"): they carry no recipemapName, but the tail equals
+ * the recipe-map key, which is how a multi's own face gets found.
+ */
+const TIER_SUFFIX =
+  /\.(ulv|lv|mv|hv|ev|iv|luv|zpm|uv|uhv|uev|uiv|uxv|opv|max)$/i;
+const controllersByMapKey = new Map();
+for (const [registryKey, machine] of Object.entries(raw.gtMTEs || {})) {
+  if (!machine?.isController) continue;
+  const rawName = String(machine.metaName || registryKey);
+  const tail = (rawName.split(".").pop() || rawName).replace(TIER_SUFFIX, "");
+  const key = tail.toLowerCase();
+  const list = controllersByMapKey.get(key) || [];
+  list.push({ registryKey, machine, tail });
+  controllersByMapKey.set(key, list);
+}
+
+/** The controller ITEM for a recipe-map key, when one can be resolved. */
+function controllerFaceResource(mapName) {
+  const candidates = controllersByMapKey.get(String(mapName).toLowerCase());
+  if (!candidates?.length) return undefined;
+  const lowered = String(mapName).toLowerCase();
+  const chosen =
+    candidates.find((c) => c.tail.toLowerCase() === lowered) ?? candidates[0];
+  const item = machineItemByTranslationKey.get(String(chosen.machine.metaName || ""));
+  if (!item) return undefined;
+  const resource = {
+    kind: "item",
+    id: item.id,
+    displayName: item.displayName,
+    modId: modIdOf(item.id),
+  };
+  addResource({ ...resource });
+  return resource;
+}
+
 /** gtMTEs metaNames double as machine-item translationKeys ("gregtech.machine.macerator.lv"). */
 const machineItemByTranslationKey = new Map();
 for (const item of Array.isArray(raw.items) ? raw.items : []) {
@@ -382,8 +419,6 @@ for (const [registryKey, machine] of Object.entries(raw.gtMTEs || {})) {
 // ("macerator.lv"); stripping it yields the family, and the lowest-tier
 // machine represents it. Without this the alternative-machine selector fills
 // with Lv/Mv/Hv entries that duplicate the app's own tier system.
-const TIER_SUFFIX =
-  /\.(ulv|lv|mv|hv|ev|iv|luv|zpm|uv|uhv|uev|uiv|uxv|opv|max)$/i;
 const TIER_ORDER = new Map(
   ["ulv", "lv", "mv", "hv", "ev", "iv", "luv", "zpm", "uv", "uhv"].map(
     (tier, index) => [tier, index],
@@ -456,12 +491,14 @@ for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
     if (!recipeMapIcons.some((icon) => icon.recipeMap === machineType)) {
       // Prefer the machine's own face; fall back to the first output so a
       // category is never left without any icon at all.
-      // A fluid square reads worse than an item sprite at tab size, so the
-      // fallback prefers the first ITEM output when the recipe has one.
+      // Face priority: the family's own machine item, then the multiblock
+      // CONTROLLER, then the first ITEM output (a fluid square reads worse at
+      // tab size), then any output.
       const primaryOutput =
         recipe.outputs.find((output) => output.kind === "item") ?? recipe.outputs[0];
       const resource =
         familyIconResources[0] ??
+        controllerFaceResource(mapName) ??
         (primaryOutput
           ? {
               kind: primaryOutput.kind,
