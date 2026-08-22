@@ -42,12 +42,15 @@ describe("normalize-susy-recipedump", () => {
     expect(dataset.sourceInfo.sourceId).toBe("gtnh-oracle");
   });
 
-  it("prettifies recipe map names and registers machine handlers", () => {
+  it("prettifies recipe map names and folds tier variants into one family", () => {
     const maceratorRecipes = dataset.recipes.filter((r) => r.machineType === "Macerator");
     expect(maceratorRecipes.length).toBe(3);
+    // Tier variants (macerator.lv / .hv) fold into ONE family so the
+    // alternative-machine selector lists machines, not voltage tiers.
     const handlers = maceratorRecipes[0].machineHandlers;
-    expect(handlers.map((h) => h.label)).toEqual(["Lv", "Hv"]);
-    expect(handlers.every((h) => h.kind === "single")).toBe(true);
+    expect(handlers.map((h) => h.label)).toEqual(["Macerator"]);
+    expect(handlers[0].kind).toBe("single");
+    expect(handlers[0].minimumTier).toBe("LV");
   });
 
   it("maps item inputs and outputs to GTNH-style resource ids", () => {

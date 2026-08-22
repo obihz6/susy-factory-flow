@@ -1412,7 +1412,7 @@ function CircuitChip({ circuit }: { circuit: RecipeProgrammedCircuit }) {
             tooltip={false}
             showAmount={false}
             showConsumedState={false}
-            className="!h-9 !w-9 origin-center scale-[1.125]"
+            className="!h-9 !w-9 origin-center scale-150"
           />
         ) : (
           // Not an item, a silhouette: the same drawn circuit the recipe book
@@ -1600,7 +1600,7 @@ function GlanceIoRow({ port }: { port: RailPort }) {
                   : fluidArtPixels(36)
                 : undefined
             }
-            className={port.kind === "fluid" ? "!h-9 !w-9" : "!h-9 !w-9 origin-center scale-[1.125]"}
+            className={port.kind === "fluid" ? "!h-9 !w-9" : "!h-9 !w-9 origin-center scale-150"}
           />
         ) : null}
       </span>
@@ -2619,7 +2619,7 @@ export function PortChip({
                   : fluidArtPixels(28)
                 : undefined
             }
-            className={port.kind === "fluid" ? "" : "!h-7 !w-7 origin-center scale-[1.125]"}
+            className={port.kind === "fluid" ? "" : "!h-7 !w-7 origin-center scale-150"}
           />
         ) : (
           <span className="block h-7 w-7 border border-[var(--mc-47)] bg-[var(--mc-55)]" />

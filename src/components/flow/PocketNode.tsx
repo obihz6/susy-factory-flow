@@ -562,7 +562,7 @@ function CrossingRow({
               : fluidArtPixels(24)
             : undefined
         }
-        className={crossing.kind === "fluid" ? "!h-6 !w-6" : "!h-6 !w-6 origin-center scale-[1.125]"}
+        className={crossing.kind === "fluid" ? "!h-6 !w-6" : "!h-6 !w-6 origin-center scale-150"}
       />
     </span>
   );
@@ -723,7 +723,7 @@ function PocketGlanceIoRow({
                 : fluidArtPixels(36)
               : undefined
           }
-          className={crossing.kind === "fluid" ? "!h-9 !w-9" : "!h-9 !w-9 origin-center scale-[1.125]"}
+          className={crossing.kind === "fluid" ? "!h-9 !w-9" : "!h-9 !w-9 origin-center scale-150"}
         />
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
