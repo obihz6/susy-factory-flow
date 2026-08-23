@@ -94,24 +94,13 @@ the tracking script in the production build.
 
 ## Load Real Recipes
 
-On startup the app automatically fetches `/datasets/gtnh/datasets.manifest.json`. If the
-manifest contains versions, it loads `latestStableVersion`, then `latestDailyVersion`, then
-the first listed version. The `GTNH version` selector can switch between manifest entries.
-
-In production, `/datasets/gtnh` is a symlink inside each release that points to the
-persistent server path:
-
 ```bash
-$HOME/data/gtnh-factory-flow/datasets/gtnh
-```
-
-That dataset directory is intentionally ignored by git. Local development can either
-create the same `public/datasets/gtnh` symlink or point the UI at a remote manifest.
-
-To use a remote manifest, set:
-
-```bash
-NEXT_PUBLIC_GTNH_DATASET_MANIFEST_URL=https://example.com/datasets/gtnh/datasets.manifest.json
+SUSY_INSTANCE_DIR=~/path/to/susy \
+SUSY_DATASET_OUT_DIR=public/datasets/susy/<version> \
+SUSY_RAW_EXPORT_DIR=.pipeline/susy-export \
+SUSY_DATASET_VERSION_ID=<version> \
+SUSY_DATASET_VERSION_LABEL="SUSY <version>" \
+  bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
 ```
 
 ## Public Repository Notes
