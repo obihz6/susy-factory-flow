@@ -76,6 +76,7 @@ const resourceCatalog = {
   recipeMaps: dataset.recipeMaps ?? [],
   recipeMapIcons: dataset.recipeMapIcons ?? [],
   machineHandlerIcons: dataset.machineHandlerIcons ?? [],
+  plantSourceKeys: dataset.plantSourceKeys ?? [],
   generatedAt: dataset.generatedAt,
   recipeCount: dataset.recipes.length,
   shardSize,
@@ -338,6 +339,7 @@ async function readLineDelimitedDataset(filePath) {
     "recipeMapIcons",
     "machineHandlerIcons",
     "resourceIndex",
+    "plantSourceKeys",
   ]);
   let currentArrayKey;
   let skippingArray = false;

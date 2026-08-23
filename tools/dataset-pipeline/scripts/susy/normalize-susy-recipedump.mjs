@@ -625,6 +625,57 @@ for (const entry of Array.isArray(raw.crafting) ? raw.crafting : []) {
 }
 
 // ---------------------------------------------------------------------------
+// Growable resources (the browser's "Plants" filter)
+// ---------------------------------------------------------------------------
+
+const VANILLA_PLANT_IDS = new Set(
+  [
+    "minecraft:wheat",
+    "minecraft:wheat_seeds",
+    "minecraft:carrot",
+    "minecraft:potato",
+    "minecraft:beetroot",
+    "minecraft:beetroot_seeds",
+    "minecraft:sugar_cane",
+    "minecraft:cocoa_beans",
+    "minecraft:cactus",
+    "minecraft:melon_slice",
+    "minecraft:pumpkin",
+    "minecraft:sweet_berries",
+    "minecraft:glow_berries",
+    "minecraft:nether_wart",
+    "minecraft:kelp",
+    "minecraft:bamboo",
+    "minecraft:apple",
+    "minecraft:brown_mushroom",
+    "minecraft:red_mushroom",
+  ],
+);
+
+const plantSourceKeys = new Set();
+for (const id of VANILLA_PLANT_IDS) {
+  if (resources.has(`item:${id}`)) plantSourceKeys.add(`item:${id}`);
+}
+for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
+  if (!/greenhouse/i.test(mapName)) continue;
+  for (const rawRecipe of Array.isArray(map.recipes) ? map.recipes : []) {
+    const collectStack = (stack) => {
+      if (!stack?.resource) return;
+      const id = itemId(stack.resource, stack.metadata);
+      if (id) plantSourceKeys.add(`item:${id}`);
+    };
+    for (const input of Array.isArray(rawRecipe.inputs) ? rawRecipe.inputs : []) {
+      for (const stack of input.inputStacks || []) collectStack(stack);
+    }
+    for (const input of Array.isArray(rawRecipe.inputsFluid) ? rawRecipe.inputsFluid : []) {
+      // Seeds and crops are items; skip fluid greenhouse inputs.
+    }
+    for (const output of Array.isArray(rawRecipe.outputs) ? rawRecipe.outputs : []) collectStack(output);
+    for (const output of Array.isArray(rawRecipe.chancedOutputs) ? rawRecipe.chancedOutputs : []) collectStack(output);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
 
@@ -658,6 +709,7 @@ const dataset = {
   recipeMaps: [...recipeMaps].sort(),
   ...(recipeMapIcons.length > 0 ? { recipeMapIcons } : {}),
   ...(machineHandlerIcons.length > 0 ? { machineHandlerIcons } : {}),
+  ...(plantSourceKeys.size > 0 ? { plantSourceKeys: [...plantSourceKeys].sort() } : {}),
   generatedAt,
 };
 
