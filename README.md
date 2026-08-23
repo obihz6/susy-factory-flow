@@ -95,11 +95,6 @@ the tracking script in the production build.
 ## Load Real Recipes
 
 ```bash
-SUSY_INSTANCE_DIR=~/path/to/susy \
-SUSY_DATASET_OUT_DIR=public/datasets/susy/<version> \
-SUSY_RAW_EXPORT_DIR=.pipeline/susy-export \
-SUSY_DATASET_VERSION_ID=<version> \
-SUSY_DATASET_VERSION_LABEL="SUSY <version>" \
   bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
 ```
 
