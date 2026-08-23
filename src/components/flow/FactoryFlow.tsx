@@ -6301,7 +6301,7 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
       // beat behind on a small board, and frozen at the drag's start on a
       // big one).
       const dragging = activelyDraggedNodeIds.size > 0;
-      let occlusionBounds: Array<{
+      const occlusionBounds: Array<{
         left: number;
         top: number;
         right: number;
