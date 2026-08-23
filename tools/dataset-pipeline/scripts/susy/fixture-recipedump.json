@@ -3,7 +3,12 @@
     { "resource": "gregtech:meta_item_1", "metadata": 1204, "displayName": "Iron Ore" },
     { "resource": "minecraft:iron_ingot", "metadata": 0, "displayName": "Iron Ingot" },
     { "resource": "gregtech:integrated_circuit", "metadata": 7, "displayName": "Programmed Circuit (Config 7)" },
-    { "resource": "gregtech:dust", "metadata": 555, "displayName": "Iron Dust" }
+    { "resource": "gregtech:dust", "metadata": 555, "displayName": "Iron Dust" },
+    { "resource": "minecraft:wheat_seeds", "metadata": 0, "displayName": "Seeds" },
+    { "resource": "minecraft:wheat", "metadata": 0, "displayName": "Wheat" },
+    { "resource": "minecraft:carrot", "metadata": 0, "displayName": "Carrot" },
+    { "resource": "minecraft:reeds", "metadata": 0, "displayName": "Sugar Canes" },
+    { "resource": "minecraft:cactus", "metadata": 0, "displayName": "Cactus" }
   ],
   "fluids": [
     {
@@ -117,6 +122,130 @@
           "inputsFluid": [],
           "outputs": [
             { "resource": "gregtech:dust", "count": 1, "metadata": 555 }
+          ],
+          "chancedOutputs": null,
+          "chancedFluidOutputs": null,
+          "fluidOutputs": []
+        }
+      ]
+    },
+    "greenhouse_plant": {
+      "translationKey": "recipemap.greenhouse_plant.name",
+      "maxInputs": 3,
+      "maxFluidInputs": 1,
+      "maxOutputs": 6,
+      "maxFluidOutputs": 1,
+      "recipes": [
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 60,
+          "duration": 600,
+          "properties": [],
+          "categoryName": "greenhouse_plant",
+          "categoryModID": "gregtech",
+          "categoryUniqueID": "gregtech:greenhouse_plant",
+          "inputs": [
+            {
+              "amount": 8,
+              "oreDict": -1,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "minecraft:wheat_seeds", "count": 8, "metadata": 0 }],
+              "inputFluidStack": {}
+            },
+            {
+              "amount": 1,
+              "oreDict": -1,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "gregtech:meta_item_1", "count": 1, "metadata": 461 }],
+              "inputFluidStack": {}
+            }
+          ],
+          "inputsFluid": [],
+          "outputs": [
+            { "resource": "minecraft:wheat_seeds", "count": 12, "metadata": 0 },
+            { "resource": "minecraft:wheat", "count": 16, "metadata": 0 }
+          ],
+          "chancedOutputs": null,
+          "chancedFluidOutputs": null,
+          "fluidOutputs": []
+        },
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 60,
+          "duration": 600,
+          "properties": [],
+          "categoryName": "greenhouse_plant",
+          "categoryModID": "gregtech",
+          "categoryUniqueID": "gregtech:greenhouse_plant",
+          "inputs": [
+            {
+              "amount": 8,
+              "oreDict": -1,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "minecraft:carrot", "count": 8, "metadata": 0 }],
+              "inputFluidStack": {}
+            },
+            {
+              "amount": 1,
+              "oreDict": -1,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "gregtech:meta_item_1", "count": 1, "metadata": 461 }],
+              "inputFluidStack": {}
+            }
+          ],
+          "inputsFluid": [],
+          "outputs": [
+            { "resource": "minecraft:carrot", "count": 16, "metadata": 0 }
+          ],
+          "chancedOutputs": null,
+          "chancedFluidOutputs": null,
+          "fluidOutputs": []
+        },
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 60,
+          "duration": 600,
+          "properties": [],
+          "categoryName": "greenhouse_plant",
+          "categoryModID": "gregtech",
+          "categoryUniqueID": "gregtech:greenhouse_plant",
+          "inputs": [
+            {
+              "amount": 8,
+              "oreDict": -1,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "minecraft:reeds", "count": 8, "metadata": 0 }],
+              "inputFluidStack": {}
+            }
+          ],
+          "inputsFluid": [],
+          "outputs": [
+            { "resource": "minecraft:reeds", "count": 32, "metadata": 0 }
+          ],
+          "chancedOutputs": null,
+          "chancedFluidOutputs": null,
+          "fluidOutputs": []
+        },
+        {
+          "class": "class gregtech.api.recipes.Recipe",
+          "EUt": 60,
+          "duration": 600,
+          "properties": [],
+          "categoryName": "greenhouse_plant",
+          "categoryModID": "gregtech",
+          "categoryUniqueID": "gregtech:greenhouse_plant",
+          "inputs": [
+            {
+              "amount": 4,
+              "oreDict": -1,
+              "nonConsumable": true,
+              "inputStacks": [{ "resource": "minecraft:sand", "count": 4, "metadata": 0 }],
+              "inputFluidStack": {}
+            }
+          ],
+          "inputsFluid": [],
+          "outputs": [
+            { "resource": "minecraft:cactus", "count": 16, "metadata": 0 }
           ],
           "chancedOutputs": null,
           "chancedFluidOutputs": null,

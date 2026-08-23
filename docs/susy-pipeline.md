@@ -29,16 +29,34 @@ gzip -c recipes.json > recipes.json.gz   ← LAST, see below
 rebuild-manifest.mjs               → datasets.manifest.json
 ```
 
-Run it end to end:
+Run it end to end (no environment needed):
 
 ```bash
-SUSY_INSTANCE_DIR=~/path/to/susy \
-SUSY_DATASET_OUT_DIR=public/datasets/susy/<version> \
-SUSY_RAW_EXPORT_DIR=.pipeline/susy-export \
-SUSY_DATASET_VERSION_ID=<version> \
-SUSY_DATASET_VERSION_LABEL="SUSY <version>" \
-  bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
+bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
 ```
+
+The runner resolves the instance itself, in this order:
+
+1. `SUSY_INSTANCE_DIR` when set (validated: pack.toml + real mod jars).
+2. Auto-detection: `./temp/.minecraft`, repo-local SUSY checkouts under
+   `./temp`, known launcher instance roots (Prism/PolyMC/MultiMC/ATLauncher/
+   CurseForge/GDLauncher, Linux and Windows paths) and a bounded
+   `*supersymmetry*` scan under the home directory.
+3. Nothing found: a barebone instance is downloaded into `./temp/.minecraft`
+   (`bootstrap-susy-instance.mjs`) — pack repo files, every packwiz-declared
+   mod (CurseForge-API-excluded mods are rescued straight from the CDN), a
+   local Temurin 8 JRE (1.12.2 Forge cannot run on modern JVMs), the Forge
+   client runtime and a generated `launch-susy-client.sh` (+ `.cmd` on
+   Windows). Every step is resumable; `SUSY_BOOTSTRAP=0` disables the
+   fallback and `SUSY_BOOTSTRAP_REF` pins a release tag or branch.
+
+Version id and label come from the instance's pack.toml unless
+`SUSY_DATASET_VERSION_ID`/`SUSY_DATASET_VERSION_LABEL` override them; the
+oracle jar comes from `SUSY_HEI_ORACLE_JAR` or the newest build under
+`tools/dataset-pipeline/susy-hei-oracle` or `temp/susy-hei-oracle`.
+`resolve-susy-instance.mjs --json` prints the same resolution as JSON for
+scripts and CI. Windows users run the export under Git Bash; the bootstrap
+itself is plain Node and works in cmd/PowerShell too.
 
 ## Ordering constraint (do not "fix")
 
