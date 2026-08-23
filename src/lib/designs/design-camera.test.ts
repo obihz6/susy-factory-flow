@@ -83,7 +83,7 @@ describe("design cameras", () => {
     expect(readDesignCamera("nan")).toBeUndefined();
 
     store.set(
-      "gtnh-factory-flow.design-cameras.v1",
+      "susy-factory-flow.design-cameras.v1",
       JSON.stringify({ good: { x: 1, y: 2, zoom: 1 }, bad: { x: "left", y: 2, zoom: 1 } }),
     );
     expect(readDesignCamera("good")).toEqual({ x: 1, y: 2, zoom: 1 });
@@ -91,7 +91,7 @@ describe("design cameras", () => {
   });
 
   it("shrugs off a corrupt blob", () => {
-    store.set("gtnh-factory-flow.design-cameras.v1", "not json at all");
+    store.set("susy-factory-flow.design-cameras.v1", "not json at all");
     expect(readDesignCamera("alpha")).toBeUndefined();
 
     writeDesignCamera("alpha", { x: 5, y: 5, zoom: 1 });

@@ -185,10 +185,10 @@ export function ExportFooter({
             </div>
             <div className="mt-1.5 text-[13px]">
               <span style={{ color: palette.brand }} className="font-semibold">
-                gtnhplanner.com
+                susyplanner.local
               </span>
               {gameVersion ? (
-                <span style={{ color: palette.muted }}> · GTNH {gameVersion}</span>
+                <span style={{ color: palette.muted }}> · SUSY {gameVersion}</span>
               ) : null}
             </div>
           </div>

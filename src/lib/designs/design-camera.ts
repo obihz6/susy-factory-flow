@@ -36,7 +36,7 @@ export interface BoardCamera {
   zoom: number;
 }
 
-const CAMERA_STORAGE_KEY = "gtnh-factory-flow.design-cameras.v1";
+const CAMERA_STORAGE_KEY = "susy-factory-flow.design-cameras.v1";
 
 /**
  * How many tabs' cameras to keep. Well past the number of tabs anyone has open,

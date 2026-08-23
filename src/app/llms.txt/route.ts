@@ -45,13 +45,13 @@ export async function GET() {
   const plans = await topPlans(base);
 
   const lines = [
-    "# GTNH Planner",
+    "# SUSY Planner",
     "",
-    "> Free browser-based factory planner and recipe calculator for GregTech: New Horizons (GTNH), the Minecraft expert modpack. Draw production chains on an interactive flowchart, balance machine ratios, compute EU/t power draw and throughput, and share plans with the community. No account and no install needed.",
+    "> Free browser-based factory planner and recipe calculator for Supersymmetry (SUSY), the Minecraft GregTech modpack. Draw production chains on an interactive flowchart, balance machine ratios, compute EU/t power draw and throughput, and share plans with the community. No account and no install needed.",
     "",
     "Key facts:",
     "",
-    "- Carries full recipe data for GTNH 2.8.4 and 2.9, exported from the game itself (NEI/RecEx), including multiblock machines, ore dictionary alternatives, and programmed circuit settings.",
+    "- Carries full recipe data exported from the game itself (HEI), including multiblock machines, ore dictionary alternatives, and programmed circuit settings.",
     "- Models GregTech mechanics faithfully: voltage tiers and overclocking, parallel processing on multiblocks, heat bonuses on the Electric Blast Furnace family, machine-specific speed and power coefficients.",
     "- A solver computes steady-state flow for the whole factory at once: what every machine produces and consumes per second, where the bottleneck is, and how full each machine runs.",
     "- Plans export as shareable links, JSON, PNG, or GIF. Opening a shared link loads the full plan, editable, with nothing to sign up for.",

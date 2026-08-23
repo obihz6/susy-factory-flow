@@ -301,6 +301,20 @@ function IconImage({
  * never seen at all, which is the whole point: the flash it replaces was the
  * complaint, so it must not become a flash of its own.
  */
+/**
+ * Global icon-texture scale. Every sprite this component draws renders at 75%
+ * of its computed size, so the per-surface multipliers upstream (crop zooms,
+ * art-pixel helpers, slot constants) keep their relative relationships while
+ * everything reads a quarter smaller.
+ */
+const TEXTURE_SCALE = 0.5;
+
+function textureSize(iconPixelSize?: number): number | undefined {
+  return iconPixelSize === undefined
+    ? undefined
+    : Math.max(1, Math.round(iconPixelSize * TEXTURE_SCALE));
+}
+
 function SpriteImage({
   resource,
   iconPath,
@@ -339,9 +353,14 @@ function SpriteImage({
           // and only `visibility` takes it with the picture.
           status === "loaded" ? "" : "invisible",
         ].join(" ")}
-        style={{
-          ...(iconPixelSize ? { width: iconPixelSize, height: iconPixelSize } : undefined),
-        }}
+        style={
+          textureSize(iconPixelSize)
+            ? {
+                width: textureSize(iconPixelSize),
+                height: textureSize(iconPixelSize),
+              }
+            : { transform: `scale(${TEXTURE_SCALE})` }
+        }
       />
     </>
   );
@@ -375,7 +394,9 @@ function AspectIconImage({
   iconPixelSize?: number;
 }) {
   const color = resource.dominantColor ?? getFallbackAspectColor(resource.id);
-  const sizeStyle = iconPixelSize ? { width: iconPixelSize, height: iconPixelSize } : undefined;
+  const sizeStyle = textureSize(iconPixelSize)
+    ? { width: textureSize(iconPixelSize), height: textureSize(iconPixelSize) }
+    : ({ transform: `scale(${TEXTURE_SCALE})` } as React.CSSProperties);
 
   return (
     <span
@@ -434,6 +455,7 @@ function FluidIconImage({
   iconPixelSize?: number;
 }) {
   const color = resource.dominantColor ?? getFallbackFluidColor(resource.id);
+  const sized = textureSize(iconPixelSize);
 
   return (
     <span
@@ -441,9 +463,13 @@ function FluidIconImage({
       aria-label={resourceLabel(resource)}
       className="minecraft-pixel-art relative block overflow-hidden"
       style={
-        iconPixelSize
-          ? { width: iconPixelSize * FLUID_ICON_SCALE, height: iconPixelSize * FLUID_ICON_SCALE }
-          : { width: `${FLUID_ICON_SCALE * 100}%`, height: `${FLUID_ICON_SCALE * 100}%` }
+        sized
+          ? { width: sized * FLUID_ICON_SCALE, height: sized * FLUID_ICON_SCALE }
+          : {
+              width: `${FLUID_ICON_SCALE * 100}%`,
+              height: `${FLUID_ICON_SCALE * 100}%`,
+              transform: `scale(${TEXTURE_SCALE})`,
+            }
       }
     >
       <span className="absolute inset-0" style={{ backgroundColor: color }} />
@@ -637,7 +663,9 @@ function AtlasIconImage({
           : "minecraft-pixel-art block h-[calc(200%-8px)] w-[calc(200%-8px)] max-w-none bg-no-repeat"
       }
       style={{
-        ...(iconPixelSize ? { width: iconPixelSize, height: iconPixelSize } : undefined),
+        ...(textureSize(iconPixelSize)
+          ? { width: textureSize(iconPixelSize), height: textureSize(iconPixelSize) }
+          : { transform: `scale(${TEXTURE_SCALE})` }),
         backgroundImage: `url('${atlas.imagePath}')`,
         backgroundSize: `${(atlas.atlasWidth / atlas.width) * 100}% ${
           (atlas.atlasHeight / atlas.height) * 100

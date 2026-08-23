@@ -34,7 +34,7 @@ export interface BoardMotion {
   valueMotion: boolean;
 }
 
-const BOARD_MOTION_STORAGE_KEY = "gtnh-factory-flow-board-motion";
+const BOARD_MOTION_STORAGE_KEY = "susy-factory-flow-board-motion";
 
 /** How long a card glides onto its cell. Mirrored in globals.css. */
 export const MOVE_SNAP_MS = 120;

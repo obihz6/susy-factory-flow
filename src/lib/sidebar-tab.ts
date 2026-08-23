@@ -10,7 +10,7 @@
  * `openSetupsTab` stays where it is. It carries a shelf SCOPE as well as a tab,
  * and the Setups panel listens for that separately.
  */
-export const OPEN_SIDEBAR_TAB_EVENT = "gtnh:open-sidebar-tab";
+export const OPEN_SIDEBAR_TAB_EVENT = "susy:open-sidebar-tab";
 
 export type SidebarTab = "items" | "blueprints" | "setups";
 

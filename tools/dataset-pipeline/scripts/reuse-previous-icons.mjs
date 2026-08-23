@@ -85,10 +85,10 @@ function reusableIcon(resource, previousVersionId, currentVersionId) {
 }
 
 function rewriteDatasetPath(value, previousVersionId, currentVersionId) {
-  if (typeof value !== "string" || !value.includes(`/datasets/gtnh/${previousVersionId}/`)) {
+  if (typeof value !== "string" || !value.includes(`/datasets/susy/${previousVersionId}/`)) {
     return undefined;
   }
-  return value.replace(`/datasets/gtnh/${previousVersionId}/`, `/datasets/gtnh/${currentVersionId}/`);
+  return value.replace(`/datasets/susy/${previousVersionId}/`, `/datasets/susy/${currentVersionId}/`);
 }
 
 async function copyTextureDir(name) {

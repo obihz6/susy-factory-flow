@@ -47,7 +47,7 @@ import { formatRelativeDate } from "@/components/shelf-cards";
  * else, reset while the board has drifted.
  */
 
-const OPEN_STORAGE_KEY = "gtnh-factory-flow.plan-card-open.v1";
+const OPEN_STORAGE_KEY = "susy-factory-flow.plan-card-open.v1";
 
 /** The header-family square button the bar is made of. */
 const BAR_BUTTON =

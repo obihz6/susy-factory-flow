@@ -5,7 +5,10 @@ import crypto from "node:crypto";
 import readline from "node:readline";
 import { createGunzip } from "node:zlib";
 
-const rootDir = process.env.GTNH_DATASETS_ROOT ?? path.join("public", "datasets", "gtnh");
+const rootDir = process.env.DATASETS_ROOT ?? process.env.GTNH_DATASETS_ROOT ?? path.join("public", "datasets", "susy");
+// URL prefix under which the dataset files are served. DATASETS_URL_ROOT keeps
+// a non-standard hosting layout possible without touching the manifest shape.
+const datasetsUrlRoot = process.env.DATASETS_URL_ROOT ?? "/datasets/susy";
 const entries = existsSync(rootDir) ? await fs.readdir(rootDir, { withFileTypes: true }) : [];
 const discoveredVersions = [];
 
@@ -34,11 +37,11 @@ for (const entry of entries) {
     gtnhVersion: dataset.gtnhVersion,
     channel: inferChannel(dataset.datasetVersionId),
     publishedAt: dataset.generatedAt,
-    manifestPath: "/datasets/gtnh/datasets.manifest.json",
-    recipeDatasetPath: `/datasets/gtnh/${dataset.datasetVersionId}/${path.basename(recipesPath)}`,
-    resourceIndexPath: `/datasets/gtnh/${dataset.datasetVersionId}/${path.basename(resourceIndexPath)}`,
-    recipeIndexPath: `/datasets/gtnh/${dataset.datasetVersionId}/${path.basename(recipeIndexPath)}`,
-    recipeLookupIndexPath: `/datasets/gtnh/${dataset.datasetVersionId}/${path.basename(recipeLookupIndexPath)}`,
+    manifestPath: `${datasetsUrlRoot}/datasets.manifest.json`,
+    recipeDatasetPath: `${datasetsUrlRoot}/${dataset.datasetVersionId}/${path.basename(recipesPath)}`,
+    resourceIndexPath: `${datasetsUrlRoot}/${dataset.datasetVersionId}/${path.basename(resourceIndexPath)}`,
+    recipeIndexPath: `${datasetsUrlRoot}/${dataset.datasetVersionId}/${path.basename(recipeIndexPath)}`,
+    recipeLookupIndexPath: `${datasetsUrlRoot}/${dataset.datasetVersionId}/${path.basename(recipeLookupIndexPath)}`,
     checksumSha256,
     sourceInfo: dataset.sourceInfo,
   });

@@ -13,7 +13,7 @@ import {
  */
 function current() {
   return JSON.parse(
-    window.localStorage.getItem("gtnh-factory-flow-workspace-view") ?? "{}",
+    window.localStorage.getItem("susy-factory-flow-workspace-view") ?? "{}",
   ) as { hiddenResourceKeys: string[]; favouriteResourceKeys: string[] };
 }
 

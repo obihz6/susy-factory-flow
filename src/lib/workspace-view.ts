@@ -45,7 +45,7 @@ export interface WorkspaceView {
   favouriteResourceKeys: string[];
 }
 
-const WORKSPACE_VIEW_STORAGE_KEY = "gtnh-factory-flow-workspace-view";
+const WORKSPACE_VIEW_STORAGE_KEY = "susy-factory-flow-workspace-view";
 
 export const DEFAULT_WORKSPACE_VIEW: WorkspaceView = {
   leftPanelOpen: true,
