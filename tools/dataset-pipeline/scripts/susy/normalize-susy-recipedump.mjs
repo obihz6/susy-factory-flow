@@ -625,6 +625,123 @@ for (const entry of Array.isArray(raw.crafting) ? raw.crafting : []) {
 }
 
 // ---------------------------------------------------------------------------
+// Crop Farm sources: hand-worked farmland crops (the board's "Add crop farm"
+// picker). The pack ships no CropsNH-style crop catalogue, so the picker's
+// entries derive from the Greenhouse Plant recipes - every crop it grows on
+// TILLED SOIL. Sugar cane and cactus never see a hoe and are excluded; the
+// dump plants cactus from raw sand, which fails the seed test on its own.
+// One recipe = one planted crop over one greenhouse growth cycle.
+// ---------------------------------------------------------------------------
+
+const CROP_FARM_MACHINE_TYPE = "Crop Farm";
+const NOT_TILLED_SOIL_PLANT_IDS = new Set(["minecraft:reeds", "minecraft:cactus", "minecraft:sand"]);
+
+/** The planted item: the first input stack that is not a dialled circuit. */
+function plantedStackOf(rawRecipe) {
+  for (const input of Array.isArray(rawRecipe.inputs) ? rawRecipe.inputs : []) {
+    for (const stack of input.inputStacks || []) {
+      const resource = String(stack.resource || "").toLowerCase();
+      if (isCircuitStack(stack) || resource === "gregtech:meta_item_1") continue;
+      return {
+        stack,
+        plantCount: Math.max(1, Number(input.amount) || Number(stack.count) || 1),
+      };
+    }
+  }
+  return undefined;
+}
+
+const seenCropFarmSeeds = new Set();
+let cropFarmIconPushed = false;
+for (const [mapName, map] of Object.entries(raw.recipemaps || {})) {
+  if (!/greenhouse/i.test(mapName) || !/plant/i.test(mapName)) continue;
+  for (const rawRecipe of Array.isArray(map.recipes) ? map.recipes : []) {
+    const planted = plantedStackOf(rawRecipe);
+    if (!planted) continue;
+    const seedId = itemId(planted.stack.resource, planted.stack.metadata);
+    if (!seedId || NOT_TILLED_SOIL_PLANT_IDS.has(seedId)) continue;
+    // The dump repeats every greenhouse recipe; keep one entry per crop.
+    if (seenCropFarmSeeds.has(seedId)) continue;
+    seenCropFarmSeeds.add(seedId);
+
+    const perPlantAmount = (count) =>
+      Math.max(0, Math.round(((Number(count) || 0) / planted.plantCount) * 1e6) / 1e6);
+    const outputs = [];
+    for (const output of Array.isArray(rawRecipe.outputs) ? rawRecipe.outputs : []) {
+      const resource = stackToResource(output);
+      if (!resource) continue;
+      const amount = perPlantAmount(output.count);
+      if (!(amount > 0)) continue;
+      outputs.push({
+        kind: resource.kind,
+        id: resource.id,
+        amount,
+        displayName: resource.displayName,
+        modId: resource.modId,
+      });
+    }
+    if (outputs.length === 0) continue;
+
+    const seedDisplayName = itemDisplayNames.get(seedId);
+    addResource({
+      kind: "item",
+      id: seedId,
+      displayName: seedDisplayName,
+      modId: modIdOf(seedId),
+    });
+
+    // The crop is named by its harvest - the first output that differs from
+    // the planted item ("Wheat" out of seeds) - or by what was planted when
+    // the crop is its own seed (carrots, potatoes).
+    const produceOutput = outputs.find((output) => output.id !== seedId) ?? outputs[0];
+    const cropLabel =
+      produceOutput?.displayName ?? produceOutput?.id ?? seedDisplayName ?? seedId;
+
+    const recipe = {
+      id: sha16(`susy:crop-farm:${seedId}`),
+      name: `${CROP_FARM_MACHINE_TYPE}: ${cropLabel}`,
+      kind: "crop_produce",
+      machineType: CROP_FARM_MACHINE_TYPE,
+      category: "crop-farm",
+      minimumTier: "NONE",
+      durationTicks: Math.max(1, Number(rawRecipe.duration) || 1),
+      eut: 0,
+      inputs: [
+        {
+          kind: "item",
+          id: seedId,
+          amount: 1,
+          displayName: seedDisplayName,
+          modId: modIdOf(seedId),
+          consumed: false,
+        },
+      ],
+      outputs,
+      notes:
+        "One hand-worked farmland crop. Yields follow the pack's own greenhouse growth cycle scaled to a single planted crop; the seed stays in the field. Machine count = crops planted.",
+      source: {
+        datasetVersionId,
+        recipeMap: CROP_FARM_MACHINE_TYPE,
+        exporter: "gtnh-oracle",
+        sourceMod: rawRecipe.categoryModID || undefined,
+        rawRecipeId: rawRecipe.categoryUniqueID || undefined,
+      },
+    };
+    assignSlots(recipe);
+    recipeMaps.add(CROP_FARM_MACHINE_TYPE);
+    recipes.push(recipe);
+
+    if (!cropFarmIconPushed) {
+      recipeMapIcons.push({
+        recipeMap: CROP_FARM_MACHINE_TYPE,
+        resource: { kind: "item", id: seedId, displayName: seedDisplayName, modId: modIdOf(seedId) },
+      });
+      cropFarmIconPushed = true;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Growable resources (the browser's "Plants" filter)
 // ---------------------------------------------------------------------------
 

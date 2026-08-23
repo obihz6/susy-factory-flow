@@ -127,8 +127,52 @@ describe("normalize-susy-recipedump", () => {
   it("lists distinct recipe maps sorted", () => {
     expect(dataset.recipeMaps).toEqual([
       "Crafting Table",
+      "Crop Farm",
       "Electric Furnace",
+      "Greenhouse Plant",
       "Macerator",
     ]);
+  });
+
+  describe("crop farm sources (tilled-soil crops)", () => {
+    const cropFarms = dataset.recipes.filter((r) => r.machineType === "Crop Farm");
+
+    it("derives one recipe per planted farmland crop from the greenhouse", () => {
+      // Wheat and carrot only: sugar cane grows against water, cactus on sand,
+      // so neither ever becomes a crop farm.
+      expect(cropFarms.map((r) => r.name)).toEqual([
+        "Crop Farm: Wheat",
+        "Crop Farm: Carrot",
+      ]);
+      for (const recipe of cropFarms) {
+        expect(recipe.kind).toBe("crop_produce");
+        expect(recipe.minimumTier).toBe("NONE");
+        expect(recipe.eut).toBe(0);
+        expect(recipe.durationTicks).toBe(600);
+        expect(recipe.category).toBe("crop-farm");
+      }
+    });
+
+    it("scales greenhouse yields to a single planted crop and keeps the seed in the field", () => {
+      const wheat = cropFarms.find((r) => r.name === "Crop Farm: Wheat");
+      // The greenhouse plants 8 seeds and harvests 12 seeds + 16 wheat.
+      expect(wheat.outputs).toEqual([
+        expect.objectContaining({ id: "minecraft:wheat_seeds", amount: 1.5 }),
+        expect.objectContaining({ id: "minecraft:wheat", amount: 2 }),
+      ]);
+      expect(wheat.inputs).toEqual([
+        expect.objectContaining({
+          id: "minecraft:wheat_seeds",
+          amount: 1,
+          consumed: false,
+        }),
+      ]);
+    });
+
+    it("names self-seeded crops after what was planted", () => {
+      const carrot = cropFarms.find((r) => r.name === "Crop Farm: Carrot");
+      expect(carrot.inputs[0].id).toBe("minecraft:carrot");
+      expect(carrot.outputs[0].id).toBe("minecraft:carrot");
+    });
   });
 });
