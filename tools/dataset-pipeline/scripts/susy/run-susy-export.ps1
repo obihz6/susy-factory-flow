@@ -123,7 +123,14 @@ Write-Log "Oracle jar: $OracleJar"
 $instanceMods = Join-Path $InstanceDir "mods"
 New-Item -ItemType Directory -Force -Path $instanceMods | Out-Null
 Get-ChildItem -LiteralPath $instanceMods -Filter "susy*hei*oracle*.jar" -File -ErrorAction SilentlyContinue |
-  ForEach-Object { Write-Log "Removing stale oracle jar: $($_.FullName)"; Remove-Item -LiteralPath $_.FullName -Force }
+  ForEach-Object {
+    Write-Log "Removing stale oracle jar: $($_.FullName)"
+    try {
+      Remove-Item -LiteralPath $_.FullName -Force
+    } catch {
+      Fail "Cannot replace $($_.FullName): it is locked by a running process. Close the Susy client (and Prism) first, then retry."
+    }
+  }
 Copy-Item -LiteralPath $OracleJar -Destination (Join-Path $instanceMods (Split-Path -Leaf $OracleJar)) -Force
 
 $instanceOptions = Join-Path $InstanceDir "options.txt"
