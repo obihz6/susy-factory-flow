@@ -177,15 +177,19 @@ describe("findLauncherInstanceInfo", () => {
 });
 
 describe("findOracleJar", () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "susy-repo-"));
+  // A fresh repo per test: sharing one fixture would let a pipeline-build jar
+  // from an earlier case leak into later ones and mask the fallback logic.
+  const makeRepo = () => fs.mkdtempSync(path.join(os.tmpdir(), "susy-repo-"));
 
   it("prefers the explicit env jar", () => {
+    const repo = makeRepo();
     const jar = path.join(repo, "explicit.jar");
     fs.writeFileSync(jar, "jar");
     expect(findOracleJar(repo, { SUSY_HEI_ORACLE_JAR: jar })).toBe(jar);
   });
 
   it("finds the pipeline build and skips sources jars", () => {
+    const repo = makeRepo();
     const libs = path.join(repo, "tools", "dataset-pipeline", "susy-hei-oracle", "build", "libs");
     fs.mkdirSync(libs, { recursive: true });
     fs.writeFileSync(path.join(libs, "susy-hei-oracle-1.0.0.jar"), "jar");
@@ -194,9 +198,28 @@ describe("findOracleJar", () => {
   });
 
   it("falls back to a repo-local mod checkout build", () => {
+    const repo = makeRepo();
     const libs = path.join(repo, "temp", "susy-hei-oracle", "susy-hei-oracle", "build", "libs");
     fs.mkdirSync(libs, { recursive: true });
     fs.writeFileSync(path.join(libs, "susy-hei-oracle-2.0.0.jar"), "jar");
     expect(findOracleJar(repo, {})).toBe(path.join(libs, "susy-hei-oracle-2.0.0.jar"));
+  });
+
+  it("prefers the highest-version build across locations", () => {
+    const repo = makeRepo();
+    const pipelineLibs = path.join(
+      repo,
+      "tools",
+      "dataset-pipeline",
+      "susy-hei-oracle",
+      "build",
+      "libs",
+    );
+    fs.mkdirSync(pipelineLibs, { recursive: true });
+    fs.writeFileSync(path.join(pipelineLibs, "susy-hei-oracle-1.0.0.jar"), "jar");
+    const checkoutLibs = path.join(repo, "temp", "susy-hei-oracle", "susy-hei-oracle", "build", "libs");
+    fs.mkdirSync(checkoutLibs, { recursive: true });
+    fs.writeFileSync(path.join(checkoutLibs, "susy-hei-oracle-2.0.0.jar"), "jar");
+    expect(findOracleJar(repo, {})).toBe(path.join(checkoutLibs, "susy-hei-oracle-2.0.0.jar"));
   });
 });

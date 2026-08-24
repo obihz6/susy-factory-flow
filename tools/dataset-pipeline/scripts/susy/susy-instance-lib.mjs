@@ -206,9 +206,17 @@ function flatpakAppIdFor(dir) {
   return parts[varIndex + 2] || undefined;
 }
 
+/** Trailing dotted version embedded in a jar filename ("susy-hei-oracle-2.0.0.jar" -> "2.0.0"). */
+function jarVersion(filePath) {
+  const match = /-(\d+(?:\.\d+)+)\.jar$/i.exec(path.basename(filePath));
+  return match ? match[1] : "";
+}
+
 /**
  * Where the susy-hei-oracle mod jar can come from, best first:
- * SUSY_HEI_ORACLE_JAR, the pipeline's own build, then a repo-local checkout.
+ * SUSY_HEI_ORACLE_JAR, then the best oracle build across the pipeline's own
+ * build output and a repo-local checkout — highest version wins, newest
+ * build breaks ties (mtime is coarse on some filesystems, so version leads).
  */
 export function findOracleJar(repoRoot, env = process.env) {
   if (env.SUSY_HEI_ORACLE_JAR) {
@@ -243,6 +251,12 @@ export function findOracleJar(repoRoot, env = process.env) {
   };
   for (const root of roots) walk(root, 0);
   if (found.length === 0) return undefined;
-  found.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  found.sort((a, b) => {
+    const versionDiff = compareVersions(jarVersion(b), jarVersion(a));
+    if (versionDiff !== 0) return versionDiff;
+    const mtimeDiff = fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    if (mtimeDiff !== 0) return mtimeDiff;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
   return found[0];
 }
