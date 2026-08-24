@@ -95,7 +95,10 @@ the tracking script in the production build.
 ## Load Real Recipes
 
 ```bash
-  bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
+bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
+
+
+powershell -ExecutionPolicy Bypass -File tools\dataset-pipeline\scripts\susy\run-susy-export.ps1
 ```
 
 ## Public Repository Notes
