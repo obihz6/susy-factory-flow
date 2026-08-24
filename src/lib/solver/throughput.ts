@@ -49,6 +49,7 @@ import {
   selectRuntimeCalculationVariant,
 } from "./runtime-calculation";
 import { closeBoundaries } from "./close-boundaries";
+import { getSetupRules } from "../model/setup-rules";
 import { solveEquationsCore } from "./equations-core";
 
 const EPSILON = 0.000001;
@@ -68,15 +69,28 @@ export function calculateThroughput(
   project: FactoryProject,
   options: SolverOptions = {},
 ): ThroughputResult {
-  // Sketch mode: the player asked the plan to assume its own boundary, so
-  // every bare input gets a virtual source and every bare output a virtual
-  // drain before the solve. The virtual drawers never reach the board - they
-  // exist only inside this result - and a boundary the player DID declare
-  // still wins, because closeBoundaries only fills slots with no wire on
-  // them. Quick math first, honest wiring when it matters.
-  if (project.assumeBoundaries) {
-    project = closeBoundaries(project);
+  // BOARD RULES: the player asked the plan to feed its own inputs, or to let
+  // its spare output leave, or both. Each is a virtual drawer on every slot
+  // of that side - wired ones included, so a half-fed input tops up and a
+  // surplus output spills instead of holding its machine back. The drawers
+  // exist only inside this result and never reach the board, and the LP
+  // spends a free source only after every real wire (its recycle-before-
+  // importing stage), so nothing the player drew is bypassed.
+  const rules = getSetupRules(project);
+  if (rules.freeInputs || rules.freeOutputs) {
+    project = closeBoundaries(project, {
+      inputs: rules.freeInputs ? "all" : "none",
+      outputs: rules.freeOutputs ? "all" : "none",
+    });
   }
+  // With the rule OFF the conversion does not exist: a cross-form wire left
+  // on the board carries nothing (its far end reads NO SUPPLY), and the
+  // board raises a notice naming it. Anything else would let a disabled
+  // rule keep converting.
+  const crossForm = rules.looseCellWires
+    ? expandCrossFormEdges(project)
+    : { project, hiddenNodeIds: [], hiddenEdgeIds: [] };
+  project = crossForm.project;
   const recipesById = new Map(project.recipes.map((recipe) => [recipe.id, recipe]));
   const nodes: Record<string, NodeThroughputResult> = {};
   const storages: Record<string, StorageThroughputResult> = {};
@@ -292,6 +306,16 @@ export function calculateThroughput(
     });
   }
 
+  // The hidden tanks a loose cell wire ran through stay inside the solve:
+  // their reports and the synthetic fluid half of each wire come out, and
+  // the visible edge keeps the cell-side figures it already carries.
+  for (const hiddenId of crossForm.hiddenNodeIds) {
+    delete nodes[hiddenId];
+  }
+  for (const hiddenEdgeId of crossForm.hiddenEdgeIds) {
+    delete edgeResults[hiddenEdgeId];
+  }
+
   return {
     nodes,
     storages,
@@ -305,6 +329,110 @@ export function calculateThroughput(
     unconsumedOutputs,
     generatedAt: options.generatedAt ?? project.metadata?.updatedAt ?? "unspecified",
   };
+}
+
+/**
+ * LOOSE CELL WIRES (SetupRules.looseCellWires): a wire whose resource is one
+ * form and whose target handle names the other - a cell landing on a fluid
+ * input, or a fluid landing on a cell input. No wire crosses kinds on its
+ * own - inside the solve each such edge runs through a hidden free Tank
+ * converting at the Canner ratio stored on the edge (cell in, litres out; or
+ * litres in, cell out), zero EU, one tick, and a machine count high enough
+ * that only its neighbours can ever bind. The hidden node and the synthetic
+ * far half of the wire are stripped from the returned result; the visible
+ * edge keeps its own id, so its figures land on the wire the player drew (in
+ * its own resource).
+ *
+ * Known blind spot: the clog-lock detector solves over the UNexpanded
+ * project, so a dead board's vent analysis does not see through these wires.
+ * The rule is off by default and the wires themselves keep the board running,
+ * so the detector's trigger (a dead machine) rarely coincides.
+ */
+function expandCrossFormEdges(project: FactoryProject): {
+  project: FactoryProject;
+  hiddenNodeIds: string[];
+  hiddenEdgeIds: string[];
+} {
+  const crossEdges = project.edges.filter((edge) => (edge.crossForm?.litresPerCell ?? 0) > 0);
+  if (crossEdges.length === 0) {
+    return { project, hiddenNodeIds: [], hiddenEdgeIds: [] };
+  }
+
+  const recipes = [...project.recipes];
+  const nodes = [...project.nodes];
+  const edges = [...project.edges];
+  const hiddenNodeIds: string[] = [];
+  const hiddenEdgeIds: string[] = [];
+
+  for (const edge of crossEdges) {
+    // The far form is named by the handle the wire lands on: `input:fluid:<id>`
+    // under a cell wire, `input:item:<cellId>` under a fluid wire.
+    const handleParts = (edge.targetHandle ?? "").split(":");
+    const cellToFluid = edge.resourceKind === "item" && handleParts[1] === "fluid";
+    const fluidToCell = edge.resourceKind === "fluid" && handleParts[1] === "item";
+    if (handleParts[0] !== "input" || !handleParts[2] || (!cellToFluid && !fluidToCell)) {
+      continue;
+    }
+    const farKind = cellToFluid ? ("fluid" as const) : ("item" as const);
+    const farId = decodeURIComponent(handleParts[2]);
+    const litresPerCell = edge.crossForm!.litresPerCell;
+
+    const hiddenRecipeId = `crossform-recipe:${edge.id}`;
+    const hiddenNodeId = `crossform:${edge.id}`;
+    recipes.push({
+      id: hiddenRecipeId,
+      name: `Tank: ${farId}`,
+      kind: "custom",
+      category: "crossform-tank",
+      machineType: "Tank",
+      minimumTier: "NONE",
+      durationTicks: 1,
+      eut: 0,
+      inputs: [
+        cellToFluid
+          ? { kind: "item", id: edge.resourceId, amount: 1 }
+          : { kind: "fluid", id: edge.resourceId, amount: litresPerCell },
+      ],
+      outputs: [
+        cellToFluid
+          ? { kind: "fluid", id: farId, amount: litresPerCell }
+          : { kind: "item", id: farId, amount: 1 },
+      ],
+      source: { recipeMap: "crossform-tank" },
+    });
+    nodes.push({
+      id: hiddenNodeId,
+      recipeId: hiddenRecipeId,
+      // 20k cells/s of headroom: far past any real cell line, small enough
+      // that the LP's coefficients stay in a comfortable numeric range.
+      machineCount: 1_000,
+      parallel: 1,
+      overclockTier: "NONE",
+      enabled: true,
+      position: { x: 0, y: 0 },
+    });
+    hiddenNodeIds.push(hiddenNodeId);
+
+    const index = edges.findIndex((entry) => entry.id === edge.id);
+    edges[index] = {
+      ...edge,
+      target: hiddenNodeId,
+      targetHandle: `input:${edge.resourceKind}:${encodeURIComponent(edge.resourceId)}`,
+    };
+    const farEdgeId = `${edge.id}:crossform`;
+    edges.push({
+      id: farEdgeId,
+      source: hiddenNodeId,
+      target: edge.target,
+      sourceHandle: `output:${farKind}:${encodeURIComponent(farId)}`,
+      targetHandle: edge.targetHandle,
+      resourceKind: farKind,
+      resourceId: farId,
+    });
+    hiddenEdgeIds.push(farEdgeId);
+  }
+
+  return { project: { ...project, recipes, nodes, edges }, hiddenNodeIds, hiddenEdgeIds };
 }
 
 function buildDisabledNodeResult(nodeId: string, recipe: Recipe): NodeThroughputResult {

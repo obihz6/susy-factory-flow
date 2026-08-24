@@ -164,15 +164,10 @@ export function machineConfigControlsForOracleRecipe(machineType, specialValue, 
     );
   }
 
-  if (normalized === "large chemical reactor") {
-    controls.push(
-      heatingCoilControl({
-        tooltip: () => ["Required structure coil", "No runtime speed or EU/t effect"],
-      }),
-    );
-  }
-
-  if (normalized === "coke oven" || normalized === "industrial coke oven") {
+  // Only the Industrial Coke Oven's map (gtpp.recipe.cokeoven, renamed by the
+  // normalizer): the Railcraft brick Coke Oven's map (gt.recipe.cokeoven) is
+  // also localized "Coke Oven" but has no coils, casings or slices.
+  if (normalized === "industrial coke oven") {
     controls.push(
       heatingCoilControl({
         tooltip: (_tier, index) => [`EU usage: ${formatTooltipPercent(Math.pow(0.98, index + 1))}`],

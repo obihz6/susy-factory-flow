@@ -76,6 +76,16 @@ function registerMachineHandlerIcons(templates) {
   }
 }
 const recipeSignatures = new Set();
+// The game names two different maps "Coke Oven": gtpp.recipe.cokeoven is the
+// Industrial Coke Oven's map (GTNH deliberately registers every Pyrolyse Oven
+// recipe into it too), while gt.recipe.cokeoven mirrors the Railcraft brick
+// Coke Oven. Left to their localized names they fold into one misleading
+// "Coke Oven" family, so the ICO map wears its machine's name instead.
+const RECIPE_MAP_DISPLAY_NAMES = new Map([["gtpp.recipe.cokeoven", "Industrial Coke Oven"]]);
+// The Tank synthesis (see addTankRecipe): its machine name, and the fallback
+// face for its chip when no plain empty cell ever crossed the Canner map.
+const TANK_MACHINE_TYPE = "Tank";
+let tankIconFallback;
 const oreDictionaryAlternativesByName = new Map();
 const oreDictionary = normalizeOreDictionary(findDomain("oreDictionary")?.entries ?? {});
 
@@ -124,7 +134,8 @@ console.log(`Wrote ${dataset.recipes.length} oracle recipe(s) to ${outputPath}.`
 
 function normalizeGregtech(domain) {
   for (const recipeMap of domain?.recipeMaps ?? []) {
-    const machineType = text(recipeMap.name, recipeMap.id ?? "GregTech");
+    const machineType =
+      RECIPE_MAP_DISPLAY_NAMES.get(recipeMap.id) ?? text(recipeMap.name, recipeMap.id ?? "GregTech");
     recipeMaps.add(machineType);
     setRecipeMapIcon(machineType, recipeMap.icon);
     if (recipeMap.id === "gt.recipe.furnace") {
@@ -208,8 +219,68 @@ function normalizeGregtech(domain) {
           specialValue: Number(rawRecipe.specialValue) || 0,
         },
       });
+
+      // 2.9 keeps cell fills/empties in the canner map; 2.8.4 and earlier
+      // had them in their own fluidcanner map. The fluid-touch filter inside
+      // keeps food canning out either way.
+      if (recipeMap.id === "gt.recipe.canner" || recipeMap.id === "gt.recipe.fluidcanner") {
+        addTankRecipe(rawRecipe, inputs, outputs);
+      }
     }
   }
+  setRecipeMapIcon(TANK_MACHINE_TYPE, tankIconFallback);
+}
+
+/**
+ * The Tank: the planner's free canner (Jack, 2026-08-23). Every Canner recipe
+ * that touches a fluid - filling a cell, emptying one - is offered a second
+ * time under this machine at zero EU and one tick, the same "instant" shape
+ * hand-crafting wears. It keeps the REAL slots, empty cells included: the
+ * game never deletes an emptied cell and neither does the planner. What it
+ * waives is the Canner's power and time, so a chain that just needs the other
+ * form of a fluid does not drag a powered machine line in with it.
+ */
+function addTankRecipe(rawRecipe, inputs, outputs) {
+  if (![...inputs, ...outputs].some((entry) => entry.kind === "fluid")) {
+    return;
+  }
+  recipeMaps.add(TANK_MACHINE_TYPE);
+  const face = [...inputs, ...outputs].find((entry) => entry.kind === "item");
+  if (face?.id === "ic2:itemcellempty") {
+    // The recognizable face for the machine chip; first-wins, so claim it
+    // the moment the plain empty cell shows up and fall back otherwise.
+    setRecipeMapIcon(TANK_MACHINE_TYPE, face);
+  } else if (face && !tankIconFallback) {
+    tankIconFallback = face;
+  }
+  addRecipe({
+    id: recipeId("gregtech", "planner.tank", rawRecipe.id),
+    name: `Tank: ${resourceLabel(outputs[0])}`,
+    kind: "gregtech_machine",
+    category: "gregtech",
+    machineType: TANK_MACHINE_TYPE,
+    minimumTier: "NONE",
+    durationTicks: 1,
+    eut: 0,
+    inputs: inputs.map((entry) => ({ ...entry })),
+    outputs: outputs.map((entry) => ({ ...entry })),
+    programmedCircuit: detectProgrammedCircuit(inputs),
+    specialValue: 0,
+    notes: "A free, instant canner: the planner's tank. Synthesized from the Canner map.",
+    source: {
+      datasetVersionId,
+      recipeMap: TANK_MACHINE_TYPE,
+      exporter: "gtnh-oracle",
+      rawRecipeId: `planner.tank:${rawRecipe.id}`,
+    },
+    nei: {
+      additionalInfo: ["Free and instant: a planner convenience, not a placeable machine."],
+    },
+    metadata: {
+      recipeMapId: "planner.tank",
+      specialValue: 0,
+    },
+  });
 }
 
 function normalizeCrafting(domain) {

@@ -1,4 +1,5 @@
 import type { FactoryProject } from "./types";
+import { energyHatchTypeExistsAtTier } from "@/lib/machines/energy-hatches";
 import { normalizeProjectFuelProfiles } from "./fuels";
 import { isCustomRateRecipe, releaseCustomRates } from "./custom-rate";
 import { dedupeEdgeWires } from "./edge-identity";
@@ -19,12 +20,142 @@ export function normalizeLoadedProject(project: FactoryProject): FactoryProject 
       unpaintCustomRateCards(
         releaseCustomRates(
           dropDuplicateEdges(
-            dropCrossFormConnections(normalizeProjectFuelProfiles(renameOpvTier(project))),
+            dropCrossFormConnections(
+              migrateTrashCansToDrawers(
+                dropImpossibleEnergyHatchTypes(
+                  normalizeProjectFuelProfiles(renameOpvTier(adoptSetupRules(project))),
+                ),
+              ),
+            ),
           ),
         ),
       ),
     ),
   );
+}
+
+/**
+ * The trash can NODE became the trash position on a drawer's drain pill
+ * (2026-08-23), so old plans convert on the way in: every wire into a can
+ * becomes a wire into a trash-mode drawer of that wire's own resource, one
+ * drawer per resource (a can drank anything; a drawer holds one thing).
+ * Display fields come from the feeding recipe's own output slot, so the
+ * drawer wears the real icon. Cans with no wires did nothing and are
+ * dropped, along with the placeholder recipes. Deterministic ids keep the
+ * migration idempotent and stable across reloads.
+ */
+function migrateTrashCansToDrawers(project: FactoryProject): FactoryProject {
+  const trashRecipeIds = new Set(
+    project.recipes.filter((recipe) => isTrashRecipe(recipe)).map((recipe) => recipe.id),
+  );
+  if (trashRecipeIds.size === 0) {
+    return project;
+  }
+  const trashNodes = project.nodes.filter((node) => trashRecipeIds.has(node.recipeId));
+  if (trashNodes.length === 0) {
+    return {
+      ...project,
+      recipes: project.recipes.filter((recipe) => !isTrashRecipe(recipe)),
+    };
+  }
+
+  const recipesById = new Map(project.recipes.map((recipe) => [recipe.id, recipe]));
+  const nodesById = new Map(project.nodes.map((node) => [node.id, node]));
+  const storages = [...(project.storages ?? [])];
+  const edges = [...project.edges];
+
+  for (const can of trashNodes) {
+    const drawerByResource = new Map<string, string>();
+    let placed = 0;
+    for (let index = 0; index < edges.length; index += 1) {
+      const edge = edges[index]!;
+      if (edge.target !== can.id) {
+        continue;
+      }
+      const resourceKey = `${edge.resourceKind}:${edge.resourceId}`;
+      let drawerId = drawerByResource.get(resourceKey);
+      if (!drawerId) {
+        drawerId = `trash-${can.id}-${placed}`;
+        // The wire knows the ids; the feeder's own output slot knows the face.
+        const sourceNode = nodesById.get(edge.source);
+        const sourceRecipe = sourceNode ? recipesById.get(sourceNode.recipeId) : undefined;
+        const face = sourceRecipe?.outputs.find(
+          (output) => output.kind === edge.resourceKind && output.id === edge.resourceId,
+        );
+        storages.push({
+          id: drawerId,
+          kind: edge.resourceKind,
+          resourceId: edge.resourceId,
+          drainMode: "trash",
+          colorTag: can.colorTag,
+          displayName: face?.displayName ?? edge.label,
+          iconPath: face?.iconPath,
+          iconAtlas: face?.iconAtlas,
+          dominantColor: face?.dominantColor,
+          pocketId: can.pocketId,
+          // The can's spot, then a tile-height step per extra resource.
+          position: { x: can.position.x, y: can.position.y + placed * 100 },
+        });
+        drawerByResource.set(resourceKey, drawerId);
+        placed += 1;
+      }
+      edges[index] = {
+        ...edge,
+        target: drawerId,
+        targetHandle: `input:${edge.resourceKind}:${encodeURIComponent(edge.resourceId)}`,
+      };
+    }
+  }
+
+  const trashNodeIds = new Set(trashNodes.map((node) => node.id));
+  return {
+    ...project,
+    recipes: project.recipes.filter((recipe) => !isTrashRecipe(recipe)),
+    nodes: project.nodes.filter((node) => !trashNodeIds.has(node.id)),
+    storages,
+    edges: edges.filter((edge) => !trashNodeIds.has(edge.source) && !trashNodeIds.has(edge.target)),
+  };
+}
+
+/**
+ * A hatch family that does not exist at the node's tier - a laser below IV, a
+ * multi-amp hatch below EV - cannot be built, so an imported or hand-edited
+ * plan carrying one falls back to the plain pair instead of modelling
+ * impossible amps.
+ */
+function dropImpossibleEnergyHatchTypes(project: FactoryProject): FactoryProject {
+  let changed = false;
+  const nodes = project.nodes.map((node) => {
+    if (
+      node.energyHatchType === undefined ||
+      energyHatchTypeExistsAtTier(node.energyHatchType, node.overclockTier)
+    ) {
+      return node;
+    }
+    changed = true;
+    const { energyHatchType, ...rest } = node;
+    return rest;
+  });
+  return changed ? { ...project, nodes } : project;
+}
+
+/**
+ * Sketch mode was both board rules at once - every bare input fed, every bare
+ * output exported - so a plan saved under it opens with both on. The old flag
+ * is dropped here rather than kept in step, because the rules are now the only
+ * thing the solve reads and two fields saying the same thing drift.
+ */
+function adoptSetupRules(project: FactoryProject): FactoryProject {
+  if (project.assumeBoundaries === undefined) {
+    return project;
+  }
+  const { assumeBoundaries, ...rest } = project;
+  return {
+    ...rest,
+    setupRules: assumeBoundaries
+      ? { freeInputs: true, freeOutputs: true }
+      : (project.setupRules ?? undefined),
+  };
 }
 
 /**
@@ -165,8 +296,13 @@ function dropCrossFormConnections(project: FactoryProject): FactoryProject {
 
   const edges = project.edges.filter(
     (edge) =>
-      endpointHandles(edge.source, "source", edge.resourceKind) &&
-      endpointHandles(edge.target, "target", edge.resourceKind),
+      // A LOOSE CELL WIRE crosses the forms ON PURPOSE (SetupRules.
+      // looseCellWires): its resource is one form, its target slot the
+      // other, and its stored Canner ratio is fetched, never guessed. The
+      // legacy shape this pass hunts had no such field.
+      edge.crossForm !== undefined ||
+      (endpointHandles(edge.source, "source", edge.resourceKind) &&
+        endpointHandles(edge.target, "target", edge.resourceKind)),
   );
 
   if (!nodesChanged && edges.length === project.edges.length) {

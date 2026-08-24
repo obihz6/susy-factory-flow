@@ -149,7 +149,7 @@ function TrashNodeComponent({ data, selected }: NodeProps<TrashFlowNode>) {
       data-trash-node-id={projectNode.id}
       className={[
         "group relative text-[#e8e9ee]",
-        selected ? "ring-2 ring-purple-500" : "",
+        selected ? "ring-2 ring-[var(--selection)]" : "",
       ].join(" ")}
       style={paintCursor ? { cursor: paintCursor } : undefined}
     >

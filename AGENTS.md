@@ -40,20 +40,32 @@ Working notes for future agents on GTNH Factory Flow.
 - `origin` is `jackwrichards/gtnh-factory-flow` (this project). `upstream` is
   `Samiracle64/gtnh-factory-flow`, the repo this was originally forked from -
   it is not a push target and the two have long since diverged.
-- Pushing code can deploy the app, but dataset changes require the dataset pipeline.
-- To regenerate both datasets:
-
-```bash
-gh workflow run "GTNH dataset pipeline" --ref main -f channel=both -f publish=true -f force_rebuild=true
-```
-
-- Watch long runs instead of assuming success:
-
-```bash
-gh run watch <run-id> --exit-status
-```
-
-- After imports, verify the published manifest and, when relevant, inspect the published gzipped dataset, not only CI status.
+- Pushing code can deploy the app, but dataset changes require a dataset
+  rebuild - and the GitHub "GTNH dataset pipeline" workflow is a DECOY, like
+  the deploy workflows: the repo has no self-hosted runner, so every run
+  queues until the next half-hourly cron supersedes it. Established
+  2026-08-23; do not dispatch it and wait.
+- Datasets are really rebuilt by hand in this PC's WSL (Ubuntu):
+  - `~/gtnh-factory-flow` is a git-less SNAPSHOT of the repo. Copy any
+    changed pipeline scripts into it first or the rebuild runs old code.
+  - Raw oracle exports (the expensive Minecraft part, reusable as long as
+    the pack versions stand) live at
+    `~/gtnh-factory-flow/.pipeline/raw-export/<id>/oracle-export.json` with
+    `rendered-icons/` beside them.
+  - `~/run-both.sh` (and the fuller `~/rebuild-cokeoven.sh`) run
+    normalize-oracle-export.mjs, build-resource-index.mjs,
+    build-recipe-index.mjs (recipe index + lookup index + shards), then gzip,
+    into `~/gtnh-export/datasets/gtnh/<id>` (2.9) and
+    `~/gtnh-export/datasets-284/gtnh/<id>` (2.8.4).
+  - `~/copy-datasets.sh` copies the results into the Windows repo's
+    `public/datasets/gtnh`.
+  - Publish: scp the changed files (gzips, shards, oracle-report) to the
+    droplet's `/opt/shared/gtnh-datasets/<id>/`, rebuild
+    `datasets.manifest.json` with rebuild-manifest.mjs, then
+    `systemctl restart gtnh-flow`. Only textures are cache-immutable, so
+    replacing dataset gzips in place is safe.
+- After a publish, verify the live manifest and, when relevant, inspect the
+  published gzipped dataset, not only local output.
 - Stable and daily both matter. If the user says relaunch/import dataset, usually run both unless they explicitly narrow it.
 - The server should be prewarmed on startup. Slow first API calls usually mean prewarm/deploy service behavior regressed, not that the client should wait longer.
 
@@ -88,10 +100,43 @@ gh run watch <run-id> --exit-status
 - A filled cell is an ordinary ITEM. It does not satisfy its fluid's slot, and
   the fluid does not satisfy the cell's. `resourceMatchesInput` compares kinds
   strictly; do not reintroduce a cross-kind branch.
-- Crossing the two forms takes a Canner on the board, exactly as it does in
+- Crossing the two forms takes a machine on the board, exactly as it does in
   game. There are ~4,000 Canner recipes in the dataset (~1,150 fill, ~1,150
   empty), so the bridge is always a placeable machine, and GT registers ~3,000
   recipe shapes in BOTH forms so most chains just need the matching variant.
+- The TANK (Jack, 2026-08-23) is the free version of that bridge: the
+  pipeline mirrors every fluid-touching Canner recipe into a synthesized
+  "Tank" map (`addTankRecipe` in `normalize-oracle-export.mjs`) at 0 EU and
+  1 tick - the same "instant" shape hand-crafting wears, machine count still
+  scales it. It keeps the REAL slots, empty cells included: the game never
+  deletes an emptied cell and neither does the planner. It waives only the
+  Canner's power and time. Do NOT go further than this by default - an
+  auto-inserted converter that discarded empty cells was designed and
+  rejected in the same session.
+- LOOSE CELL WIRES is the one opt-in beyond it (`SetupRules.looseCellWires`,
+  off by default, in the board-rules sheet): a filled cell and its fluid wire
+  straight together, EITHER WAY ROUND - cell output onto fluid input, fluid
+  output onto cell input - and the gesture behaves like any compatible pair
+  (green wash, whole-card drops, drags started from either end). The wire
+  itself is still same-kind (its resource is the SOURCE's own form; the far
+  form is named by its target handle) and carries the Canner's
+  litres-per-cell on `edge.crossForm`, fetched at wire time - no ratio
+  found, no wire. `getCrossFormCellMatch` in resources.ts is the one
+  pair-matching question. The solver bridges the forms through a hidden free
+  Tank (`expandCrossFormEdges` in throughput.ts, converting whichever way
+  the wire runs) that never reaches the board or the result.
+  `resourceMatchesInput` stays strict; the rule lives in the gesture
+  (`handleConnect` / `isCompatibleResourceConnection`, plus the whole-card
+  drop path `findNodeDropTargetOnSide` / `isCompatibleDraggedResourceTarget`
+  / `handleConnectEnd` - drawers stay strict), edge survival
+  (`isFactoryEdgeStillValid`, `dropCrossFormConnections`), and the
+  expansion - nowhere else. The pair-match reuses the search's name-tolerant
+  `isFluidEquivalentToFilledCell` (fluid ids rarely spell their names:
+  "Molten Cast Iron" is `molten.castiron`); a false name match still wires
+  nothing because the ratio fetch looks the pair up by exact ids. Residual
+  quirk: a same-named different-id fluid (TCon `iron.molten` vs GT
+  `molten.iron`) can wash green during the drag and then refuse silently
+  when no Canner recipe links the exact pair.
 - The old behaviour auto-converted at a guessed 1000 L per cell. It made chains
   look complete while omitting a real machine, empty cells and the power to run
   them, and it reported item production in litres. It also inflated cell inputs
@@ -117,6 +162,62 @@ gh run watch <run-id> --exit-status
 - Do not replace real slots with `"..."`, `"-"`, or fake labels when a concrete item context exists. Render the actual selected alternative.
 - Arrows/progress indicators should come from the NEI layout when available.
 - Recipe book search must query the API, not only filter the first loaded page. Pagination must continue beyond the first page, especially for cases like Coke Oven charcoal/nitrogen recipes.
+
+## The Recipe Search (One Screen)
+
+- The recipe book popup is `RecipeSearchOverlay.tsx`: results over a detached
+  STENCIL card (takes on the left, makes on the right). Each side reads
+  ANY / ALL / ONLY, ALL the default: any = touches one of these, all = every
+  one of them with extras allowed, only = exactly these and nothing else.
+  ONLY's nothing-else half is verified against recipe bodies server-side
+  (`recipeIsOnlyMatch`), capped at `ONLY_VERIFY_LIMIT` candidates - past the
+  cap it degrades to all. Non-consumed inputs (circuits, catalysts) never
+  count against takes-ONLY. There is no NEI canvas in it, no makes/uses
+  mode switch and no category rail - machine chips with counts do that job,
+  "All" (every map at once) being the default. Left click on an item
+  anywhere still opens it with one MAKES condition, right click one TAKES;
+  `browseResource`/`clearResourceBrowser` remain the only doors in and out,
+  and `RecipeBrowser.tsx` still owns all query state (the stencil is edits
+  keyed by the browse that seeded them, so a new browse always starts over).
+- A query is `clauses` (`role:kind:id` wire form, `recipe-query.ts`) plus
+  `takesOp`/`makesOp`/`allMaps` on the same recipes API. The server side is
+  set algebra over the lookup index (`getClauseLookupRecipesByMap`): any =
+  union, all = intersection, sides intersect. Every clause resource gets the
+  concrete-context rewrite (`applyClauseResourceContexts`), and the legacy
+  resource+mode wire form is exactly a one-clause query.
+- The machine chips are a MULTI-SELECT (Jack, 2026-08-23): every map is
+  selected by default, a chip click toggles just that map, and All is
+  select-all/select-none - unselecting one map unlights All but keeps the
+  rest. The selection persists (`gtnh-factory-flow.machine-map-selection.v1`,
+  exclusions survive searches where the map never appears) and rides the
+  recipes API as `mapMode=exclude|include` plus repeated `map=` params;
+  the map list and per-map counts always cover everything that matched, so
+  an unselected chip keeps its count. There is no per-map scoping any more
+  and no crafting-map special case: Shaped/Shapeless Crafting are ordinary
+  maps whose machine is GT++'s Auto Workbench, synthesized in
+  `recipe-rules.ts` (LV seed 64t/32EU; the "Auto Workbench" machine-table
+  entry caps its perfect overclocks at EV's one craft per tick - transcribed
+  from MTEElectricAutoWorkbench: flat 2048 EU per craft), with the instant
+  hand-craft as the second handler. Purging the crafting maps from the
+  dataset itself is a pipeline decision that has NOT been made.
+- Result cards merge duplicate slot entries (nine planks is one line, x9) and
+  oredict slots wear their first concrete face; both are display-only.
+  Chips that satisfy a stencil condition ring cyan; chips browse on
+  click/right-click like port rows. The stencil's arrow SWAPS the two sides.
+- WHERE AN ADD LANDS: every spawn runs `nearestFreeSpot` over
+  `projectBlockerRects` (cards, drawers, minimized board cards, and open
+  frames as whole rects - nothing spawns inside a board uninvited) and the
+  camera flies to it (`boardFocusRequest`). An add whose browse came from a
+  card's PORT (`anchorNodeId`) goes through `addConnectedRecipeNodeToState`:
+  beside the anchor, upstream when the click asked who makes, and WIRED on
+  the clicked resource alone (`buildResourceEdgesBetweenNodes`) - never on
+  byproducts, and not at all when the pick no longer touches that resource.
+- REFACTOR: the card header's refresh button (`beginRecipeRefactor`) reopens
+  the search seeded with every consumed input and every output of that card,
+  and the add REPLACES the card in place (`refactorNodeWithRecipe`): wires
+  whose resource still has a port on the new recipe re-dock onto its slots,
+  the rest drop, position/count/board stay. When NO wire would survive, the
+  old card stays and the pick lands beside it instead. All one undo step.
 
 ## Machine Configs And Multiblocks
 
@@ -586,6 +687,16 @@ gh run watch <run-id> --exit-status
   byproduct pill changes bookkeeping, never pace. Targets are display
   arithmetic, not rows - a target-driven >100% figure survives in finalize,
   a demand-driven one does not.
+- The drain pill cycles THREE ways since 2026-08-23: product, byproduct,
+  trash. A TRASH drawer is the byproduct's shape (free disposal, no demand)
+  with the books voided (`applyTrashedOutputBalances` covers it alongside
+  the legacy trash can nodes): what it eats is neither shipped nor spare.
+  The toolbar's trash can spawner is gone, and old plans CONVERT on load:
+  `migrateTrashCansToDrawers` in project-normalize.ts turns every wired can
+  into trash-mode drawers (one per resource, since a can drank anything and
+  a drawer holds one thing) and drops unwired cans. The can node type,
+  `connectTrash` and the solver's trash-role plumbing remain as dead-path
+  safety for projects that never pass the normalize funnel.
 - Stage chain, each optimum locked as a row before the next: max total act;
   progressive max-min FAIRNESS over acts (the game's round-robin split - a
   big asker cannot crush a small one); recycle-before-import; ship-before-

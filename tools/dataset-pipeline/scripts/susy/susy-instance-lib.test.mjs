@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   compareVersions,
+  findLauncherInstanceInfo,
   findOracleJar,
   inspectInstanceDir,
   parsePackToml,
@@ -118,16 +119,77 @@ describe("inspectInstanceDir", () => {
   });
 });
 
+describe("findLauncherInstanceInfo", () => {
+  function makeWrapper(files) {
+    const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), "susy-wrapper-"));
+    for (const [name, content] of Object.entries(files)) {
+      const full = path.join(wrapper, name);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, content);
+    }
+    return wrapper;
+  }
+
+  const INSTANCE_CFG = [
+    "[General]",
+    "name=Supersymmetry",
+    "ManagedPackName=Supersymmetry",
+    "ManagedPackVersionName=0.1.16.14.1",
+    "",
+  ].join("\n");
+
+  it("finds the wrapper above a Prism-style game dir and reads managed pack metadata", () => {
+    const wrapper = makeWrapper({
+      "instance.cfg": INSTANCE_CFG,
+      "minecraft/mods/susycore-1.4.jar": "jar",
+    });
+    const info = findLauncherInstanceInfo(path.join(wrapper, "minecraft"));
+    expect(info?.instanceId).toBe(path.basename(wrapper));
+    expect(info?.managedPackName).toBe("Supersymmetry");
+    expect(info?.managedPackVersion).toBe("0.1.16.14.1");
+    expect(info?.flatpakAppId).toBeUndefined();
+  });
+
+  it("detects a flatpak app id from a .var/app path", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "susy-flatpak-"));
+    const instance = path.join(
+      root,
+      ".var",
+      "app",
+      "org.prismlauncher.PrismLauncher",
+      "data",
+      "PrismLauncher",
+      "instances",
+      "SUSY Oracle Export",
+    );
+    fs.mkdirSync(path.join(instance, "minecraft"), { recursive: true });
+    fs.writeFileSync(path.join(instance, "instance.cfg"), INSTANCE_CFG);
+    const info = findLauncherInstanceInfo(path.join(instance, "minecraft"));
+    expect(info?.instanceId).toBe("SUSY Oracle Export");
+    expect(info?.flatpakAppId).toBe("org.prismlauncher.PrismLauncher");
+  });
+
+  it("returns undefined when no launcher wrapper owns the directory", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "susy-plain-"));
+    fs.mkdirSync(path.join(dir, "mods"), { recursive: true });
+    expect(findLauncherInstanceInfo(dir)).toBeUndefined();
+  });
+});
+
 describe("findOracleJar", () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "susy-repo-"));
+  // A fresh repo per test: sharing one fixture would let a pipeline-build jar
+  // from an earlier case leak into later ones and mask the fallback logic.
+  const makeRepo = () => fs.mkdtempSync(path.join(os.tmpdir(), "susy-repo-"));
 
   it("prefers the explicit env jar", () => {
+    const repo = makeRepo();
     const jar = path.join(repo, "explicit.jar");
     fs.writeFileSync(jar, "jar");
     expect(findOracleJar(repo, { SUSY_HEI_ORACLE_JAR: jar })).toBe(jar);
   });
 
   it("finds the pipeline build and skips sources jars", () => {
+    const repo = makeRepo();
     const libs = path.join(repo, "tools", "dataset-pipeline", "susy-hei-oracle", "build", "libs");
     fs.mkdirSync(libs, { recursive: true });
     fs.writeFileSync(path.join(libs, "susy-hei-oracle-1.0.0.jar"), "jar");
@@ -136,9 +198,28 @@ describe("findOracleJar", () => {
   });
 
   it("falls back to a repo-local mod checkout build", () => {
+    const repo = makeRepo();
     const libs = path.join(repo, "temp", "susy-hei-oracle", "susy-hei-oracle", "build", "libs");
     fs.mkdirSync(libs, { recursive: true });
     fs.writeFileSync(path.join(libs, "susy-hei-oracle-2.0.0.jar"), "jar");
     expect(findOracleJar(repo, {})).toBe(path.join(libs, "susy-hei-oracle-2.0.0.jar"));
+  });
+
+  it("prefers the highest-version build across locations", () => {
+    const repo = makeRepo();
+    const pipelineLibs = path.join(
+      repo,
+      "tools",
+      "dataset-pipeline",
+      "susy-hei-oracle",
+      "build",
+      "libs",
+    );
+    fs.mkdirSync(pipelineLibs, { recursive: true });
+    fs.writeFileSync(path.join(pipelineLibs, "susy-hei-oracle-1.0.0.jar"), "jar");
+    const checkoutLibs = path.join(repo, "temp", "susy-hei-oracle", "susy-hei-oracle", "build", "libs");
+    fs.mkdirSync(checkoutLibs, { recursive: true });
+    fs.writeFileSync(path.join(checkoutLibs, "susy-hei-oracle-2.0.0.jar"), "jar");
+    expect(findOracleJar(repo, {})).toBe(path.join(checkoutLibs, "susy-hei-oracle-2.0.0.jar"));
   });
 });

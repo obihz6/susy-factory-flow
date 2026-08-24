@@ -50,7 +50,7 @@ type MachineEffectRecipe = Pick<
 
 /** What it needs off the node the user configured. */
 type MachineEffectNode = Pick<FactoryNode, "machineConfigTiers" | "coilTier"> &
-  Partial<Pick<FactoryNode, "overclockTier" | "machineHandlerId" | "energyHatches">>;
+  Partial<Pick<FactoryNode, "overclockTier" | "machineHandlerId" | "energyHatches" | "energyHatchType">>;
 
 /**
  * Reads the machine config tiers a node has selected as the zero-based indices

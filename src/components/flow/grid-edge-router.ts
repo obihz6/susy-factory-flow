@@ -194,6 +194,68 @@ const COST_OUTSIDE_HOME = 3;
 const TURN_COST = 30;
 /** A* gives up after this many pops and the caller falls back. */
 const MAX_ASTAR_POPS = 40_000;
+
+/**
+ * Pooled A* state, shared by every leg of every edge of every solve.
+ *
+ * The window's state count is xLines × yLines × 4 directions — five-figure
+ * on a busy board — and searchLeg used to allocate and memset three fresh
+ * full-size arrays per leg, per edge, per window-growth retry: megabytes of
+ * churn to route one wire. The pool reuses one set of arrays and skips the
+ * memset entirely with generation stamps: a state whose stamp is not this
+ * leg's generation simply has not been written yet, and its first access
+ * initialises it to the same Infinity / -1 the fill() used to. Solves are
+ * synchronous and never nested, so module scope is safe.
+ */
+let searchPoolCapacity = 0;
+let searchPoolGeneration = 0;
+let searchPoolStamp = new Int32Array(0);
+let searchPoolG = new Float64Array(0);
+let searchPoolCameFrom = new Int32Array(0);
+let searchPoolStartOf = new Int32Array(0);
+/** The binary heap, flattened: object entries and destructuring swaps were
+ * an allocation per push and per sift step. */
+let searchHeapF = new Float64Array(0);
+let searchHeapG = new Float64Array(0);
+let searchHeapState = new Int32Array(0);
+let searchHeapSeq = new Int32Array(0);
+
+function acquireSearchGeneration(stateCount: number): number {
+  if (stateCount > searchPoolCapacity) {
+    searchPoolCapacity = Math.max(stateCount, searchPoolCapacity * 2, 4096);
+    searchPoolStamp = new Int32Array(searchPoolCapacity);
+    searchPoolG = new Float64Array(searchPoolCapacity);
+    searchPoolCameFrom = new Int32Array(searchPoolCapacity);
+    searchPoolStartOf = new Int32Array(searchPoolCapacity);
+    searchPoolGeneration = 0;
+  }
+  searchPoolGeneration += 1;
+  // A wrapped stamp would alias a decades-old leg; reset well before that.
+  if (searchPoolGeneration >= 0x7ffffffe) {
+    searchPoolStamp.fill(0);
+    searchPoolGeneration = 1;
+  }
+  return searchPoolGeneration;
+}
+
+function ensureSearchHeapCapacity(size: number) {
+  if (size <= searchHeapF.length) {
+    return;
+  }
+  const capacity = Math.max(size, searchHeapF.length * 2, 1024);
+  const nextF = new Float64Array(capacity);
+  const nextG = new Float64Array(capacity);
+  const nextState = new Int32Array(capacity);
+  const nextSeq = new Int32Array(capacity);
+  nextF.set(searchHeapF);
+  nextG.set(searchHeapG);
+  nextState.set(searchHeapState);
+  nextSeq.set(searchHeapSeq);
+  searchHeapF = nextF;
+  searchHeapG = nextG;
+  searchHeapState = nextState;
+  searchHeapSeq = nextSeq;
+}
 /** Search-window padding around the endpoints, then the growth factor. */
 const WINDOW_PAD = 400;
 const WINDOW_GROWTH = 4;
@@ -733,98 +795,140 @@ function routeWithinWindow(
       return (dx + dy) * COST_EMPTY;
     };
 
-    const gScores = new Float64Array(stateCount).fill(Infinity);
-    const cameFrom = new Int32Array(stateCount).fill(-1);
-    const startOf = new Int32Array(stateCount).fill(-1);
+    // Pooled state (see acquireSearchGeneration): a state whose stamp is not
+    // this generation has never been touched this leg, and its first access
+    // initialises it to the Infinity / -1 the per-leg fill() used to write.
+    const generation = acquireSearchGeneration(stateCount);
+    const stamp = searchPoolStamp;
+    const gScores = searchPoolG;
+    const cameFrom = searchPoolCameFrom;
+    const startOf = searchPoolStartOf;
+    const touch = (state: number) => {
+      if (stamp[state] !== generation) {
+        stamp[state] = generation;
+        gScores[state] = Infinity;
+        cameFrom[state] = -1;
+        startOf[state] = -1;
+      }
+    };
 
-    interface HeapEntry {
-      f: number;
-      g: number;
-      state: number;
-      /** Monotone tiebreak keeps the pop order deterministic. */
-      seq: number;
-    }
-    const heap: HeapEntry[] = [];
+    let heapSize = 0;
     let seq = 0;
-    const compareHeap = (left: HeapEntry, right: HeapEntry): number =>
-      left.f - right.f || left.g - right.g || left.seq - right.seq;
-    const push = (entry: HeapEntry) => {
-      heap.push(entry);
-      let i = heap.length - 1;
+    const heapLess = (left: number, right: number): boolean => {
+      const df = searchHeapF[left] - searchHeapF[right];
+      if (df !== 0) {
+        return df < 0;
+      }
+      const dg = searchHeapG[left] - searchHeapG[right];
+      if (dg !== 0) {
+        return dg < 0;
+      }
+      // Monotone tiebreak keeps the pop order deterministic.
+      return searchHeapSeq[left] < searchHeapSeq[right];
+    };
+    const heapSwap = (left: number, right: number) => {
+      const f = searchHeapF[left];
+      searchHeapF[left] = searchHeapF[right];
+      searchHeapF[right] = f;
+      const g = searchHeapG[left];
+      searchHeapG[left] = searchHeapG[right];
+      searchHeapG[right] = g;
+      const state = searchHeapState[left];
+      searchHeapState[left] = searchHeapState[right];
+      searchHeapState[right] = state;
+      const entrySeq = searchHeapSeq[left];
+      searchHeapSeq[left] = searchHeapSeq[right];
+      searchHeapSeq[right] = entrySeq;
+    };
+    const push = (f: number, g: number, state: number) => {
+      ensureSearchHeapCapacity(heapSize + 1);
+      let i = heapSize;
+      searchHeapF[i] = f;
+      searchHeapG[i] = g;
+      searchHeapState[i] = state;
+      searchHeapSeq[i] = seq += 1;
+      heapSize += 1;
       while (i > 0) {
         const parent = (i - 1) >> 1;
-        if (compareHeap(heap[parent], heap[i]) <= 0) {
+        if (!heapLess(i, parent)) {
           break;
         }
-        [heap[parent], heap[i]] = [heap[i], heap[parent]];
+        heapSwap(parent, i);
         i = parent;
       }
     };
-    const pop = (): HeapEntry | undefined => {
-      const top = heap[0];
-      const last = heap.pop();
-      if (heap.length > 0 && last) {
-        heap[0] = last;
+    /** Pops the heap top into popF/popG/popState. False when empty. */
+    let popF = 0;
+    let popG = 0;
+    let popState = 0;
+    const pop = (): boolean => {
+      if (heapSize === 0) {
+        return false;
+      }
+      popF = searchHeapF[0];
+      popG = searchHeapG[0];
+      popState = searchHeapState[0];
+      heapSize -= 1;
+      if (heapSize > 0) {
+        searchHeapF[0] = searchHeapF[heapSize];
+        searchHeapG[0] = searchHeapG[heapSize];
+        searchHeapState[0] = searchHeapState[heapSize];
+        searchHeapSeq[0] = searchHeapSeq[heapSize];
         let i = 0;
         for (;;) {
           const leftChild = i * 2 + 1;
           const rightChild = leftChild + 1;
           let smallest = i;
-          if (leftChild < heap.length && compareHeap(heap[leftChild], heap[smallest]) < 0) {
+          if (leftChild < heapSize && heapLess(leftChild, smallest)) {
             smallest = leftChild;
           }
-          if (rightChild < heap.length && compareHeap(heap[rightChild], heap[smallest]) < 0) {
+          if (rightChild < heapSize && heapLess(rightChild, smallest)) {
             smallest = rightChild;
           }
           if (smallest === i) {
             break;
           }
-          [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+          heapSwap(i, smallest);
           i = smallest;
         }
       }
-      return top;
+      return true;
     };
 
     for (const seed of seeds) {
+      touch(seed.state);
       if (seed.g < gScores[seed.state]) {
         gScores[seed.state] = seed.g;
         startOf[seed.state] = seed.startIndex;
-        push({
-          f: seed.g + heuristic(Math.floor(seed.state / 4)),
-          g: seed.g,
-          state: seed.state,
-          seq: (seq += 1),
-        });
+        push(seed.g + heuristic(Math.floor(seed.state / 4)), seed.g, seed.state);
       }
     }
 
     let goalState = -1;
     let goalCost = Infinity;
     let pops = 0;
-    while (heap.length > 0) {
-      const current = pop();
-      if (!current) {
+    while (pop()) {
+      const currentF = popF;
+      const currentG = popG;
+      const currentState = popState;
+      if (currentF >= goalCost) {
         break;
       }
-      if (current.f >= goalCost) {
-        break;
-      }
-      if (current.g > gScores[current.state] + 1e-9) {
+      if (currentG > gScores[currentState] + 1e-9) {
         continue;
       }
       pops += 1;
       if (pops > MAX_ASTAR_POPS) {
         return undefined;
       }
-      const vertex = Math.floor(current.state / 4);
-      const currentDir = current.state % 4;
+      const vertex = Math.floor(currentState / 4);
+      const currentDir = currentState % 4;
       const goalIndex = legGoals.get(vertex);
       if (goalIndex !== undefined) {
-        const cost = current.g + goalPenalty(goalIndex);
+        const cost = currentG + goalPenalty(goalIndex);
         if (cost < goalCost) {
           goalCost = cost;
-          goalState = current.state;
+          goalState = currentState;
         }
         // No break, no skip: goal vertices are ordinary vertices that other
         // routes (and cheaper docks past this one) travel through.
@@ -908,17 +1012,13 @@ function routeWithinWindow(
         const stepCost =
           distance * factor * framePenalty + (dir === currentDir ? 0 : TURN_COST);
         const nextState = (nxi * yCount + nyi) * 4 + dir;
-        const nextG = current.g + stepCost;
+        const nextG = currentG + stepCost;
+        touch(nextState);
         if (nextG < gScores[nextState] - 1e-9) {
           gScores[nextState] = nextG;
-          cameFrom[nextState] = current.state;
-          startOf[nextState] = startOf[current.state];
-          push({
-            f: nextG + heuristic(nxi * yCount + nyi),
-            g: nextG,
-            state: nextState,
-            seq: (seq += 1),
-          });
+          cameFrom[nextState] = currentState;
+          startOf[nextState] = startOf[currentState];
+          push(nextG + heuristic(nxi * yCount + nyi), nextG, nextState);
         }
       }
     }

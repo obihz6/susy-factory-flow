@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -25,8 +26,13 @@ export function MinecraftTooltip({
   children,
 }: {
   label?: string | string[];
-  /** Rich panel body; wins over `label` and brings its own typography. */
-  content?: ReactNode;
+  /**
+   * Rich panel body; wins over `label` and brings its own typography. Pass a
+   * THUNK when the body is expensive to build: it is invoked only while the
+   * tooltip is actually open, so a card with eight port tooltips does not
+   * build eight discarded panels on every render.
+   */
+  content?: ReactNode | (() => ReactNode);
   children: ReactNode;
 }) {
   const lines = useMemo(
@@ -37,6 +43,7 @@ export function MinecraftTooltip({
   const [position, setPosition] = useState<{ x: number; y: number } | undefined>();
   const frameRef = useRef<number | undefined>(undefined);
   const pendingPositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
+  const pointerRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLSpanElement | null>(null);
 
@@ -61,6 +68,35 @@ export function MinecraftTooltip({
       target.closest("button, input, select, textarea") !== null,
     [],
   );
+
+  const clampToViewport = useCallback(
+    (pointerX: number, pointerY: number) => {
+      const panelWidth = panelRef.current?.offsetWidth ?? (hasContent ? 340 : 320);
+      const panelHeight = panelRef.current?.offsetHeight ?? (hasContent ? 240 : 80);
+      return {
+        x: Math.max(4, Math.min(pointerX + 12, window.innerWidth - panelWidth - 8)),
+        y: Math.max(4, Math.min(pointerY + 12, window.innerHeight - panelHeight - 8)),
+      };
+    },
+    [hasContent],
+  );
+
+  // The first placement of a fresh tooltip clamps against an ESTIMATED panel
+  // size, and near a screen edge the estimate lands the panel a hundred-odd
+  // pixels from where the measured clamp will. Re-clamping here, before the
+  // browser paints, means nobody ever sees the estimate's position - which
+  // used to read as the tooltip jittering sideways while the pointer crossed
+  // list rows, each row remounting the panel at the estimate first.
+  useLayoutEffect(() => {
+    const pointer = pointerRef.current;
+    if (!position || !pointer || !panelRef.current) {
+      return;
+    }
+    const corrected = clampToViewport(pointer.x, pointer.y);
+    if (Math.abs(corrected.x - position.x) >= 2 || Math.abs(corrected.y - position.y) >= 2) {
+      setPosition(corrected);
+    }
+  }, [clampToViewport, position]);
 
   const handleMouseMove = (event: MouseEvent) => {
     if (lines.length === 0 && !hasContent) {
@@ -94,13 +130,11 @@ export function MinecraftTooltip({
     }
 
     // Clamp to the measured panel so wide or tall tooltips stay fully on
-    // screen; before the first paint we fall back to a generous estimate.
-    const panelWidth = panelRef.current?.offsetWidth ?? (hasContent ? 340 : 320);
-    const panelHeight = panelRef.current?.offsetHeight ?? (hasContent ? 240 : 80);
-    pendingPositionRef.current = {
-      x: Math.max(4, Math.min(event.clientX + 12, window.innerWidth - panelWidth - 8)),
-      y: Math.max(4, Math.min(event.clientY + 12, window.innerHeight - panelHeight - 8)),
-    };
+    // screen; before the first paint we fall back to a generous estimate,
+    // and the layout effect below re-clamps against the real size before
+    // anything is painted.
+    pointerRef.current = { x: event.clientX, y: event.clientY };
+    pendingPositionRef.current = clampToViewport(event.clientX, event.clientY);
 
     if (frameRef.current !== undefined) {
       return;
@@ -208,7 +242,7 @@ export function MinecraftTooltip({
                 className="pointer-events-none fixed z-[9999] max-w-[640px] border-2 border-[#2a005f] bg-[#100010] px-3 py-2.5 text-white shadow-[inset_1px_1px_0_rgba(255,255,255,0.18),inset_-1px_-1px_0_rgba(0,0,0,0.8)]"
                 style={{ left: position.x, top: position.y }}
               >
-                {content}
+                {typeof content === "function" ? content() : content}
               </div>
             ) : (
               <div

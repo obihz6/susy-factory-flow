@@ -18,7 +18,7 @@ export function NeiTextView({ command, scale }: { command: NeiTextCommand; scale
         width: command.width ? command.width * scale : undefined,
         height: command.height ? command.height * scale : undefined,
         color,
-        fontFamily: "var(--font-minecraft), monospace",
+        fontFamily: "var(--app-font)",
         fontSize: (command.fontSize ?? 8) * scale,
         lineHeight: `${(command.fontSize ?? 8) * scale}px`,
         textAlign: command.align,

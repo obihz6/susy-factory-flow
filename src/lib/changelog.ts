@@ -73,6 +73,138 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.31.0",
+    date: "2026-08-23",
+    headline: "Loose cell wires that actually wire",
+    notes: [
+      "With the rule on, cells and their fluids now connect both ways round, dropped on the row or anywhere on the card.",
+      "Cells whose fluid spells its name oddly, like Molten Cast Iron, now connect too.",
+      "Turning the rule off names the wires it strands and offers to delete them.",
+      "The board's warning banners are solid now and keep their buttons inside.",
+    ],
+  },
+  {
+    version: "2.30.1",
+    date: "2026-08-23",
+    headline: "A faster, smoother board",
+    notes: [
+      "Panning and zooming big plans now runs at your screen's full speed.",
+      "The moving dashes stay on their wires instead of trailing behind them.",
+      "Card shadows no longer blink out while the camera moves.",
+      "Hovering, searching and dragging all cost less on large factories.",
+    ],
+  },
+  {
+    version: "2.30.0",
+    date: "2026-08-23",
+    headline: "Crafting recipes, on a real machine",
+    notes: [
+      "Crafting table recipes now appear in the recipe search, and their cards run on the Auto Workbench: 2048 EU a craft, faster each tier up to EV.",
+      "The crafting table stays available on the card as the free, instant choice.",
+      "The machine buttons in the search are now toggles: turn any machine's recipes off, and All selects or clears the lot.",
+      "Right click on a card's voltage chip lowers the tier: no shift needed.",
+    ],
+  },
+  {
+    version: "2.29.0",
+    date: "2026-08-23",
+    headline: "Cells, tanks and trash",
+    notes: [
+      "The Tank is a new free machine: it fills and empties cells instantly for nothing.",
+      "A drawer's product and byproduct switch has a third position: trash.",
+      "Trash cans on old setups become trash drawers; the toolbar button is gone.",
+      "A new setup rule lets a filled cell wire straight onto its fluid's input.",
+    ],
+  },
+  {
+    version: "2.28.0",
+    date: "2026-08-23",
+    headline: "The coke ovens get their names right",
+    notes: [
+      "Charcoal and coke recipes now show under the Industrial Coke Oven, and the brick Coke Oven stands on its own.",
+      "The Matter Fabrication CPU runs perfect overclocks with its real parallels.",
+      "Machines can be set to MAX voltage.",
+      "Only GTNH 2.9 is offered in the game version list for now.",
+    ],
+  },
+  {
+    version: "2.27.0",
+    date: "2026-08-22",
+    headline: "Pick your power in two clicks",
+    notes: [
+      "The hatch chip is two dropdowns now: one for the tier, one for the supply.",
+      "The supply list shows every way to power the machine at that tier; type an amperage to jump to it.",
+      "Tier colors now match the game's own.",
+      "Mega multiblocks draw every hatch's full amps and start recipes above their tier, as in game.",
+    ],
+  },
+  {
+    version: "2.26.0",
+    date: "2026-08-22",
+    headline: "Multi-amp and laser hatches, and six multiblocks get their real math",
+    notes: [
+      "Multiblocks can now run on a multi-amp or laser energy hatch, up to 16,777,216 A through one hatch.",
+      "The Industrial Chemical Bath, Bending Machine, 3D Copying Machine, Mass Solidifier, Fluid Shaper and L.A.T.E.X. run at their true speed and parallels.",
+      "The Fluid Shaper offers a width expansion knob, and the L.A.T.E.X. an Elastic Singularity slot.",
+      "The Large Chemical Reactor drops its heating coil setting: any coil works and none change its speed.",
+    ],
+  },
+  {
+    version: "2.25.1",
+    date: "2026-08-22",
+    headline: "Quieter numbers in the search",
+    notes: [
+      "Rate units on recipe items are smaller and grey, so the number reads first.",
+      "Rates drop pointless zeros: 7, not 7.0.",
+    ],
+  },
+  {
+    version: "2.25.0",
+    date: "2026-08-22",
+    headline: "Settings, and a roomier recipe search",
+    notes: [
+      "A gear in the header opens Settings: eight fonts to pick from, saved on your device.",
+      "The update notes popup can be turned off. The What's new dot stays.",
+      "The recipe search takes the whole right of the screen, with bigger items and the item list still open beside it.",
+      "Slots that take several forms cycle again by scrolling, and a Ratio view shows amounts in lowest terms.",
+    ],
+  },
+  {
+    version: "2.24.0",
+    date: "2026-08-22",
+    headline: "The recipe book is a search now",
+    notes: [
+      "Clicking an item opens one screen: your question as a card at the bottom, every answer above it.",
+      "Ask for several items at once, on either side, with any, all or only.",
+      "Adding a recipe lands it on free ground, wires it to the card you came from, and the camera follows.",
+      "Every card has a new button that finds a replacement recipe and keeps the wires that still fit.",
+    ],
+  },
+  {
+    version: "2.23.1",
+    date: "2026-08-21",
+    headline: "Selection is blue",
+    notes: [
+      "Everything you select is blue now, the same blue as the rest of the site.",
+      "A box drawn inside a board no longer picks up the board itself.",
+      "To select a board with a box, start the box outside it.",
+      "Drawing a new board shows a plain outline instead of a purple one.",
+    ],
+  },
+  {
+    version: "2.23.0",
+    date: "2026-08-21",
+    // Reworded when the icon changed: the entry said "gear", and pointing
+    // archive readers at an icon the button no longer wears helps nobody.
+    headline: "Setup rules, one button",
+    notes: [
+      "New button, top left, holding two rules for the whole setup.",
+      "Free inputs: anything short of stock takes the rest from off the setup.",
+      "Free outputs: anything with nowhere to go leaves instead of backing up.",
+      "The wand is gone. A plan saved with sketch mode opens with both rules on.",
+    ],
+  },
+  {
     version: "2.23.0",
     date: "2026-08-23",
     headline: "Crop farms know SUSY's crops",

@@ -29,6 +29,15 @@ import {
 } from "@/lib/solver/power-report";
 import { useWorkspaceView, writeWorkspaceView } from "@/lib/workspace-view";
 import { useFactoryStore } from "@/store/factory-store";
+import { getEnergyHatchType } from "@/lib/machines/energy-hatches";
+import { getHatchAmps } from "@/lib/solver/power";
+import { getVoltageTierMaxEuT } from "@/lib/model/tiers";
+import { MinecraftTooltip } from "@/components/nei/MinecraftTooltip";
+import { EnergyHatchArt } from "@/components/flow/EnergyHatchMenu";
+import {
+  energyHatchCatalogKey,
+  useEnergyHatchCatalog,
+} from "@/components/flow/use-energy-hatch-catalog";
 
 type VoltageTier = Exclude<MachineTier, "DEMO">;
 
@@ -42,6 +51,12 @@ interface BuildLine {
   key: string;
   count: number;
   hatches: number;
+  /** An exotic hatch family's amp badge, worn instead of the count. */
+  hatchChip?: string;
+  /** The family itself, so the row can wear the hatch item's art. */
+  hatchTypeId?: string;
+  /** Working amps of the build, singleblocks included (arc furnaces run 3). */
+  amps?: number;
   isMultiblock: boolean;
   tier?: VoltageTier;
   tierIndex: number;
@@ -184,7 +199,7 @@ export function MachineShoppingList() {
         ? (cropsNhHarvesterTierName(crop.tierIndex) as VoltageTier)
         : undefined;
       const buildKey = report
-        ? `${report.tier}|${report.isMultiblock ? report.hatches : "single"}`
+        ? `${report.tier}|${report.isMultiblock ? (report.hatchChip ?? report.hatches) : "single"}`
         : steam
           ? `steam|${steam.highPressure ? "high" : "bronze"}`
           : cropTier
@@ -207,6 +222,11 @@ export function MachineShoppingList() {
             key: `${handler.label}|${buildKey}`,
             count: 0,
             hatches: report?.hatches ?? 1,
+            hatchChip: report?.hatchChip,
+            hatchTypeId: report?.isMultiblock
+              ? getEnergyHatchType(node.energyHatchType).id
+              : undefined,
+            amps: report?.amps,
             isMultiblock:
               report?.isMultiblock ??
               steam?.isMultiblock ??
@@ -319,18 +339,20 @@ export function MachineShoppingList() {
     <div className="flex min-h-0 shrink-0 basis-[40%] flex-col border-t-2 border-[var(--mc-47)]">
       <div className="border-b border-[var(--mc-47)] bg-[var(--mc-71)] px-2 py-1">
         <div className="flex w-full items-center gap-2">
-          <span className="text-sm font-bold uppercase tracking-wider">Power</span>
-          {hasEu || hasSteam ? <DrawModePill average={average} /> : null}
+          <span className="text-sm font-bold uppercase tracking-wider">Machines</span>
           {/* ONE energy rides the title line. Two do not fit the column
               beside the title and the pill, so the pair moves to a line of
               its own below — decided by what the board HAS, never by
               measured width, so a figure animating near the edge cannot
               bounce the header between one line and two. */}
-          {hasEu !== hasSteam ? (
-            <span className="ml-auto shrink-0 text-[13px] font-bold tabular-nums">
-              {steamFigure ?? euFigure}
-            </span>
-          ) : null}
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            {hasEu || hasSteam ? <DrawModePill average={average} /> : null}
+            {hasEu !== hasSteam ? (
+              <span className="shrink-0 text-[13px] font-bold tabular-nums">
+                {steamFigure ?? euFigure}
+              </span>
+            ) : null}
+          </span>
         </div>
         {hasEu && hasSteam ? (
           <span className="flex items-baseline justify-end gap-2 text-[13px] font-bold tabular-nums">
@@ -358,6 +380,8 @@ export function MachineShoppingList() {
                 label={group.label}
                 chip={uniform ? build : undefined}
                 euT={uniform ? (average ? build?.avgEuT : build?.euT) : undefined}
+                peakEuT={uniform ? build?.euT : undefined}
+                averageEuT={uniform ? build?.avgEuT : undefined}
                 steamLs={uniform ? (average ? build?.avgSteamLs : build?.steamLs) : undefined}
                 state={uniform ? (build?.state ?? "ok") : "ok"}
                 wash={uniform ? build?.tier : undefined}
@@ -382,6 +406,8 @@ export function MachineShoppingList() {
                       }
                       chip={buildLine}
                       euT={average ? buildLine.avgEuT : buildLine.euT}
+                      peakEuT={buildLine.euT}
+                      averageEuT={buildLine.avgEuT}
                       steamLs={average ? buildLine.avgSteamLs : buildLine.steamLs}
                       state={buildLine.state}
                       wash={buildLine.tier}
@@ -471,6 +497,8 @@ function ListLine({
   label,
   chip,
   euT,
+  peakEuT,
+  averageEuT,
   steamLs,
   state,
   wash,
@@ -485,8 +513,11 @@ function ListLine({
   count?: number;
   label?: string;
   /** The fused hatch-and-tier chip, when this line is one build. */
-  chip?: Pick<BuildLine, "tier" | "hatches" | "isMultiblock">;
+  chip?: Pick<BuildLine, "tier" | "hatches" | "hatchChip" | "hatchTypeId" | "amps" | "isMultiblock">;
   euT?: number;
+  /** Both modes' figures at once, for the chip's tooltip. */
+  peakEuT?: number;
+  averageEuT?: number;
   /** A steam machine's figure: what it burns, in L/s, instead of EU/t. */
   steamLs?: number;
   state: NodePowerState;
@@ -496,10 +527,89 @@ function ListLine({
 }) {
   const stalled = state !== "ok";
   const chipColor = chip?.tier ? GT_TIER_COLORS[chip.tier] : undefined;
+  // The hatch item the build drinks through, for the chip's middle seat -
+  // the same art the card's own chip wears.
+  const datasetVersionId = useFactoryStore((store) => store.dataset?.datasetVersionId);
+  const hatchCatalog = useEnergyHatchCatalog(chip?.isMultiblock ? datasetVersionId : undefined);
+  const hatchEntry =
+    chip?.isMultiblock && chip.tier
+      ? hatchCatalog.get(energyHatchCatalogKey(chip.tier, chip.hatchTypeId ?? "standard"))
+      : undefined;
+  // What the line's build means, in one breath: what supplies the power, its
+  // amps, the EU/t they buy, and both draw figures. Singleblocks get the same
+  // story with the machine itself in the hatch's place.
+  const hatchType = chip?.isMultiblock ? getEnergyHatchType(chip.hatchTypeId) : undefined;
+  const hatchAmps =
+    chip?.amps ??
+    (hatchType ? (hatchType.exotic ? hatchType.amps : getHatchAmps(chip?.hatches ?? 1)) : undefined);
+  const hatchPoolEuT =
+    chip?.tier && hatchAmps !== undefined ? getVoltageTierMaxEuT(chip.tier) * hatchAmps : 0;
+  const tierBadge =
+    chip?.tier && chipColor ? (
+      <span
+        className="border px-1 text-[10px] font-bold leading-[15px]"
+        style={{
+          backgroundColor: chipColor.background,
+          borderColor: chipColor.border,
+          color: chipColor.text,
+          textShadow: `1px 1px 0 ${chipColor.shadow}`,
+        }}
+      >
+        {chip.tier}
+      </span>
+    ) : null;
+  const hatchStory =
+    chip?.tier && hatchAmps !== undefined ? (
+      <div className="w-max max-w-[280px]">
+        {count !== undefined ? (
+          <div className="text-[13px] font-semibold text-white">
+            {count}× {count === 1 ? "machine" : "machines"}
+          </div>
+        ) : null}
+        <div className="mt-0.5 flex items-center gap-1.5 text-[13px] font-semibold text-white">
+          {hatchType ? (
+            hatchType.exotic ? (
+              <>
+                {tierBadge}
+                <span>{hatchType.label}</span>
+              </>
+            ) : (
+              <>
+                <span>{chip.hatches}×</span>
+                {tierBadge}
+                <span>Energy Hatch</span>
+              </>
+            )
+          ) : (
+            <>
+              {tierBadge}
+              <span>Machine</span>
+            </>
+          )}
+        </div>
+        <div className="mt-0.5 text-[11px] leading-4 text-slate-300">
+          {formatCompact(hatchAmps)} A:{" "}
+          <span className="font-bold text-white">{formatCompact(hatchPoolEuT)} EU/t</span>
+        </div>
+        {peakEuT !== undefined ? (
+          <>
+            <div className="text-[11px] leading-4 text-slate-300">
+              PEAK <span className="font-bold text-white">{formatCompact(peakEuT)} EU/t</span>
+            </div>
+            <div className="text-[11px] leading-4 text-slate-300">
+              AVG{" "}
+              <span className="font-bold text-white">{formatCompact(averageEuT ?? 0)} EU/t</span>
+            </div>
+          </>
+        ) : null}
+      </div>
+    ) : undefined;
 
-  // No hover panel on these lines: the row already says everything it knows,
-  // and a tooltip repeating it was noise in the way of the scrollbar.
+  // The whole LINE answers the hover, not just the chip: the build's power
+  // story is about the row, and a target the width of a chip made the panel
+  // feel like a secret.
   return (
+    <MinecraftTooltip content={hatchStory}>
       <button
         type="button"
         onClick={onClick}
@@ -557,19 +667,32 @@ function ListLine({
              tier, one paint job, so the panel and the board read as one.
              Always in the right-hand column, so every chip on the list sits
              on one line however the rows around it are shaped. */
-          <span className="flex shrink-0">
+          <span className="flex shrink-0 items-center">
             {chip.isMultiblock ? (
-              <span
-                className="h-5 border-2 border-r-0 px-1 text-[11px] font-bold leading-4"
-                style={{
-                  backgroundColor: chipColor.background,
-                  borderColor: chipColor.border,
-                  color: chipColor.text,
-                  textShadow: `1px 1px 0 ${chipColor.shadow}`,
-                }}
-              >
-                {chip.hatches}×
-              </span>
+              <>
+                <span
+                  className="flex h-5 items-center border-2 border-r-0 px-1 pb-[2px] text-[11px] font-bold leading-none"
+                  style={{
+                    backgroundColor: chipColor.background,
+                    borderColor: chipColor.border,
+                    color: chipColor.text,
+                    textShadow: `1px 1px 0 ${chipColor.shadow}`,
+                  }}
+                >
+                  {chip.hatchChip ?? `${chip.hatches}×`}
+                </span>
+                {hatchEntry ? (
+                  <span
+                    className="flex h-5 w-5 items-center justify-center border-2 border-r-0"
+                    style={{
+                      backgroundColor: chipColor.background,
+                      borderColor: chipColor.border,
+                    }}
+                  >
+                    <EnergyHatchArt entry={hatchEntry} boxClass="h-6 w-6" />
+                  </span>
+                ) : null}
+              </>
             ) : null}
             <span
               className="h-5 border-2 px-1.5 text-[11px] font-bold leading-4"
@@ -633,5 +756,6 @@ function ListLine({
         )}
         </span>
       </button>
+    </MinecraftTooltip>
   );
 }

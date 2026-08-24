@@ -155,6 +155,15 @@ export interface MachineBehaviour {
    */
   amperage?: number;
   /**
+   * Mega-style power (`MegaMultiBlockBase.setProcessingLogicPower`): the pool
+   * is `getMaxInputEu()`, the SUM of every hatch's full rating - so even a
+   * lone regular hatch contributes its whole 2 amps, with no single-hatch
+   * clamp.
+   */
+  fullPowerPool?: boolean;
+  /** `setUnlimitedTierSkips`: a recipe above the hatch tier still starts. */
+  unlimitedTierSkip?: boolean;
+  /**
    * How a HEAT_OVERCLOCK machine computes its machine heat, transcribed from
    * each machine's `setMachineHeat` call. See `heat.ts`.
    */
@@ -393,6 +402,16 @@ const PLASMA_MIXER_PARALLEL_CONTROL = countControl(
   "Parallels",
   [1, 2, 4, 8, 16, 32, 64, 128, 256],
 );
+/** Fluid Shaper width expansions, 0 through the structure's 6 maximum. */
+const WIDTH_EXPANSION = "widthExpansion";
+const WIDTH_EXPANSION_CONTROL = countControl(WIDTH_EXPANSION, "Width Expansion", [
+  0, 1, 2, 3, 4, 5, 6,
+]);
+const LATEX_SINGULARITY = "latexSingularity";
+const LATEX_SINGULARITY_CONTROL = choiceControl(LATEX_SINGULARITY, "Controller Slot", [
+  "Empty",
+  "Elastic Singularity",
+]);
 /**
  * The fourteen heating coils and the heat each one gives the machine, for
  * machines whose coil the dataset does not offer as a knob. Keys match the
@@ -538,6 +557,9 @@ const MACHINES: Record<string, MachineBehaviour> = {
     overclock: HEAT_OVERCLOCK,
     heat: { voltageBonus: true },
     parallels: 256,
+    fullPowerPool: true,
+    unlimitedTierSkip: true,
+    aliases: ["Mega Electric Blast Furnace"],
   },
   Volcanus: {
     overclock: HEAT_OVERCLOCK,
@@ -558,8 +580,18 @@ const MACHINES: Record<string, MachineBehaviour> = {
   },
 
   // -- Perfect overclockers -------------------------------------------------
-  "Large Chemical Reactor": { overclock: OVERCLOCK.perfect() },
-  "Mega Chemical Reactor": { overclock: OVERCLOCK.perfect(), parallels: 256 },
+  // MTELargeChemicalReactor reads its coil only as a structure check (exactly
+  // one, all the same tier); no speed, EU or heat hangs on the tier, so the
+  // dataset's coil knob is hidden rather than shown changing nothing.
+  "Large Chemical Reactor": { overclock: OVERCLOCK.perfect(), hidesControls: ["heatingCoil"] },
+  "Mega Chemical Reactor": {
+    overclock: OVERCLOCK.perfect(),
+    parallels: 256,
+    // MTEMegaChemicalReactor keeps the base hatch amps but its processing
+    // logic sets unlimited tier skips.
+    unlimitedTierSkip: true,
+    hidesControls: ["heatingCoil"],
+  },
   "Circuit Assembly Line": { overclock: OVERCLOCK.perfect() },
   Digester: { overclock: OVERCLOCK.perfect() },
   "Elemental Duplicator": {
@@ -586,6 +618,8 @@ const MACHINES: Record<string, MachineBehaviour> = {
   "Mega Oil Cracker": {
     overclock: OVERCLOCK.normal(),
     parallels: 256,
+    fullPowerPool: true,
+    unlimitedTierSkip: true,
     // Unlike the small cracker's additive, capped discount, the mega compounds
     // 10% per coil tier with no cap: MTEMegaOilCracker.getEuModifier.
     power: (c) => Math.pow(0.9, c.tier(COIL) + 1),
@@ -610,6 +644,8 @@ const MACHINES: Record<string, MachineBehaviour> = {
   "Mega Alloy Blast Smelter": {
     overclock: OVERCLOCK.normal(),
     parallels: 256,
+    fullPowerPool: true,
+    unlimitedTierSkip: true,
     // MTEMegaAlloyBlastSmelter: duration x (1 - 5% per coil tier above TPV),
     // stated here as throughput; and a compounding 5% EU discount per coil
     // tier above the RECIPE's own voltage tier, never a penalty.
@@ -692,6 +728,8 @@ const MACHINES: Record<string, MachineBehaviour> = {
     speed: 1.5,
     power: 0.9,
     parallels: 256,
+    fullPowerPool: true,
+    unlimitedTierSkip: true,
   },
   "Molecular Transformer": { overclock: OVERCLOCK.normal() },
   "Nuclear Salt Processing Plant": {
@@ -913,19 +951,42 @@ const MACHINES: Record<string, MachineBehaviour> = {
     speed: 6,
     parallels: (c) => c.voltageTier * 4,
   },
-  "Coke Oven": {
-    aliases: ["Industrial Coke Oven"],
+  "Industrial Coke Oven": {
+    // "Coke Oven" is what datasets before the gtpp.recipe.cokeoven rename
+    // called this machine, so saved plans still carry it. The Railcraft brick
+    // Coke Oven shares that name but never the slices control, which is what
+    // the parallels guard below keys on.
+    aliases: ["Coke Oven"],
     overclock: OVERCLOCK.normal(),
     // Coils are a 2% EU discount each, compounding, and nothing else:
     // MTEIndustrialCokeOven bills 0.98^(coil tier + 1), cupronickel included.
     power: (c) => 0.98 ** (c.tier(COIL) + 1),
     parallels: (c) => {
+      const slices = c.value(COKE_SLICES);
+      if (slices === 0) {
+        // No slices control means this is the Railcraft brick Coke Oven
+        // matched through the legacy alias: one op at a time.
+        return 1;
+      }
       const heatProof = c.tier(COKE_CASING) === 1;
       const base = heatProof ? 32 : 16;
       const perSlice = heatProof ? 16 : 8;
-      return base + (c.value(COKE_SLICES) - 1) * perSlice;
+      return base + (slices - 1) * perSlice;
     },
     note: "Eternal coils are needed for more than 15 slices.",
+  },
+
+  // MTEMassFabricator, in-game "Matter Fabrication CPU" (dataset map
+  // gtpp.recipe.matterfab2 is named "Matter Fabricator"): setEuModifier(0.8F)
+  // and enablePerfectOverclock(). getMaxParallelRecipes() is 64 in scrap mode
+  // and 8 x voltage tier in UU mode; the reference reads the mode off the
+  // recipe, and the scrap-to-UU-Amplifier recipes are exactly the LV ones.
+  "Matter Fabricator": {
+    aliases: ["Matter Fabrication CPU"],
+    overclock: OVERCLOCK.perfect(),
+    speed: 1,
+    power: 0.8,
+    parallels: (c) => (c.recipeVoltageTier === 1 ? 64 : 8 * c.voltageTier),
   },
 
   // -- Remaining machines whose formulas need no recipe metadata -----------
@@ -958,6 +1019,21 @@ const MACHINES: Record<string, MachineBehaviour> = {
     overclock: OVERCLOCK.normal(),
     power: 3,
     amperage: 3,
+  },
+  /**
+   * GT++'s Electric Auto Workbench (MTEElectricAutoWorkbench, LV through UV):
+   * the placeable machine that runs crafting-grid recipes. In normal crafting
+   * mode every craft costs a flat 2048 EU, input is capped at the tier's
+   * voltage, and a successful craft re-runs the next tick, so the machine is
+   * exactly a perfect-overclocking singleblock: recipe-rules.ts seeds its
+   * handler at LV's 2048/32 = 64 ticks and 32 EU/t, and each tier quarters
+   * the duration at unchanged energy per craft. Three steps reach the one-
+   * craft-per-tick ceiling at EV; past that the game neither speeds up nor
+   * charges more, hence the cap.
+   */
+  "Auto Workbench": {
+    kind: "single",
+    overclock: OVERCLOCK.perfect(3),
   },
 
   // -- Steam multiblocks -----------------------------------------------------
@@ -1002,6 +1078,62 @@ const MACHINES: Record<string, MachineBehaviour> = {
         ),
       ),
     controls: [SPIN_MODE_CONTROL, TURBINE_TIER_CONTROL, SPIN_FUEL_CONTROL],
+  },
+
+  // -- Plain "N parallels per voltage tier" multis the reference never had ---
+  // Each transcribed from its GT5-Unofficial class in
+  // gregtech.common.tileentities.machines.multi; the Fluid Shaper alone is
+  // also in the reference and checked against its fixture.
+  // MTEIndustrialChemicalBath: setSpeedBonus(1F / 5F), 4 * GTUtility.getTier.
+  "Industrial Chemical Bath": {
+    overclock: OVERCLOCK.normal(),
+    speed: 5,
+    parallels: (c) => c.voltageTier * 4,
+  },
+  // MTEIndustrialBendingMachine: setSpeedBonus(1F / 6F), 6 * GTUtility.getTier.
+  "Industrial Bending Machine": {
+    overclock: OVERCLOCK.normal(),
+    speed: 6,
+    parallels: (c) => c.voltageTier * 6,
+  },
+  // MTEIndustrialChisel: setSpeedBonus(1F / 3F), setEuModifier(0.75F),
+  // 16 * GTUtility.getTier.
+  "Industrial 3D Copying Machine": {
+    overclock: OVERCLOCK.normal(),
+    speed: 3,
+    power: 0.75,
+    parallels: (c) => c.voltageTier * 16,
+  },
+  // MTEMassSolidifier: 10 * GTUtility.getTier, setEuModifier(0.8F), and a
+  // momentum speed ramp from 1x to 3x while running.
+  "Mass Solidifier": {
+    overclock: OVERCLOCK.normal(),
+    speed: 3,
+    power: 0.8,
+    parallels: (c) => c.voltageTier * 10,
+    note: "Assumes max speed.",
+  },
+  // MTEFluidShaper: (2 + 3 per width expansion) * GTUtility.getTier,
+  // setEuModifier(0.8F), the same momentum ramp as the Mass Solidifier.
+  "Fluid Shaper": {
+    overclock: OVERCLOCK.normal(),
+    speed: 3,
+    power: 0.8,
+    parallels: (c) => c.voltageTier * (2 + 3 * c.value(WIDTH_EXPANSION)),
+    controls: [WIDTH_EXPANSION_CONTROL],
+    note: "Assumes max speed.",
+  },
+  // MTELatex: setSpeedBonus(1F / 2F), setEuModifier(0.85F), 8 * GTUtility
+  // .getTier doubled by an Elastic Singularity in the controller slot. The
+  // item pipe casings' rubber cost discount changes INPUT amounts, which the
+  // table cannot express.
+  "L.A.T.E.X.": {
+    overclock: OVERCLOCK.normal(),
+    speed: 2,
+    power: 0.85,
+    parallels: (c) => c.voltageTier * (c.tier(LATEX_SINGULARITY) === 1 ? 16 : 8),
+    controls: [LATEX_SINGULARITY_CONTROL],
+    note: "Rubber cost discounts are not counted.",
   },
 };
 

@@ -520,11 +520,13 @@ function FlowIOPanel() {
   return (
     <section
       className={[
-        // The purple ring wraps the WHOLE panel, not just the strip: the point
-        // is that everything below is about the selection, so the mode has to
-        // be readable from anywhere in the list rather than only at the top.
+        // The ring wraps the WHOLE panel, not just the strip: the point is
+        // that everything below is about the selection, so the mode has to be
+        // readable from anywhere in the list rather than only at the top.
         "flex min-h-0 flex-1 flex-col rounded border bg-surface-raised",
-        selection ? "border-purple-500 ring-1 ring-purple-500/60" : "border-line",
+        selection
+          ? "border-[var(--selection)] ring-1 ring-[var(--selection-soft)]"
+          : "border-line",
       ].join(" ")}
     >
       {selection ? (
@@ -782,9 +784,13 @@ function ScopeStrip({
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-purple-500/50 bg-purple-500/20 px-2 py-1">
-      <span className="text-xs font-bold uppercase tracking-wider text-purple-200">Selection</span>
-      <span className="ml-auto truncate text-xs text-purple-100/70">{parts.join(", ")}</span>
+    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--selection-line)] bg-[var(--selection-wash)] px-2 py-1">
+      <span className="text-xs font-bold uppercase tracking-wider text-[var(--selection-ink)]">
+        Selection
+      </span>
+      <span className="ml-auto truncate text-xs text-[var(--selection-ink-dim)]">
+        {parts.join(", ")}
+      </span>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { getEnergyHatchType } from "@/lib/machines/energy-hatches";
 import { getMachineBehaviour } from "@/lib/machines/machine-table";
 import {
   getRecipeMinimumVoltageTier,
@@ -13,7 +14,7 @@ type VoltageTier = Exclude<MachineTier, "DEMO">;
 type PowerRecipeInput = Partial<
   Pick<Recipe, "machineType" | "machineHandlers" | "machineProfile">
 >;
-type PowerNodeInput = Partial<Pick<FactoryNode, "energyHatches">>;
+type PowerNodeInput = Partial<Pick<FactoryNode, "energyHatches" | "energyHatchType">>;
 
 /**
  * Whether the machine actually running this recipe is a multiblock, which is
@@ -49,9 +50,16 @@ export function getNodeRunTier(
   return resolveVoltageTier(node.overclockTier, getRecipeMinimumVoltageTier(recipe));
 }
 
-/** The node's hatch count, defaulting to one and meaningless on singleblocks. */
+/**
+ * The node's hatch count, defaulting to one and meaningless on singleblocks.
+ * An exotic hatch family (multi-amp, laser) is game-limited to exactly ONE
+ * hatch, so a count stored while regular hatches were selected clamps away.
+ */
 export function getNodeEnergyHatches(recipe: PowerRecipeInput, node: PowerNodeInput): number {
   if (!isMultiblockRecipe(recipe)) {
+    return 1;
+  }
+  if (getEnergyHatchType(node.energyHatchType).exotic) {
     return 1;
   }
   const hatches = node.energyHatches ?? 1;
@@ -59,8 +67,9 @@ export function getNodeEnergyHatches(recipe: PowerRecipeInput, node: PowerNodeIn
 }
 
 /**
- * Working amps for a hatch count, from `setProcessingLogicPower`: exactly one
- * standard hatch is clamped to 1 amp; two or more work at 2 amps each.
+ * Working amps for a regular hatch count, from `setProcessingLogicPower`:
+ * exactly one standard hatch is clamped to 1 amp; two or more work at 2 amps
+ * each.
  */
 export function getHatchAmps(hatches: number): number {
   return hatches <= 1 ? 1 : 2 * hatches;
@@ -69,11 +78,22 @@ export function getHatchAmps(hatches: number): number {
 /**
  * The amps the machine's power maths run on: hatch amps for a multiblock, the
  * machine's own amperage for a singleblock (1 for nearly everything, 3 for
- * the arc furnaces).
+ * the arc furnaces). An exotic hatch carries its whole rating - one 64 A
+ * hatch is 64 amps, no clamp - which is `getMaxWorkingInputAmpsMulti`.
  */
 export function getNodePowerAmps(recipe: PowerRecipeInput, node: PowerNodeInput): number {
   if (isMultiblockRecipe(recipe)) {
-    return getHatchAmps(getNodeEnergyHatches(recipe, node));
+    const hatchType = getEnergyHatchType(node.energyHatchType);
+    if (hatchType.exotic) {
+      return hatchType.amps;
+    }
+    const hatches = getNodeEnergyHatches(recipe, node);
+    // Mega-style power draws every hatch's whole 2 amps - a lone hatch
+    // included, where the base rule clamps it to 1.
+    if (getMachineBehaviour(recipe.machineType)?.fullPowerPool) {
+      return 2 * hatches;
+    }
+    return getHatchAmps(hatches);
   }
   return getMachineBehaviour(recipe.machineType)?.amperage ?? 1;
 }
@@ -100,7 +120,10 @@ export function getEffectiveVoltageOrdinal(
   tier: VoltageTier,
 ): number {
   const hatches = getNodeEnergyHatches(recipe, node);
-  const summedVoltage = getVoltageTierMaxEuT(tier) * hatches;
+  // Mega-style machines read `getMaxInputEu()`, which counts each regular
+  // hatch's full 2 amps; everything else sums hatch voltages alone.
+  const perHatch = getMachineBehaviour(recipe.machineType)?.fullPowerPool ? 2 : 1;
+  const summedVoltage = getVoltageTierMaxEuT(tier) * hatches * perHatch;
   if (!Number.isFinite(summedVoltage)) {
     return getVoltageTierIndex(tier);
   }

@@ -388,9 +388,11 @@ export function solveEquilibrium(
         sinkPoolKey: targetStorage.id,
         poolKey: sourceStorage.id,
         freeDisposal: false,
-        // A feed into a BYPRODUCT drawer catches leftovers and never begs,
-        // same as the machine-fed kind.
-        silent: storageRoles.get(edge.target) === "byproduct",
+        // A feed into a BYPRODUCT or TRASH drawer catches leftovers and never
+        // begs, same as the machine-fed kind.
+        silent:
+          storageRoles.get(edge.target) === "byproduct" ||
+          storageRoles.get(edge.target) === "trash",
         overflow: false,
         sourceCapacityPerSecond: Number.POSITIVE_INFINITY,
       };
@@ -457,11 +459,14 @@ export function solveEquilibrium(
         role === "trash" ||
         isOverflowBufferSink ||
         (role === "storage-sink" && isDrainRole(storageRoles.get(edge.target) ?? "idle")),
-      // A BYPRODUCT drawer takes what is left and asks for nothing, so it must
-      // not report what it absorbed as demand: doing so would pace its feeder
-      // to full blast purely by existing, which is what a PRODUCT drawer is
-      // for. This is the one flag that separates the two.
-      silent: role === "storage-sink" && storageRoles.get(edge.target) === "byproduct",
+      // A BYPRODUCT or TRASH drawer takes what is left and asks for nothing,
+      // so it must not report what it absorbed as demand: doing so would pace
+      // its feeder to full blast purely by existing, which is what a PRODUCT
+      // drawer is for. This is the one flag that separates them from it.
+      silent:
+        role === "storage-sink" &&
+        (storageRoles.get(edge.target) === "byproduct" ||
+          storageRoles.get(edge.target) === "trash"),
       overflow: isOverflowBufferSink,
       sourceCapacityPerSecond:
         sourceStorage || !sourceResult
@@ -1382,7 +1387,7 @@ export function solveEquilibrium(
       // a can would have drunk there. It catches; it does not ask.
       for (const feedEdge of storageFeedEdges) {
         const targetRole = storageRoles.get(feedEdge.targetId);
-        if (targetRole !== "product" && targetRole !== "byproduct") {
+        if (!isDrainRole(targetRole ?? "idle")) {
           continue;
         }
         const stock = stockByPool.get(feedEdge.poolKey) ?? 0;

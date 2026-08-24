@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  Background,
-  BackgroundVariant,
   BaseEdge,
   EdgeLabelRenderer,
   ConnectionMode,
@@ -57,13 +55,13 @@ import {
   Redo2,
   Sprout,
   Square,
-  Trash,
   Trash2,
   TriangleAlert,
   Type,
   Undo2,
   Wallpaper,
-  Wand2,
+  Check,
+  SlidersHorizontal,
   X,
   Zap,
   type LucideIcon,
@@ -96,6 +94,8 @@ import {
   makeResourceKey,
   resourceMatchesInput,
 } from "@/lib/model";
+import { getCrossFormCellMatch } from "@/lib/model/resources";
+import { fetchLitresPerCell } from "@/lib/datasets/cell-ratio";
 import {
   collectPocketMembers,
   getEffectiveNodeRecipe,
@@ -130,6 +130,7 @@ import {
 } from "@/lib/designs/design-camera";
 import { isEditableKeyboardTarget } from "./keyboard";
 import { BoardHelp } from "./BoardHelp";
+import { PerfHud } from "./PerfHud";
 import {
   ANNOTATION_DEFAULT_ARROW,
   ANNOTATION_DEFAULT_BOX,
@@ -181,7 +182,7 @@ import {
   type GlanceMode,
 } from "./board-view";
 import { CANVAS_THEMES, getCanvasTheme, type CanvasTheme } from "./canvas-themes";
-import { GrainBackground, RuledBackground } from "./board-pattern";
+import { GrainBackground, RuledBackground, TiledBackground } from "./board-pattern";
 import {
   MotionNumberText,
   readBoardMotionSnapshot,
@@ -323,6 +324,7 @@ import {
 } from "./AnnotationNode";
 import { settleZonePoints } from "@/lib/model/zone-points";
 import { BOARD_PAPER_IDS } from "@/lib/model/board-paper";
+import { getSetupRules } from "@/lib/model/setup-rules";
 import { nearestFreeSpot, type PlacementRect, type PlacementRegion } from "./board-placement";
 import { registerBoardResize, type BoardResizeDraft } from "./board-resize";
 
@@ -393,14 +395,6 @@ const CANVAS_PATTERN_LABEL: Record<CanvasPattern, string> = {
   ruled: "Background: ruled lines",
   graph: "Background: graph paper",
   none: "Background: blank",
-};
-const CANVAS_PATTERN_VARIANT: Record<
-  Exclude<CanvasPattern, "none" | "ruled" | "graph">,
-  (typeof BackgroundVariant)[keyof typeof BackgroundVariant]
-> = {
-  dots: BackgroundVariant.Dots,
-  lines: BackgroundVariant.Lines,
-  cross: BackgroundVariant.Cross,
 };
 
 /** Module-level so the board never re-renders on a fresh object identity. */
@@ -983,7 +977,83 @@ let gridSolveInputsStamp = 0;
 let gridSolveCheckedStamp = -1;
 let gridSolveCheckedEpoch = -1;
 
+function pointListsEqual(
+  a: Array<{ x: number; y: number }> | undefined,
+  b: Array<{ x: number; y: number }> | undefined,
+) {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b || a.length !== b.length) {
+    return (a?.length ?? 0) === (b?.length ?? 0);
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index].x !== b[index].x || a[index].y !== b[index].y) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function idListsEqual(a: string[] | undefined, b: string[] | undefined) {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b || a.length !== b.length) {
+    return (a?.length ?? 0) === (b?.length ?? 0);
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function gridRouteEdgeInputsEqual(a: GridRouteEdgeInput[], b: GridRouteEdgeInput[]) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (left === right) {
+      continue;
+    }
+    if (
+      left.edgeId !== right.edgeId ||
+      left.order !== right.order ||
+      left.sourceNodeId !== right.sourceNodeId ||
+      left.targetNodeId !== right.targetNodeId ||
+      left.sourceHandleId !== right.sourceHandleId ||
+      left.targetHandleId !== right.targetHandleId ||
+      left.sourceSlotEndpoint !== right.sourceSlotEndpoint ||
+      left.targetSlotEndpoint !== right.targetSlotEndpoint ||
+      left.sourceStorageEndpoint !== right.sourceStorageEndpoint ||
+      left.targetStorageEndpoint !== right.targetStorageEndpoint ||
+      left.routingWidth !== right.routingWidth ||
+      !pointListsEqual(left.waypoints, right.waypoints) ||
+      !idListsEqual(left.throughBoardIds, right.throughBoardIds) ||
+      !idListsEqual(left.homeBoardIds, right.homeBoardIds)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function publishGridRouteEdges(edges: GridRouteEdgeInput[], freeDock: boolean) {
+  // The edges memo rebuilds on hover, search keystrokes and solver results —
+  // none of which move a wire. Bumping the stamp unconditionally forced the
+  // full signature rebuild (O(edges × perimeter) endpoint resolution in free
+  // dock) just to discover nothing changed; a field-wise compare here is
+  // O(edges) and keeps the fast-path gate honest.
+  if (
+    freeDock === publishedGridFreeDock &&
+    gridRouteEdgeInputsEqual(publishedGridRouteEdges, edges)
+  ) {
+    return;
+  }
   publishedGridRouteEdges = edges;
   publishedGridFreeDock = freeDock;
   gridSolveInputsStamp += 1;
@@ -1137,39 +1207,57 @@ function ensureGridSolve() {
   const requests: GridRouteRequest[] = [];
   const orderByEdge = new Map<string, number>();
   const parts: string[] = [];
+  // Free-dock endpoint resolution enumerates the whole card perimeter (~64
+  // candidates per endpoint), yet its signature never contains those coords —
+  // they derive purely from the card rects the sweep hash already covers. So
+  // in free-dock mode the signature is built FIRST from the inputs alone and
+  // resolution is deferred until it actually differs; only fixed-port mode
+  // (1-4 anchors, and lazily-arriving slot measurements that must go in the
+  // signature) still resolves up front.
+  const freeDock = publishedGridFreeDock;
+  const deferredInputs: GridRouteEdgeInput[] = [];
   for (const input of publishedGridRouteEdges) {
-    const sources = resolveGridRouteEndpoints(input, "source");
-    const targets = resolveGridRouteEndpoints(input, "target");
-    if (sources.length === 0 || targets.length === 0) {
-      continue;
-    }
-    requests.push({
-      edgeId: input.edgeId,
-      order: input.order,
-      sources,
-      targets,
-      strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
-      waypoints: input.waypoints,
-      exemptObstacleIds: input.throughBoardIds,
-      homeObstacleIds: input.homeBoardIds,
-    });
-    orderByEdge.set(input.edgeId, input.order);
-    // Free-dock candidates derive purely from the card rects, and the sweep
-    // hash already covers those — identity suffices. Fixed-port anchors also
-    // depend on lazily-arriving slot measurements, so their coords go in.
     const waypointPart =
       input.waypoints && input.waypoints.length > 0
         ? `|wp:${input.waypoints
             .map((point) => `${Math.round(point.x)},${Math.round(point.y)}`)
             .join("+")}`
         : "";
-    const describe = publishedGridFreeDock
-      ? waypointPart
-      : `${waypointPart}|${sources
-          .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
-          .join("+")}|${targets
-          .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
-          .join("+")}`;
+    let describe: string;
+    if (freeDock) {
+      // Same skip rule the resolver applies: an unmeasured node yields no
+      // candidates in free-dock mode, and nothing else can empty them.
+      if (
+        !getMeasuredNodeBoundsById(input.sourceNodeId) ||
+        !getMeasuredNodeBoundsById(input.targetNodeId)
+      ) {
+        continue;
+      }
+      deferredInputs.push(input);
+      describe = waypointPart;
+    } else {
+      const sources = resolveGridRouteEndpoints(input, "source");
+      const targets = resolveGridRouteEndpoints(input, "target");
+      if (sources.length === 0 || targets.length === 0) {
+        continue;
+      }
+      requests.push({
+        edgeId: input.edgeId,
+        order: input.order,
+        sources,
+        targets,
+        strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
+        waypoints: input.waypoints,
+        exemptObstacleIds: input.throughBoardIds,
+        homeObstacleIds: input.homeBoardIds,
+      });
+      orderByEdge.set(input.edgeId, input.order);
+      describe = `${waypointPart}|${sources
+        .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
+        .join("+")}|${targets
+        .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
+        .join("+")}`;
+    }
     // Frame exemptions are a routing input like a waypoint: adopting a card
     // changes no endpoint and moves no obstacle, yet its wires must reroute.
     const throughPart =
@@ -1202,6 +1290,26 @@ function ensureGridSolve() {
     return;
   }
   gridSolveSignature = signature;
+
+  // The signature actually moved: now pay for the free-dock perimeters.
+  for (const input of deferredInputs) {
+    const sources = resolveGridRouteEndpoints(input, "source");
+    const targets = resolveGridRouteEndpoints(input, "target");
+    if (sources.length === 0 || targets.length === 0) {
+      continue;
+    }
+    requests.push({
+      edgeId: input.edgeId,
+      order: input.order,
+      sources,
+      targets,
+      strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
+      waypoints: input.waypoints,
+      exemptObstacleIds: input.throughBoardIds,
+      homeObstacleIds: input.homeBoardIds,
+    });
+    orderByEdge.set(input.edgeId, input.order);
+  }
 
   const obstacles = [
     ...sweep.bounds.map((entry) => ({ id: entry.id, ...entry.bounds })),
@@ -1419,6 +1527,12 @@ const MAX_HOP_SETTLE_PASSES = 2;
 // full precise reroute runs once on drop. Module state rather than React state:
 // the edges that need it re-render every frame anyway via their position props.
 const activelyDraggedNodeIds = new Set<string>();
+/**
+ * Bumped whenever the dragged set changes. The pulse canvas caches its
+ * occlusion rects on this plus the published-bounds identities, so the
+ * per-frame cost of the drag path is O(dragged cards), not O(all cards).
+ */
+let draggedNodeSetEpoch = 0;
 
 // The board clipboard lives at module scope on purpose: it survives design-tab
 // switches, so a selection copied in one design pastes into another.
@@ -1568,6 +1682,33 @@ export function FactoryFlow() {
   const connectNodesBatch = useFactoryStore((state) => state.connectNodesBatch);
   const connectCustomRate = useFactoryStore((state) => state.connectCustomRate);
   const connectTrash = useFactoryStore((state) => state.connectTrash);
+  const connectCrossFormEdge = useFactoryStore((state) => state.connectCrossFormEdge);
+  // The async half of a loose cell wire: fetch the Canner's litres-per-cell,
+  // then commit the edge. Failing to find a ratio drops the gesture whole.
+  // The wire carries the SOURCE's own resource - the cell on a cell-to-fluid
+  // wire, the fluid on a fluid-to-cell one - and the target handle names the
+  // far form.
+  const connectLooseCellWire = useCallback(
+    async (
+      source: { nodeId: string; handleId: string },
+      target: { nodeId: string; handleId: string },
+      wireResource: Pick<ResourceAmount, "kind" | "id" | "displayName">,
+      match: { cellId: string; fluidId: string },
+    ) => {
+      const state = useFactoryStore.getState();
+      const version = state.datasetManifest?.versions.find(
+        (entry) => entry.id === state.selectedDatasetVersionId,
+      );
+      if (!version) {
+        return;
+      }
+      const litresPerCell = await fetchLitresPerCell(version, match.cellId, match.fluidId);
+      if (litresPerCell) {
+        connectCrossFormEdge(source, target, wireResource, litresPerCell);
+      }
+    },
+    [connectCrossFormEdge],
+  );
   const addStorageForConnection = useFactoryStore((state) => state.addStorageForConnection);
   const selectedNodeId = useFactoryStore((state) => state.selectedNodeId);
   const deleteNode = useFactoryStore((state) => state.deleteNode);
@@ -2015,28 +2156,48 @@ export function FactoryFlow() {
   // are ink the wires pass straight through, so their fingerprint buys only
   // a cheap geometry refresh; folding both into one fingerprint was how
   // dragging a NOTE made six hundred wires re-check their routes.
-  const describeNodeGeometry = (node: BoardFlowNode) =>
-    `${node.id}:${node.position.x},${node.position.y},${Math.round(
-      node.measured?.width ?? node.width ?? 0,
-    )}x${Math.round(node.measured?.height ?? node.height ?? 0)}`;
-  const obstacleGeometryFingerprint = useMemo(
-    () =>
-      flowNodes
-        .filter((node) => node.type !== "annotationNode")
-        .map(describeNodeGeometry)
-        .join(";"),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [flowNodes],
-  );
-  const annotationGeometryFingerprint = useMemo(
-    () =>
-      flowNodes
-        .filter((node) => node.type === "annotationNode")
-        .map(describeNodeGeometry)
-        .join(";"),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [flowNodes],
-  );
+  // The fingerprints are only ever compared (they gate the geometry-publish
+  // effects below), so they are two independent 32-bit rolling hashes rather
+  // than strings: `flowNodes` changes identity every drag frame, and the old
+  // filter().map().join() chains allocated a string per node per frame.
+  // Positions are quantised at 1/8 px — exact for grid positions, far below
+  // any real move — and the paired hash keeps a collision astronomically
+  // unlikely.
+  const geometryFingerprints = useMemo(() => {
+    let obstacleA = 0;
+    let obstacleB = 0;
+    let annotationA = 0;
+    let annotationB = 0;
+    for (const node of flowNodes) {
+      const width = Math.round(node.measured?.width ?? node.width ?? 0);
+      const height = Math.round(node.measured?.height ?? node.height ?? 0);
+      const quantX = (node.position.x * 8) | 0;
+      const quantY = (node.position.y * 8) | 0;
+      let hashA = 0;
+      let hashB = 0;
+      const id = node.id;
+      for (let index = 0; index < id.length; index += 1) {
+        const code = id.charCodeAt(index);
+        hashA = (hashA * 31 + code) | 0;
+        hashB = (hashB * 37 + code) | 0;
+      }
+      hashA = (((((((hashA * 31 + quantX) | 0) * 31 + quantY) | 0) * 31 + width) | 0) * 31 + height) | 0;
+      hashB = (((((((hashB * 37 + quantX) | 0) * 37 + quantY) | 0) * 37 + width) | 0) * 37 + height) | 0;
+      if (node.type !== "annotationNode") {
+        obstacleA = (obstacleA * 31 + hashA) | 0;
+        obstacleB = (obstacleB * 37 + hashB) | 0;
+      } else {
+        annotationA = (annotationA * 31 + hashA) | 0;
+        annotationB = (annotationB * 37 + hashB) | 0;
+      }
+    }
+    return {
+      obstacle: `${obstacleA}:${obstacleB}`,
+      annotation: `${annotationA}:${annotationB}`,
+    };
+  }, [flowNodes]);
+  const obstacleGeometryFingerprint = geometryFingerprints.obstacle;
+  const annotationGeometryFingerprint = geometryFingerprints.annotation;
   const flowNodesRef = useRef(flowNodes);
   flowNodesRef.current = flowNodes;
   // Synced in an effect rather than during render, and declared ABOVE the
@@ -2449,6 +2610,19 @@ export function FactoryFlow() {
   const handleNodesChange = useCallback(
     (incoming: NodeChange<BoardFlowNode>[]) => {
       let changes = incoming;
+      // A marquee that STARTED inside a board may not select that board. The
+      // band is drawn on partial contact, so a drag begun on a board's own
+      // floor touches its frame before it touches anything in it, and every
+      // rubber-band inside a room came back holding the room. Dropped here
+      // rather than by unsetting `selectable`, so the frame never flickers
+      // selected and the store never hears about it.
+      const shielded = marqueeShieldRef.current;
+      if (shielded.size > 0) {
+        changes = changes.filter(
+          (change) =>
+            !(change.type === "select" && change.selected && shielded.has(change.id)),
+        );
+      }
       // The placement magnet, live: a held card is never ALLOWED onto a spot
       // it cannot have, so it slides along whatever it meets instead of
       // being tidied up after the fact. The pointer runs ahead of the card
@@ -2694,6 +2868,11 @@ export function FactoryFlow() {
           groups.set(key, { representativeId: edge.id, ids: [edge.id] });
         }
       }
+      // One map, not a linear find per grouped id — that was O(edges²) on a
+      // board of many same-resource crossings with no solver results yet.
+      const projectRateByEdgeId = new Map(
+        project.edges.map((entry) => [entry.id, entry.ratePerSecond]),
+      );
       for (const group of groups.values()) {
         if (group.ids.length < 2) {
           continue;
@@ -2704,10 +2883,7 @@ export function FactoryFlow() {
         for (const id of group.ids) {
           transferred += transferredById.get(id) ?? 0;
           const edgeResult = result.edges[id];
-          demand +=
-            edgeResult?.demandPerSecond ??
-            project.edges.find((entry) => entry.id === id)?.ratePerSecond ??
-            0;
+          demand += edgeResult?.demandPerSecond ?? projectRateByEdgeId.get(id) ?? 0;
           if (id !== group.representativeId) {
             channelSkip.add(id);
           }
@@ -3196,11 +3372,26 @@ export function FactoryFlow() {
             ? getResourceForHandle(project, inputHandle.nodeId, inputHandle.handleId)
             : undefined;
 
-          if (
-            !outputResource ||
-            !inputResource ||
-            !resourceMatchesInput(outputResource, inputResource)
-          ) {
+          if (!outputResource || !inputResource) {
+            return;
+          }
+          if (!resourceMatchesInput(outputResource, inputResource)) {
+            // LOOSE CELL WIRES: with the board rule on, a filled cell may
+            // land straight on its fluid's input, and a fluid straight on
+            // its cell's input - either way round. The ratio comes from the
+            // Canner's own recipes (an API call, so the wire arrives a beat
+            // later); no recipe found means no wire, never a guessed ratio.
+            const crossFormMatch = getSetupRules(project).looseCellWires
+              ? getCrossFormCellMatch(outputResource, inputResource)
+              : undefined;
+            if (crossFormMatch && outputHandle.handleId && inputHandle.handleId) {
+              void connectLooseCellWire(
+                { nodeId: outputHandle.nodeId, handleId: outputHandle.handleId },
+                { nodeId: inputHandle.nodeId, handleId: inputHandle.handleId },
+                outputResource,
+                crossFormMatch,
+              );
+            }
             return;
           }
 
@@ -3225,7 +3416,7 @@ export function FactoryFlow() {
         connectResourceEdges(connection.source, connection.target);
       }
     },
-    [connectCustomRate, connectResourceEdges, connectTrash, project],
+    [connectCustomRate, connectLooseCellWire, connectResourceEdges, connectTrash, project],
   );
 
   const isValidResourceConnection = useCallback(
@@ -3422,11 +3613,30 @@ export function FactoryFlow() {
           const farEnd = { nodeId: targetHandle.nodeId, handleId: targetHandle.handleId };
           const source = draggedIsSource ? draggedEnd : farEnd;
           const target = draggedIsSource ? farEnd : draggedEnd;
-          const outputResource = draggedIsSource
-            ? draggedResource
-            : getResourceForHandle(project, targetHandle.nodeId, targetHandle.handleId);
+          const farResource = getResourceForHandle(
+            project,
+            targetHandle.nodeId,
+            targetHandle.handleId,
+          );
+          const outputResource = draggedIsSource ? draggedResource : farResource;
+          const inputResource = draggedIsSource ? farResource : draggedResource;
 
           if (!outputResource) {
+            return;
+          }
+
+          // LOOSE CELL WIRES: a drop the compatibility check admitted across
+          // the two forms commits through the ratio fetch, same as a
+          // handle-precise wire; a plain edge here would cross kinds with no
+          // ratio and sit inert.
+          if (inputResource && !resourceMatchesInput(outputResource, inputResource)) {
+            const crossFormMatch = getSetupRules(project).looseCellWires
+              ? getCrossFormCellMatch(outputResource, inputResource)
+              : undefined;
+            if (crossFormMatch) {
+              connectCompletedRef.current = true;
+              void connectLooseCellWire(source, target, outputResource, crossFormMatch);
+            }
             return;
           }
 
@@ -3497,7 +3707,14 @@ export function FactoryFlow() {
         spawnHandleId,
       );
     },
-    [addStorageForConnection, connectCustomRate, connectResourceEdges, connectTrash, project],
+    [
+      addStorageForConnection,
+      connectCustomRate,
+      connectLooseCellWire,
+      connectResourceEdges,
+      connectTrash,
+      project,
+    ],
   );
 
   useEffect(() => {
@@ -3888,6 +4105,10 @@ export function FactoryFlow() {
     return true;
   }, [deleteBoardSelection, selectNode, selectedEdgeIds, selectedNodeIds]);
 
+  // The recipe search covers the board; the board's own notices mute while
+  // it does.
+  const recipeSearchOpen = useFactoryStore((state) => Boolean(state.recipeBrowserResource));
+
   /**
    * Whether the selection could become a board: everything in it lives on
    * the canvas, and none of it IS a board. Nothing may sit in two boards
@@ -4084,6 +4305,52 @@ export function FactoryFlow() {
     setNodeColorPaintMode,
     wrapSelectedBoardItems,
   ]);
+
+  /**
+   * Boards the marquee currently being dragged is not allowed to select: the
+   * ones whose frame the drag STARTED inside.
+   *
+   * To pick a board up with the band you start outside it, which is the
+   * gesture anyone would make anyway. Starting inside means you are reaching
+   * for what is IN the room, and the room itself coming along was the whole
+   * complaint - with partial contact the frame is hit before any member is.
+   * Nested frames need no special case: a point inside a child is inside its
+   * parents too, so a plain containment test shields the whole chain, while a
+   * sibling board further in is still fair game.
+   */
+  const marqueeShieldRef = useRef<Set<string>>(new Set());
+  const handleSelectionStart = useCallback((event: ReactMouseEvent) => {
+    const instance = flowInstanceRef.current;
+    if (!instance) {
+      return;
+    }
+    const start = instance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    // Refilled in place rather than replaced: the set is read synchronously by
+    // handleNodesChange and held by nobody else, so one allocation does for
+    // the life of the board.
+    const shielded = marqueeShieldRef.current;
+    shielded.clear();
+    for (const { id, bounds } of publishedBoardFrameBounds) {
+      if (
+        start.x >= bounds.left &&
+        start.x <= bounds.right &&
+        start.y >= bounds.top &&
+        start.y <= bounds.bottom
+      ) {
+        shielded.add(id);
+      }
+    }
+  }, []);
+  const handleSelectionEnd = useCallback(() => {
+    // Next frame, not this one: React Flow can still emit the band's last
+    // select changes after this fires, and a shield dropped a beat early
+    // would let the frame in on the closing frame of the gesture. Anything
+    // that selects by CLICK needs a fresh pointer press, which is later
+    // still, so nothing else is held back by the wait.
+    requestAnimationFrame(() => {
+      marqueeShieldRef.current.clear();
+    });
+  }, []);
 
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams) => {
@@ -4405,6 +4672,7 @@ export function FactoryFlow() {
     for (const dragged of draggedNodes) {
       activelyDraggedNodeIds.add(dragged.id);
     }
+    draggedNodeSetEpoch += 1;
     // Annotations are ink, not furniture: wires pass straight through them,
     // so a drag moving ONLY notes and boxes cannot change any route and must
     // not spend a single mid-drag solve. Decided once at grab time.
@@ -4700,6 +4968,7 @@ export function FactoryFlow() {
       moveBoardItems(moves);
 
       activelyDraggedNodeIds.clear();
+      draggedNodeSetEpoch += 1;
       dragConstraintsRef.current = new Map();
       dragPassengersRef.current = new Set();
       draggingNodeRef.current = false;
@@ -5209,6 +5478,10 @@ export function FactoryFlow() {
         onEdgeClick={handleEdgeClick}
         onNodesChange={handleNodesChange}
         onSelectionChange={handleSelectionChange}
+        // Where the band STARTED decides whether it may pick up a board; see
+        // marqueeShieldRef.
+        onSelectionStart={handleSelectionStart}
+        onSelectionEnd={handleSelectionEnd}
         onPaneClick={handlePaneClick}
         onNodeDragStart={handleNodeDragStart}
         onNodeDragStop={handleNodeDragStop}
@@ -5264,16 +5537,16 @@ export function FactoryFlow() {
             color={canvasTheme.patternColor}
           />
         ) : (
-          <Background
-            variant={CANVAS_PATTERN_VARIANT[boardView.canvasPattern]}
+          // Our own compositor-friendly copy of the stock Background: the
+          // stock one repaints the whole viewport every pan frame (see
+          // TiledBackground in board-pattern.tsx). Same ink, no repaint.
+          <TiledBackground
+            variant={boardView.canvasPattern}
             gap={BOARD_GRID_SIZE}
             // Lines tile edge to edge, so they need to be thinner than a dot
             // to read as a background instead of as graph paper.
             size={boardView.canvasPattern === "lines" ? 1 : 2}
             color={canvasTheme.patternColor}
-            // Like the wrapper: the pattern SVG must not lay its own dark
-            // paper over the themed board div underneath.
-            bgColor="transparent"
           />
         )}
         <BoardFloors />
@@ -5317,6 +5590,9 @@ export function FactoryFlow() {
         onAutoArrange={handleAutoArrange}
       />
       <BoardHelp compact={isCompact} />
+      {/* Toggled from the dev menu (shift-click the version chip). Sits above
+          the help button; see PerfHud.tsx. */}
+      <PerfHud />
       {overwritePicking ? (
         <div
           className={[
@@ -5351,9 +5627,17 @@ export function FactoryFlow() {
           Unwired goes UNDER the dead loop: a ring is a thing that has gone
           wrong, unfinished wiring is just work still to do. The add chips ride
           on top: they are the most transient thing here. */}
-      <div className="nodrag pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 flex-col-reverse items-center gap-2">
+      <div
+        className={[
+          "nodrag pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 flex-col-reverse items-center gap-2 transition-opacity",
+          // The recipe search dims the whole board; these sit level with it
+          // in the stack, so they mute themselves or they shout through it.
+          recipeSearchOpen ? "opacity-20 grayscale [&_*]:pointer-events-none" : "",
+        ].join(" ")}
+      >
         <TourLoopNoticeExample />
         <UnwiredNotice onShow={handleShowNodes} />
+        <LooseWiresOffNotice onShow={handleShowNodes} />
         <DeathSpiralNotice onShow={handleShowNodes} />
         <ClogLockNotice onShow={handleShowNodes} />
         <RecipeAddChips />
@@ -5408,11 +5692,11 @@ const UnwiredNotice = memo(function UnwiredNotice({
   }
 
   return (
-    <div className="unwired-notice nodrag pointer-events-auto flex items-center gap-2 border-2 border-[#c8d2e0] bg-[#2b3038]/95 px-2 py-1.5 font-mono text-[12px] text-[#e8ecf2] shadow-[inset_2px_2px_0_#5d6877,inset_-2px_-2px_0_#171a1f,4px_4px_0_rgba(0,0,0,0.35)]">
+    <div className="unwired-notice nodrag pointer-events-auto flex max-w-[min(92vw,560px)] flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-2 border-[#c8d2e0] bg-[#2b3038] px-2 py-1.5 font-mono text-[12px] text-[#e8ecf2] shadow-[inset_2px_2px_0_#5d6877,inset_-2px_-2px_0_#171a1f,4px_4px_0_rgba(0,0,0,0.35)]">
       <span className="shrink-0 font-bold tracking-[0.5px] text-[#eef2f8]">NOT WIRED UP</span>
       {/* One line, always. The card already explains itself; this only says
           how many are left and offers to take you to them. */}
-      <span className="whitespace-nowrap text-[#c2cad6]">
+      <span className="text-[#c2cad6]">
         {unwired.length === 1
           ? "1 machine has a slot with nothing on it"
           : `${unwired.length} machines have slots with nothing on them`}
@@ -5423,6 +5707,61 @@ const UnwiredNotice = memo(function UnwiredNotice({
         className="shrink-0 border border-[#c8d2e0] bg-[#454f5e] px-2 py-0.5 font-bold text-[#ffffff] hover:bg-[#566275]"
       >
         Show me
+      </button>
+    </div>
+  );
+});
+
+/**
+ * Cross-form wires stranded by Loose cell wires going OFF. With the rule off
+ * the conversion does not exist, so these wires carry nothing and the
+ * machines they fed read unsupplied - a mystery unless something names the
+ * cause. Amber, because nothing is broken: the plan and the rule just
+ * disagree, and either deleting the wires or turning the rule back on ends
+ * it. Not dismissible, deliberately, for the same reason the unwired notice
+ * is not: those are its only endings.
+ */
+const LooseWiresOffNotice = memo(function LooseWiresOffNotice({
+  onShow,
+}: {
+  onShow: (nodeIds: string[]) => void;
+}) {
+  const project = useFactoryStore((state) => state.project);
+  const deleteEdge = useFactoryStore((state) => state.deleteEdge);
+  const crossEdges = useMemo(
+    () =>
+      getSetupRules(project).looseCellWires
+        ? []
+        : project.edges.filter((edge) => edge.crossForm),
+    [project],
+  );
+
+  if (crossEdges.length === 0) {
+    return null;
+  }
+  const nodeIds = [...new Set(crossEdges.flatMap((edge) => [edge.source, edge.target]))];
+
+  return (
+    <div className="nodrag pointer-events-auto flex max-w-[min(92vw,560px)] flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-2 border-[#c3a04c] bg-[#2b261c] px-2 py-1.5 font-mono text-[12px] text-[#f2ecdc] shadow-[inset_2px_2px_0_#7a6836,inset_-2px_-2px_0_#1a1610,4px_4px_0_rgba(0,0,0,0.35)]">
+      <span className="shrink-0 font-bold tracking-[0.5px] text-[#ffd98c]">LOOSE WIRES</span>
+      <span className="text-[#e6ddc2]">
+        {crossEdges.length === 1
+          ? "1 cell wire carries nothing with Loose cell wires off"
+          : `${crossEdges.length} cell wires carry nothing with Loose cell wires off`}
+      </span>
+      <button
+        type="button"
+        onClick={() => onShow(nodeIds)}
+        className="shrink-0 border border-[#c3a04c] bg-[#4a3f24] px-2 py-0.5 font-bold text-[#ffe9c0] hover:bg-[#635430]"
+      >
+        Show me
+      </button>
+      <button
+        type="button"
+        onClick={() => deleteEdge(crossEdges.map((edge) => edge.id))}
+        className="shrink-0 border border-[#c3a04c] bg-[#4a3f24] px-2 py-0.5 font-bold text-[#ffe9c0] hover:bg-[#635430]"
+      >
+        {crossEdges.length === 1 ? "Delete it" : "Delete them"}
       </button>
     </div>
   );
@@ -5448,7 +5787,7 @@ const DeathSpiralNotice = memo(function DeathSpiralNotice({
   const story = describeDeathSpiral(spiral);
 
   return (
-    <div className="nodrag pointer-events-auto flex items-center gap-2 border-2 border-[#c34c4c] bg-[#2b1c1c]/95 px-2 py-1.5 font-mono text-[12px] text-[#f2e4e4] shadow-[inset_2px_2px_0_#7a3636,inset_-2px_-2px_0_#1a1010,4px_4px_0_rgba(0,0,0,0.35)]">
+    <div className="nodrag pointer-events-auto flex max-w-[min(92vw,560px)] flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-2 border-[#c34c4c] bg-[#2b1c1c] px-2 py-1.5 font-mono text-[12px] text-[#f2e4e4] shadow-[inset_2px_2px_0_#7a3636,inset_-2px_-2px_0_#1a1010,4px_4px_0_rgba(0,0,0,0.35)]">
       <span className="shrink-0 font-bold tracking-[0.5px] text-[#ff9c9c]">DEAD LOOP</span>
       <span className="text-[#e6d2d2]">{story.short}</span>
       {spirals.length > 1 ? (
@@ -5512,7 +5851,7 @@ const ClogLockNotice = memo(function ClogLockNotice({
   const showAt = showIndex % showTargets.length;
 
   return (
-    <div className="nodrag pointer-events-auto flex items-center gap-2 border-2 border-[#4c7ec3] bg-[#1a222b]/95 px-2 py-1.5 font-mono text-[12px] text-[#e4ecf2] shadow-[inset_2px_2px_0_#365d7a,inset_-2px_-2px_0_#10161a,4px_4px_0_rgba(0,0,0,0.35)]">
+    <div className="nodrag pointer-events-auto flex max-w-[min(92vw,560px)] flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-2 border-[#4c7ec3] bg-[#1a222b] px-2 py-1.5 font-mono text-[12px] text-[#e4ecf2] shadow-[inset_2px_2px_0_#365d7a,inset_-2px_-2px_0_#10161a,4px_4px_0_rgba(0,0,0,0.35)]">
       <span className="shrink-0 font-bold tracking-[0.5px] text-[#9cc9ff]">CLOG LOCK</span>
       <span className="text-[#d2e0e6]">{story.short}</span>
       {locks.length > 1 ? (
@@ -5591,7 +5930,7 @@ const TourLoopNoticeExample = memo(function TourLoopNoticeExample() {
   const lock = describeClogLock(TOUR_EXAMPLE_LOCK);
   return (
     <div data-tour-anchor="loop-notice" className="pointer-events-none flex flex-col items-center gap-2">
-      <div className="flex items-center gap-2 border-2 border-[#c34c4c] bg-[#2b1c1c]/95 px-2 py-1.5 font-mono text-[12px] text-[#f2e4e4] shadow-[inset_2px_2px_0_#7a3636,inset_-2px_-2px_0_#1a1010,4px_4px_0_rgba(0,0,0,0.35)]">
+      <div className="flex max-w-[min(92vw,560px)] flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-2 border-[#c34c4c] bg-[#2b1c1c] px-2 py-1.5 font-mono text-[12px] text-[#f2e4e4] shadow-[inset_2px_2px_0_#7a3636,inset_-2px_-2px_0_#1a1010,4px_4px_0_rgba(0,0,0,0.35)]">
         <span className="shrink-0 font-bold tracking-[0.5px] text-[#ff9c9c]">DEAD LOOP</span>
         <span className="shrink-0 border border-[#7a3636] px-1 text-[10px] font-bold tracking-[0.5px] text-[#b89a9a]">
           EXAMPLE
@@ -5604,7 +5943,7 @@ const TourLoopNoticeExample = memo(function TourLoopNoticeExample() {
           Show me
         </span>
       </div>
-      <div className="flex items-center gap-2 border-2 border-[#4c7ec3] bg-[#1a222b]/95 px-2 py-1.5 font-mono text-[12px] text-[#e4ecf2] shadow-[inset_2px_2px_0_#365d7a,inset_-2px_-2px_0_#10161a,4px_4px_0_rgba(0,0,0,0.35)]">
+      <div className="flex max-w-[min(92vw,560px)] flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-2 border-[#4c7ec3] bg-[#1a222b] px-2 py-1.5 font-mono text-[12px] text-[#e4ecf2] shadow-[inset_2px_2px_0_#365d7a,inset_-2px_-2px_0_#10161a,4px_4px_0_rgba(0,0,0,0.35)]">
         <span className="shrink-0 font-bold tracking-[0.5px] text-[#9cc9ff]">CLOG LOCK</span>
         <span className="shrink-0 border border-[#365d7a] px-1 text-[10px] font-bold tracking-[0.5px] text-[#9aaab8]">
           EXAMPLE
@@ -5639,10 +5978,16 @@ const TourLoopNoticeExample = memo(function TourLoopNoticeExample() {
  * the paper tracks a dragged board frame-perfectly instead of lagging a
  * commit behind.
  */
+const EMPTY_BOARD_FLOORS: Array<{ pocket: FactoryPocket; width: number; height: number }> = [];
+
 const BoardFloors = memo(function BoardFloors() {
   const floors = useStore(
     (state) => {
-      const open: Array<{ pocket: FactoryPocket; width: number; height: number }> = [];
+      // This selector runs on EVERY store notification — every pan and drag
+      // frame included. The no-open-board board (the common case) must cost
+      // one identity check, not an array allocation plus the equality walk:
+      // returning the shared frozen empty lets Object.is short-circuit.
+      let open: Array<{ pocket: FactoryPocket; width: number; height: number }> | undefined;
       for (const [, node] of state.nodeLookup) {
         if (node.type !== "boardNode") {
           continue;
@@ -5653,7 +5998,7 @@ const BoardFloors = memo(function BoardFloors() {
           continue;
         }
         const size = boardWindowSize(pocket);
-        open.push({
+        (open ??= []).push({
           // The live absolute position, so a nested board's paper follows
           // its parent as well as its own drag.
           pocket: { ...pocket, position: node.internals.positionAbsolute },
@@ -5661,7 +6006,7 @@ const BoardFloors = memo(function BoardFloors() {
           height: node.measured?.height ?? size.height,
         });
       }
-      return open;
+      return open ?? EMPTY_BOARD_FLOORS;
     },
     (left, right) =>
       left.length === right.length &&
@@ -5785,7 +6130,11 @@ const SelectionActionsBar = memo(function SelectionActionsBar({
         type="button"
         onClick={onWrap}
         title="Wrap in a board (Ctrl+G)"
-        className="flex h-9 items-center gap-1.5 whitespace-nowrap border-2 border-[#8d6fd1] bg-[#3b2d52] px-3 font-mono text-[12px] font-bold text-white shadow-[inset_2px_2px_0_#5e4a85,inset_-2px_-2px_0_#241b33] hover:brightness-110"
+        // Plain chrome, like every other button. It used to wear the pocket
+        // purple, which stopped meaning anything when boards started picking
+        // their own paper - and a purple button is the last thing that should
+        // appear beside a selection now that selection is not purple.
+        className="flex h-9 items-center gap-1.5 whitespace-nowrap border-2 border-[var(--mc-15)] bg-[var(--mc-49)] px-3 font-mono text-[12px] font-bold text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
       >
         <Box className="h-4 w-4" />
         Wrap {selectionCount} in a board
@@ -6023,6 +6372,158 @@ const RATE_UNIT_CHOICES: Array<{ unit: RateUnit; label: string; title: string }>
   { unit: "hour", label: "/h", title: "Per hour" },
 ];
 
+/**
+ * The setup's two rules, on a sliders icon beside the tidy-up button. Not a
+ * gear (the header's settings button wears that now, and two gears meaning
+ * two different things is a trap) and not a clipboard (which read as a copy
+ * button). Sliders are the one other glyph everybody reads as "settings".
+ *
+ * They are the only settings that change what the SOLVE is allowed to assume,
+ * so they get a sheet with a sentence each rather than a mystery toggle: a
+ * player who turns one on and does not know what it did will read every number
+ * on the board wrong afterwards.
+ *
+ * Each row says ON or OFF in as many ways as it takes. The pressed face alone
+ * was a light grey against a dark grey, and there is no way to know from one
+ * row which of the two greys means yes - so a row also carries a TICK BOX and
+ * the word itself, in green when the rule is on. Any one of the three answers
+ * the question; you do not have to know the house style to read it.
+ */
+const SetupRulesButton = memo(function SetupRulesButton() {
+  const rules = useFactoryStore((state) => state.project.setupRules);
+  const legacy = useFactoryStore((state) => state.project.assumeBoundaries);
+  const setSetupRules = useFactoryStore((state) => state.setSetupRules);
+  const { freeInputs, freeOutputs, looseCellWires } = getSetupRules({
+    setupRules: rules,
+    assumeBoundaries: legacy,
+  });
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Click anywhere else and the sheet goes. Capture phase, because the board
+  // under it stops pointer events of its own before they reach the document.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const close = (event: PointerEvent) => {
+      // `globalThis.Node`, not `Node`: React Flow's own Node type is imported
+      // into this file and would shadow the DOM one.
+      if (!rootRef.current?.contains(event.target as globalThis.Node)) {
+        setOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+
+  const choices: Array<{
+    id: "freeInputs" | "freeOutputs" | "looseCellWires";
+    on: boolean;
+    label: string;
+    line: string;
+  }> = [
+    {
+      id: "freeInputs",
+      on: freeInputs,
+      label: "Free inputs",
+      line: "An input short of stock takes the rest from off the setup.",
+    },
+    {
+      id: "freeOutputs",
+      on: freeOutputs,
+      label: "Free outputs",
+      line: "Output with nowhere to go leaves the setup instead of backing up.",
+    },
+    {
+      id: "looseCellWires",
+      on: looseCellWires,
+      label: "Loose cell wires",
+      line: "A filled cell and its fluid wire straight together, converted for free.",
+    },
+  ];
+
+  return (
+    <div ref={rootRef} className="pointer-events-auto relative flex">
+      <button
+        type="button"
+        data-tour-anchor="setup-rules"
+        onClick={() => setOpen((was) => !was)}
+        aria-expanded={open}
+        className={[
+          "relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)]",
+          open || freeInputs || freeOutputs || looseCellWires ? TOOL_FACE_ON : TOOL_FACE_OFF,
+        ].join(" ")}
+        title="Setup rules"
+        aria-label="Setup rules"
+      >
+        <SlidersHorizontal className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-[calc(100%+6px)] z-30 flex w-[320px] flex-col gap-1 border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1 shadow-[4px_4px_0_rgba(0,0,0,0.45)]">
+          <p className="px-1 pt-1 font-mono text-[11px] leading-snug text-[var(--mc-ink)] opacity-70">
+            What the setup does when a slot cannot be supplied or emptied.
+            <br />
+            Simulates more of an AE2 experience.
+          </p>
+          {choices.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              onClick={() => setSetupRules({ [choice.id]: !choice.on })}
+              aria-pressed={choice.on}
+              className={[
+                "flex items-start gap-2 border-2 p-2 text-left",
+                choice.on
+                  ? `border-[var(--mc-good)] ${TOOL_FACE_ON}`
+                  : `border-[var(--mc-15)] ${TOOL_FACE_OFF}`,
+              ].join(" ")}
+            >
+              {/* The tick box. Green and filled, or empty and near black -
+                  two states nobody has to compare against another row to
+                  tell apart. */}
+              <span
+                aria-hidden
+                className={[
+                  "mt-[1px] flex h-4 w-4 shrink-0 items-center justify-center border-2 border-[var(--mc-15)]",
+                  choice.on ? "bg-[var(--mc-good)]" : "bg-[var(--mc-24)]",
+                ].join(" ")}
+              >
+                {choice.on ? <Check className="h-3 w-3 text-[var(--mc-15)]" strokeWidth={4} /> : null}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="font-mono text-[12px] font-black uppercase">{choice.label}</span>
+                  {/* Said in words as well, because a tick is a convention and
+                      a word is not. */}
+                  <span
+                    className={[
+                      "font-mono text-[10px] font-black tracking-[1px]",
+                      choice.on ? "text-[var(--mc-good)]" : "text-[var(--mc-ink-muted)]",
+                    ].join(" ")}
+                  >
+                    {choice.on ? "ON" : "OFF"}
+                  </span>
+                </span>
+                <span className="font-mono text-[11px] leading-snug opacity-80">{choice.line}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+});
+
 const SourceToolbar = memo(function SourceToolbar({
   compact,
   openGroup,
@@ -6039,13 +6540,10 @@ const SourceToolbar = memo(function SourceToolbar({
   onAutoArrange: () => void;
 }) {
   const addCropFarmNode = useFactoryStore((state) => state.addCropFarmNode);
-  const addTrashNode = useFactoryStore((state) => state.addTrashNode);
   const addCustomRateNode = useFactoryStore((state) => state.addCustomRateNode);
   const boardView = useBoardView();
   const rateUnit = useFactoryStore((state) => state.rateUnit);
   const setRateUnit = useFactoryStore((state) => state.setRateUnit);
-  const assumeBoundaries = useFactoryStore((state) => Boolean(state.project.assumeBoundaries));
-  const setAssumeBoundaries = useFactoryStore((state) => state.setAssumeBoundaries);
   // Subscribe to the DEPTHS, not the history arrays: a selector returning the
   // array itself would re-render this toolbar on every project edit.
   const undo = useFactoryStore((state) => state.undo);
@@ -6106,8 +6604,8 @@ const SourceToolbar = memo(function SourceToolbar({
         label="build tools"
         side="left"
       >
-      {/* How the numbers read: the rate units and sketch mode change what the
-          existing board says, so they sit nearest the history plate... */}
+      {/* How the numbers read: the rate units change what the existing board
+          says, so they sit nearest the history plate... */}
       <ToolTray>
         <div className="pointer-events-auto flex">
           {RATE_UNIT_CHOICES.map((choice) => (
@@ -6126,20 +6624,6 @@ const SourceToolbar = memo(function SourceToolbar({
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          data-tour-anchor="sketch"
-          onClick={() => setAssumeBoundaries(!assumeBoundaries)}
-          className={[
-            "pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)]",
-            assumeBoundaries ? TOOL_FACE_ON : TOOL_FACE_OFF,
-          ].join(" ")}
-          title="Sketch mode"
-          aria-label="Sketch mode"
-          aria-pressed={assumeBoundaries}
-        >
-          <Wand2 className="h-4 w-4" />
-        </button>
       </ToolTray>
       {/* ...while the plate on the right is the one that puts new cards down. */}
       <ToolTray>
@@ -6152,15 +6636,9 @@ const SourceToolbar = memo(function SourceToolbar({
         >
           <Sprout className="h-4 w-4" />
         </button>
-        <button
-          type="button"
-          onClick={addTrashNode}
-          className="pointer-events-auto relative z-10 flex h-9 w-9 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
-          title="Add trash can"
-          aria-label="Add trash can"
-        >
-          <Trash className="h-4 w-4" />
-        </button>
+        {/* The trash can button is gone (2026-08-23): trashing is now the
+            third position on a drawer's product/byproduct pill. Legacy trash
+            can nodes still render and solve; only the spawner left. */}
         <button
           type="button"
           onClick={addCustomRateNode}
@@ -6171,12 +6649,10 @@ const SourceToolbar = memo(function SourceToolbar({
           <Gauge className="h-4 w-4" />
         </button>
       </ToolTray>
-      {/* The tidy-up, one click. It used to open a pop-over holding a
-          single dial - the paper the arrange drew its island backdrops on
-          - and the arrange stopped drawing backdrops when it started
-          building boards, each of which picks its own paper. A menu with
-          nothing in it is worse than no menu. */}
+      {/* The tidy-up and the board's own rules: the two buttons that act on
+          the whole board at once rather than on a card. */}
       <ToolTray>
+        <SetupRulesButton />
         <button
           type="button"
           onClick={onAutoArrange}
@@ -6195,16 +6671,18 @@ const SourceToolbar = memo(function SourceToolbar({
 /**
  * The board's marching dashes, on one canvas.
  *
- * Sits inside the viewport (so it shares the edge layer's stacking context)
- * but counter-scales itself back to screen resolution, so the dashes are drawn
- * at device pixels at every zoom instead of being a bitmap the browser
- * stretches. The canvas covers exactly the visible rectangle, so its cost is
- * a function of the window, not of the plan: a 10,000-edge board draws the
- * same number of pixels as a 10-edge one.
+ * Sits OUTSIDE the viewport in screen space (see the note on its element) and
+ * applies the camera itself, so the dashes are drawn at device pixels at
+ * every zoom instead of being a bitmap the browser stretches. The canvas
+ * covers exactly the visible rectangle, so its cost is a function of the
+ * window, not of the plan: a 10,000-edge board draws the same number of
+ * pixels as a 10-edge one.
  *
- * It reads the viewport transform out of the store on each frame rather than
- * subscribing to it — a subscription here would re-render this component on
- * every pan frame, which is the thing the whole layer exists to avoid.
+ * It reads the camera per frame rather than subscribing — a subscription
+ * would re-render this component on every pan frame, which is the thing the
+ * whole layer exists to avoid — and it reads it from the viewport DIV's own
+ * inline transform, not the store, so the dashes always agree with the frame
+ * the wires actually paint (see readPaintedTransform in the draw loop).
  */
 const EdgePulseCanvas = memo(function EdgePulseCanvas({
   edgesUnderNodes,
@@ -6235,6 +6713,19 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
     let frame = 0;
     let backingWidth = 0;
     let backingHeight = 0;
+    // With no pulses (zoomed past the detail step, or none marching) the loop
+    // used to clear the full canvas every frame forever; once wiped it can
+    // simply stand down until a pulse returns.
+    let cleared = false;
+    // The static half of the occlusion list — every rect except the cards
+    // being dragged right now — only changes when geometry republishes or the
+    // drag set changes, so it is rebuilt on those keys and reused per frame.
+    let occlusionBase: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+    let occlusionKeyFrames: typeof publishedBoardFrameBounds | undefined;
+    let occlusionKeyBounds: typeof publishedBoardBounds;
+    let occlusionKeyUnder = false;
+    let occlusionKeyDragging = false;
+    let occlusionKeyEpoch = -1;
     // The pane is what the canvas has to cover. Measured from the DOM rather
     // than read from the store's width/height, which are only populated once
     // React Flow's own observer has fired and would leave the layer blank
@@ -6255,9 +6746,34 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
         : undefined;
     observer?.observe(pane!);
 
+    // The wires paint under the VIEWPORT DIV's CSS transform, and React
+    // commits that on its own schedule - during a pan the store can be a
+    // frame newer than the DOM (the pointer event updates it, the commit
+    // lands in a scheduler task), so a canvas drawn from the store slid off
+    // the wires until the pan stopped. Nothing runs between rAF and paint,
+    // so the div's inline transform at draw time is exactly what this
+    // frame's wires will paint with: read that, and fall back to the store
+    // only until the div exists.
+    let viewport = pane?.querySelector<HTMLElement>(".react-flow__viewport") ?? null;
+    const viewportTransformPattern =
+      /translate\((-?[\d.e+]+)px,\s*(-?[\d.e+]+)px\)\s*scale\((-?[\d.e+]+)\)/;
+    const readPaintedTransform = (): [number, number, number] => {
+      if (!viewport) {
+        viewport = pane?.querySelector<HTMLElement>(".react-flow__viewport") ?? null;
+      }
+      const raw = viewport?.style.transform;
+      if (raw) {
+        const match = viewportTransformPattern.exec(raw);
+        if (match) {
+          return [Number(match[1]), Number(match[2]), Number(match[3])];
+        }
+      }
+      return flowStore.getState().transform;
+    };
+
     const draw = (timeMs: number) => {
       frame = window.requestAnimationFrame(draw);
-      const [translateX, translateY, zoom] = flowStore.getState().transform;
+      const [translateX, translateY, zoom] = readPaintedTransform();
       if (width <= 0 || height <= 0 || zoom <= 0) {
         return;
       }
@@ -6272,13 +6788,20 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
         canvas.height = nextBackingHeight;
         canvas.style.width = `${width}px`;
         canvas.style.height = `${height}px`;
+        cleared = false;
       }
 
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      context.clearRect(0, 0, width, height);
       if (edgePulseCount() === 0) {
+        if (!cleared) {
+          context.setTransform(ratio, 0, 0, ratio, 0, 0);
+          context.clearRect(0, 0, width, height);
+          cleared = true;
+        }
         return;
       }
+      cleared = false;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
 
       // From here the context speaks flow coordinates, exactly like the SVG.
       context.translate(translateX, translateY);
@@ -6301,35 +6824,49 @@ const EdgePulseCanvas = memo(function EdgePulseCanvas({
       // beat behind on a small board, and frozen at the drag's start on a
       // big one).
       const dragging = activelyDraggedNodeIds.size > 0;
-      const occlusionBounds: Array<{
-        left: number;
-        top: number;
-        right: number;
-        bottom: number;
-      }> = [];
-      // A board's bar and rim occlude the wires in EVERY mode, so the dashes
-      // stop at them in every mode too — this is not part of the thickness
-      // mode's cards-on-pipes trade.
-      for (const entry of publishedBoardFrameBounds) {
-        if (dragging && activelyDraggedNodeIds.has(entry.id)) {
-          continue;
-        }
-        occlusionBounds.push(...boardChromeOccluders(entry.bounds));
-      }
-      if (edgesUnderNodesRef.current || dragging) {
-        for (const entry of publishedBoardBounds ?? []) {
+      if (
+        occlusionKeyFrames !== publishedBoardFrameBounds ||
+        occlusionKeyBounds !== publishedBoardBounds ||
+        occlusionKeyUnder !== edgesUnderNodesRef.current ||
+        occlusionKeyDragging !== dragging ||
+        occlusionKeyEpoch !== draggedNodeSetEpoch
+      ) {
+        occlusionKeyFrames = publishedBoardFrameBounds;
+        occlusionKeyBounds = publishedBoardBounds;
+        occlusionKeyUnder = edgesUnderNodesRef.current;
+        occlusionKeyDragging = dragging;
+        occlusionKeyEpoch = draggedNodeSetEpoch;
+        occlusionBase = [];
+        // A board's bar and rim occlude the wires in EVERY mode, so the dashes
+        // stop at them in every mode too — this is not part of the thickness
+        // mode's cards-on-pipes trade.
+        for (const entry of publishedBoardFrameBounds) {
           if (dragging && activelyDraggedNodeIds.has(entry.id)) {
             continue;
           }
-          // The tab zone at a card's top is transparent canvas and the wire
-          // stub visibly crosses it — the dashes must ride the stub all the
-          // way to the window's edge, so only the WINDOW occludes.
-          const dockInset = getDockTopInset(entry.id);
-          occlusionBounds.push(
-            dockInset > 0 ? { ...entry.bounds, top: entry.bounds.top + dockInset } : entry.bounds,
-          );
+          occlusionBase.push(...boardChromeOccluders(entry.bounds));
         }
+        if (edgesUnderNodesRef.current || dragging) {
+          for (const entry of publishedBoardBounds ?? []) {
+            if (dragging && activelyDraggedNodeIds.has(entry.id)) {
+              continue;
+            }
+            // The tab zone at a card's top is transparent canvas and the wire
+            // stub visibly crosses it — the dashes must ride the stub all the
+            // way to the window's edge, so only the WINDOW occludes.
+            const dockInset = getDockTopInset(entry.id);
+            occlusionBase.push(
+              dockInset > 0 ? { ...entry.bounds, top: entry.bounds.top + dockInset } : entry.bounds,
+            );
+          }
+        }
+      }
+      let occlusionBounds = occlusionBase;
+      if (edgesUnderNodesRef.current || dragging) {
         if (dragging) {
+          // The held cards' rects come from React Flow live and move every
+          // frame; they are the only per-frame part of the list.
+          occlusionBounds = occlusionBase.slice();
           const nodeLookup = flowStore.getState().nodeLookup;
           for (const draggedId of activelyDraggedNodeIds) {
             const draggedNode = nodeLookup?.get(draggedId);
@@ -6509,17 +7046,16 @@ const HopMapController = memo(function HopMapController({
     };
 
     const handleMove = (event: MouseEvent) => {
-      const target = event.target;
-      const nodeElement =
-        target instanceof Element ? target.closest(".react-flow__node") : undefined;
-      const nodeId = nodeElement?.getAttribute("data-id");
+      // The cheap attribute checks come first: this runs on EVERY mousemove
+      // at every zoom, and the closest() ancestor walk is only worth doing
+      // once the board is actually in the one mode that wants the map.
       // A held wire owns the board; distance from the card under it is not the
       // question being asked.
       if (isWiringConnection()) {
         cancel();
         return;
       }
-      if (!nodeId || board.getAttribute(NODE_DETAIL_ATTRIBUTE) !== "glance") {
+      if (board.getAttribute(NODE_DETAIL_ATTRIBUTE) !== "glance") {
         cancel();
         return;
       }
@@ -6527,6 +7063,14 @@ const HopMapController = memo(function HopMapController({
       // hover means "show me this card's rates" and the map would paint over
       // the answer. Read live off the board attribute, like the glance state.
       if (board.getAttribute("data-glance-mode") !== "status") {
+        cancel();
+        return;
+      }
+      const target = event.target;
+      const nodeElement =
+        target instanceof Element ? target.closest(".react-flow__node") : undefined;
+      const nodeId = nodeElement?.getAttribute("data-id");
+      if (!nodeId) {
         cancel();
         return;
       }
@@ -6765,10 +7309,12 @@ function AnnotationDraftPreview({
             style={{ borderColor: swatch, backgroundColor: `${swatch}14` }}
           />
         ) : tool === "board" ? (
-          // The window as it will land: title bar up top, wash below, in the
-          // pocket purple rather than the ink colour — a board is furniture.
-          <div className="h-full w-full border-2 border-[#5e4a85] bg-[#3b2d52]/15">
-            <div className="h-[40px] w-full border-b-2 border-[#241b33] bg-[#3b2d52]" />
+          // The window as it will land: title bar up top, wash below. No hue
+          // at all - a board picks its own paper on the way in, so a coloured
+          // preview promises a colour the board will not be wearing. This is
+          // just the shape being drawn, in the chrome grey every panel uses.
+          <div className="h-full w-full border-2 border-[var(--mc-ink)] bg-[var(--mc-ink)]/5">
+            <div className="h-[40px] w-full border-b-2 border-[var(--mc-15)] bg-[var(--mc-78)]" />
           </div>
         ) : (
           <div
@@ -7403,10 +7949,16 @@ function ResourceEdgeComponent({
   // different pipe being swapped in. Only the volume width tweens: the
   // highlight thickening below stays instant, because hover feedback that
   // arrives a second late reads as a miss.
-  const flowWidthShown = useMotionValue(
+  const flowWidthRaw = useMotionValue(
     flowWidthTarget ?? FLOW_MODE_MIN_WIDTH,
     valueMotion && flowWidthTarget !== undefined,
   );
+  // Quantised to quarter pixels: the tween re-renders this component every
+  // frame for a second after each solve, and an un-quantised width fed the
+  // hop-path string build (and the pulse publish) a fresh number each frame
+  // for a change no eye can see. At quarter-pixel steps most frames reuse
+  // the previous path via the getDirectEdgePath memo.
+  const flowWidthShown = Math.round(flowWidthRaw * 4) / 4;
   const flowWidth = flowWidthTarget === undefined ? undefined : flowWidthShown;
   // Dash geometry scales with the stroke so the marks read the same on a hair
   // line and on a fat pipe.
@@ -7620,7 +8172,14 @@ function ResourceEdgeComponent({
     flowRate?.pulse === true &&
     Boolean(liveRoute.path) &&
     hasEdgeDetail(detailLevel, EDGE_DETAIL_PULSE);
-  useEffect(() => {
+  // A LAYOUT effect, not a passive one: the pulse canvas draws from this
+  // registration in its own rAF loop, and a passive effect flushes after
+  // paint — so every morph frame's dashes trailed one frame behind the SVG
+  // wire they ride. At commit time the canvas and the wire land together.
+  const livePath = liveRoute.path;
+  const livePoints = liveRoute.points;
+  const liveMorphing = liveRoute.morphing;
+  useLayoutEffect(() => {
     if (!pulseActive) {
       retractEdgePulse(id);
       return;
@@ -7630,7 +8189,7 @@ function ResourceEdgeComponent({
     let right = -Infinity;
     let top = Infinity;
     let bottom = -Infinity;
-    for (const point of liveRoute.points) {
+    for (const point of livePoints) {
       if (point.x < left) left = point.x;
       if (point.x > right) right = point.x;
       if (point.y < top) top = point.y;
@@ -7640,7 +8199,7 @@ function ResourceEdgeComponent({
     // would wink out a fraction early at the edge of the screen.
     const margin = EDGE_HOP_MAX_RADIUS + pulseStroke;
     publishEdgePulse(id, {
-      path: liveRoute.path,
+      path: livePath,
       // Same numbers the SVG overlay used, so the marks are unchanged.
       width: Math.max(2, pulseStroke * 0.38),
       dash: pulseDash,
@@ -7651,14 +8210,24 @@ function ResourceEdgeComponent({
       top: top - margin,
       bottom: bottom + margin,
       // A morph frame's path is one-of-a-kind; keep it out of the Path2D cache.
-      transient: liveRoute.morphing,
+      transient: liveMorphing,
     });
-  });
+  }, [
+    id,
+    pulseActive,
+    livePath,
+    livePoints,
+    liveMorphing,
+    pulseStroke,
+    pulseDash,
+    pulseGap,
+    pulseVelocity,
+  ]);
   // Where this edge's waypoint dots sit, for the dash canvas to punch out —
   // the canvas paints above the SVG, so without this the dashes march right
-  // over the dots. Published every render (drafts move per pointer frame);
-  // a handful of circles, so the churn is nothing.
-  useEffect(() => {
+  // over the dots. A layout effect for the same reason as the pulse above:
+  // the canvas must not punch holes at last frame's dot positions.
+  useLayoutEffect(() => {
     if (activeWaypoints && activeWaypoints.length > 0) {
       publishEdgeWaypointDots(
         id,
@@ -7672,7 +8241,7 @@ function ResourceEdgeComponent({
     } else {
       retractEdgeWaypointDots(id);
     }
-  });
+  }, [id, activeWaypoints, coreStrokeWidth]);
   useEffect(() => () => {
     retractEdgePulse(id);
     retractEdgeWaypointDots(id);
@@ -8309,6 +8878,26 @@ function getRepeatedOutputHandleIds(
     .filter((handleId): handleId is string => Boolean(handleId));
 }
 
+/**
+ * Identity memo over the assembled path. Edges call getDirectEdgePath on
+ * every render — morph frames, width tweens, hover — and rebuilding the
+ * hopped path string when the points, width and solve are all unchanged was
+ * most of a render's cost. Keyed on the solve signature because hop bumps
+ * read NEIGHBOUR segments: a fresh solve must rebuild even a wire whose own
+ * points stood still. A hit also returns the identical result object, which
+ * keeps downstream identity checks quiet.
+ */
+const directEdgePathMemo = new Map<
+  string,
+  {
+    points: Array<{ x: number; y: number }>;
+    width: number;
+    routeIndex: number;
+    signature: string;
+    result: RoutedEdgePath;
+  }
+>();
+
 function getDirectEdgePath({
   edgeId,
   routeIndex,
@@ -8349,6 +8938,24 @@ function getDirectEdgePath({
       targetPosition,
     });
 
+  // Hop bumps are sized from the width this line actually draws at, so a
+  // highlighted (thickened) line still clears what it crosses.
+  const width = strokeWidth ?? ownStrokeWidth(edgeId);
+
+  const memoRouteIndex = routeIndex ?? 0;
+  if (edgeId) {
+    const cached = directEdgePathMemo.get(edgeId);
+    if (
+      cached &&
+      cached.points === points &&
+      cached.width === width &&
+      cached.routeIndex === memoRouteIndex &&
+      cached.signature === gridSolveSignature
+    ) {
+      return cached.result;
+    }
+  }
+
   // The midpoint anchor: where the rate pill sits when labels are on, and
   // "somewhere on this wire" for the hover story either way.
   const labelPoint = getPointAtPolylineRatio(points, 0.5) ?? {
@@ -8356,11 +8963,7 @@ function getDirectEdgePath({
     y: (sourceY + targetY) / 2,
   };
 
-  // Hop bumps are sized from the width this line actually draws at, so a
-  // highlighted (thickened) line still clears what it crosses.
-  const width = strokeWidth ?? ownStrokeWidth(edgeId);
-
-  return {
+  const result: RoutedEdgePath = {
     path: pointsToHoppedSvgPath(
       points,
       collectHoppedRouteSegments(edgeId, routeIndex, points),
@@ -8373,6 +8976,20 @@ function getDirectEdgePath({
     labelHidden: isPointInsideAnyMeasuredNode(labelPoint),
     points,
   };
+  if (edgeId) {
+    // Routes churn while dragging; without a ceiling this grows unbounded.
+    if (directEdgePathMemo.size > 4000) {
+      directEdgePathMemo.clear();
+    }
+    directEdgePathMemo.set(edgeId, {
+      points,
+      width,
+      routeIndex: memoRouteIndex,
+      signature: gridSolveSignature,
+      result,
+    });
+  }
+  return result;
 }
 
 function getSimpleOrthogonalEdgePoints({
@@ -10353,12 +10970,25 @@ function isCompatibleDraggedResourceTarget(
   // way the wire runs. Everything else still has to land on the opposite side
   // from the one it left.
   const sidesFit = draggedResource.bidirectional || draggedResource.side !== targetHandle.side;
+  if (!sidesFit) {
+    return false;
+  }
 
-  return (
-    sidesFit &&
-    (targetHandle.side === "input"
-      ? resourceMatchesInput(draggedResource, targetResource)
-      : resourceMatchesInput(targetResource, draggedResource))
+  const [output, input] =
+    targetHandle.side === "input"
+      ? [draggedResource, targetResource]
+      : [targetResource, draggedResource];
+  if (resourceMatchesInput(output, input)) {
+    return true;
+  }
+  // LOOSE CELL WIRES, machine to machine only: a drawer holds one form and
+  // its wires must stay in it, so the bidirectional drag and storage targets
+  // stay strict.
+  return Boolean(
+    getSetupRules(project).looseCellWires &&
+      !draggedResource.bidirectional &&
+      !(project.storages ?? []).some((storage) => storage.id === targetHandle.nodeId) &&
+      getCrossFormCellMatch(output, input),
   );
 }
 
@@ -10599,6 +11229,21 @@ function findNodeDropTargetOnSide(
     side === "input"
       ? resourceMatchesInput(draggedResource, candidate)
       : resourceMatchesInput(candidate, draggedResource);
+  // LOOSE CELL WIRES: a machine slot in the other form also takes the drop -
+  // both ways round - so the drag wash and the whole-card drop agree with
+  // what a handle-precise wire is allowed to do. Drawers stay strict: a
+  // drawer holds one form and its wires must stay in it.
+  const acceptsLoose = (
+    candidate: Pick<ResourceAmount, "kind" | "id" | "displayName" | "alternatives">,
+  ) =>
+    accepts(candidate) ||
+    Boolean(
+      getSetupRules(project).looseCellWires &&
+        !draggedResource.bidirectional &&
+        (side === "input"
+          ? getCrossFormCellMatch(draggedResource, candidate)
+          : getCrossFormCellMatch(candidate, draggedResource)),
+    );
   const port = (resource: Pick<ResourceAmount, "kind" | "id">): ResolvedResourceHandle => ({
     nodeId,
     handleId: makeResourceHandleId(side, resource),
@@ -10672,7 +11317,7 @@ function findNodeDropTargetOnSide(
   const candidates = side === "input" ? contextualRecipe.inputs : contextualRecipe.outputs;
   const match = (candidates ?? []).find(
     (candidate) =>
-      (side === "output" || isRecipeInputConsumed(candidate)) && accepts(candidate),
+      (side === "output" || isRecipeInputConsumed(candidate)) && acceptsLoose(candidate),
   );
 
   return match ? port(match) : undefined;
@@ -11010,7 +11655,18 @@ function isCompatibleResourceConnection(
   const output = sourceHandle.side === "output" ? sourceResource : targetResource;
   const input = sourceHandle.side === "input" ? sourceResource : targetResource;
 
-  return sourceHandle.side !== targetHandle.side && resourceMatchesInput(output, input);
+  if (sourceHandle.side === targetHandle.side) {
+    return false;
+  }
+  if (resourceMatchesInput(output, input)) {
+    return true;
+  }
+  // LOOSE CELL WIRES: the board rule lets a filled cell land on its fluid's
+  // input and a fluid on its cell's input, either way round; handleConnect
+  // fetches the Canner ratio and commits the edge.
+  return Boolean(
+    getSetupRules(project).looseCellWires && getCrossFormCellMatch(output, input),
+  );
 }
 
 function getDraggedResourceForHandle(

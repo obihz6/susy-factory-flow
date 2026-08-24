@@ -134,12 +134,75 @@ function ResourceIconComponent({
   );
 }
 
+function atlasEquals(a?: ResourceIconAtlasRef, b?: ResourceIconAtlasRef): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return (
+    a.imagePath === b.imagePath &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.atlasWidth === b.atlasWidth &&
+    a.atlasHeight === b.atlasHeight
+  );
+}
+
+function displayResourceEquals(
+  a?: DisplayResourceAmount,
+  b?: DisplayResourceAmount,
+): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return (
+    a.kind === b.kind &&
+    a.id === b.id &&
+    a.amount === b.amount &&
+    a.displayName === b.displayName &&
+    a.iconPath === b.iconPath &&
+    atlasEquals(a.iconAtlas, b.iconAtlas) &&
+    a.dominantColor === b.dominantColor &&
+    // Dataset arrays: a call-site spread copies the same references, so
+    // identity is the honest comparison.
+    a.tooltip === b.tooltip &&
+    a.alternatives === b.alternatives &&
+    a.consumed === b.consumed &&
+    a.chance === b.chance
+  );
+}
+
 /**
  * Memoised because the canvas and recipe book mount these by the hundred, and a
  * single parent re-render otherwise re-runs every icon's label regexes, class
  * joins and inline style objects.
+ *
+ * With a field-wise resource comparison, because nearly every call site builds
+ * its resource fresh (`{...port.resource, amount: 1}`): the default shallow
+ * compare saw a new identity each time and the memo never hit exactly where it
+ * was written to.
  */
-export const ResourceIcon = memo(ResourceIconComponent);
+export const ResourceIcon = memo(
+  ResourceIconComponent,
+  (prev, next) =>
+    prev.size === next.size &&
+    prev.showAmount === next.showAmount &&
+    prev.showName === next.showName &&
+    prev.bare === next.bare &&
+    prev.className === next.className &&
+    prev.tooltip === next.tooltip &&
+    prev.iconPixelSize === next.iconPixelSize &&
+    prev.showConsumedState === next.showConsumedState &&
+    prev.alternativeState === next.alternativeState &&
+    displayResourceEquals(prev.resource, next.resource),
+);
 
 /**
  * A slot never accepts the other form, so a fluid listed on a cell (or the

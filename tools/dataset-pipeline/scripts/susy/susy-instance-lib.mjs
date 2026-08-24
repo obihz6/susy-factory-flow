@@ -151,8 +151,72 @@ export function inspectInstanceDir(dir) {
 }
 
 /**
+ * Walks up from a game directory to the launcher instance wrapper that owns
+ * it (the directory holding instance.cfg, as written by Prism/PolyMC/MultiMC).
+ * Returns what the export runner needs to work against such an instance: the
+ * instance id (wrapper folder name, what `prism -l` takes), the flatpak app id
+ * when the launcher runs as a flatpak sandbox, and the managed pack metadata
+ * those launchers keep instead of a packwiz pack.toml.
+ */
+export function findLauncherInstanceInfo(startDir) {
+  let current = path.resolve(startDir);
+  for (let depth = 0; depth < 8; depth += 1) {
+    const cfgPath = path.join(current, "instance.cfg");
+    let cfgText;
+    try {
+      cfgText = fs.readFileSync(cfgPath, "utf8");
+    } catch {
+      cfgText = undefined;
+    }
+    if (cfgText !== undefined) {
+      const meta = parseInstanceCfg(cfgText);
+      return {
+        dir: current,
+        instanceId: path.basename(current),
+        flatpakAppId: flatpakAppIdFor(current),
+        managedPackName: meta.managedPackName,
+        managedPackVersion: meta.managedPackVersion,
+      };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+  return undefined;
+}
+
+/** Minimal instance.cfg reader: only the managed-pack keys the pipeline needs. */
+function parseInstanceCfg(text) {
+  const result = { managedPackName: undefined, managedPackVersion: undefined };
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const pair = /^([^=]+?)\s*=\s*(.*)$/.exec(rawLine.trim());
+    if (!pair) continue;
+    const key = pair[1].trim();
+    if (key === "ManagedPackName") result.managedPackName = pair[2].trim() || undefined;
+    if (key === "ManagedPackVersionName") result.managedPackVersion = pair[2].trim() || undefined;
+  }
+  return result;
+}
+
+/** The flatpak app id when `dir` lives inside ~/.var/app/<app id>/, else undefined. */
+function flatpakAppIdFor(dir) {
+  const parts = path.resolve(dir).split(path.sep);
+  const varIndex = parts.lastIndexOf(".var");
+  if (varIndex < 0 || parts[varIndex + 1] !== "app") return undefined;
+  return parts[varIndex + 2] || undefined;
+}
+
+/** Trailing dotted version embedded in a jar filename ("susy-hei-oracle-2.0.0.jar" -> "2.0.0"). */
+function jarVersion(filePath) {
+  const match = /-(\d+(?:\.\d+)+)\.jar$/i.exec(path.basename(filePath));
+  return match ? match[1] : "";
+}
+
+/**
  * Where the susy-hei-oracle mod jar can come from, best first:
- * SUSY_HEI_ORACLE_JAR, the pipeline's own build, then a repo-local checkout.
+ * SUSY_HEI_ORACLE_JAR, then the best oracle build across the pipeline's own
+ * build output and a repo-local checkout — highest version wins, newest
+ * build breaks ties (mtime is coarse on some filesystems, so version leads).
  */
 export function findOracleJar(repoRoot, env = process.env) {
   if (env.SUSY_HEI_ORACLE_JAR) {
@@ -187,6 +251,12 @@ export function findOracleJar(repoRoot, env = process.env) {
   };
   for (const root of roots) walk(root, 0);
   if (found.length === 0) return undefined;
-  found.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  found.sort((a, b) => {
+    const versionDiff = compareVersions(jarVersion(b), jarVersion(a));
+    if (versionDiff !== 0) return versionDiff;
+    const mtimeDiff = fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    if (mtimeDiff !== 0) return mtimeDiff;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
   return found[0];
 }

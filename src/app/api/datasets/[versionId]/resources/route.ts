@@ -22,7 +22,11 @@ export async function GET(
       kind: kindParam === "item" || kindParam === "fluid" ? kindParam : undefined,
       mod: url.searchParams.get("mod") ?? undefined,
       sort:
-        sortParam === "name" || sortParam === "mod" || sortParam === "recipes"
+        sortParam === "name" ||
+        sortParam === "mod" ||
+        sortParam === "recipes" ||
+        sortParam === "made" ||
+        sortParam === "uses"
           ? sortParam
           : undefined,
       source: sourceParam === "plants" || sourceParam === "bees" ? sourceParam : undefined,

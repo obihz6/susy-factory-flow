@@ -55,6 +55,7 @@ import {
   resourceLabel,
 } from "@/lib/model/resources";
 import type {
+  SetupRules,
   EntryIcon,
   FactoryAnnotation,
   FactoryEdge,
@@ -71,9 +72,11 @@ import type {
   TargetRate,
   ThroughputResult,
 } from "@/lib/model/types";
+import { nearestFreeSpot, type PlacementRect } from "@/components/flow/board-placement";
 import { planContentFingerprint } from "@/lib/community/plan-fingerprint";
 import { collectPocketMembers, expandPocketSelection } from "@/lib/model/pocket-connections";
 import { paperForBoardId, pickBoardPaper } from "@/lib/model/board-paper";
+import { getSetupRules, packSetupRules } from "@/lib/model/setup-rules";
 import type { BoardCamera } from "@/lib/designs/design-camera";
 
 export const LOCAL_STORAGE_KEY = "susy-factory-flow.project.v2";
@@ -146,6 +149,14 @@ interface FactoryStore {
   maxTierFilter: TierFilter;
   recipeBrowserResource?: RecipeBrowserResource;
   recipeBrowserMode: RecipeBrowserMode;
+  /**
+   * Pre-filled stencil conditions for the recipe search, set by the refactor
+   * button: every input and output of the card being refactored. A plain
+   * browse clears them and seeds from its one resource as always.
+   */
+  recipeBrowserSeed?: RecipeSeedClause[];
+  /** Set while the search is a REFACTOR: the add replaces this node in place. */
+  recipeBrowserRefactorNodeId?: string;
   recipeResourceHistory: RecipeBrowserResource[];
   /**
    * Recipes the plus button promised to the board whose full bodies are still
@@ -227,7 +238,7 @@ interface FactoryStore {
   addNodeForRecipeObject: (
     recipe: Recipe,
     resource?: RecipeInputContextResource,
-    options?: { machineHandlerId?: string; inputPicks?: RecipeInputPicks },
+    options?: { machineHandlerId?: string; inputPicks?: RecipeInputPicks; focusCamera?: boolean },
   ) => void;
   addConnectedNodeForRecipe: (
     recipeId: string,
@@ -238,6 +249,19 @@ interface FactoryStore {
     recipe: Recipe,
     anchorNodeId: string,
     resource: RecipeInputContextResource,
+    options?: { machineHandlerId?: string; inputPicks?: RecipeInputPicks },
+  ) => void;
+  /** Opens the recipe search pre-filled with this node's inputs and outputs. */
+  beginRecipeRefactor: (nodeId: string) => void;
+  /**
+   * The refactor's landing: swap the node onto the picked recipe in place,
+   * carrying every wire the new recipe can still serve - or, when none can,
+   * spawn the pick beside the old card and leave it untouched.
+   */
+  refactorNodeWithRecipe: (
+    nodeId: string,
+    recipe: Recipe,
+    options?: { machineHandlerId?: string },
   ) => void;
   updateNode: (nodeId: string, patch: Partial<FactoryNode>) => void;
   /** Drops an empty crop source node; a crop is picked on the node itself. */
@@ -267,6 +291,19 @@ interface FactoryStore {
     source: { nodeId: string; handleId?: string },
     resource: Pick<ResourceAmount, "kind" | "id" | "displayName">,
   ) => void;
+  /**
+   * A loose cell wire (SetupRules.looseCellWires): a filled cell landing
+   * straight on its fluid's input, or a fluid landing straight on its cell's
+   * input. The edge carries the SOURCE's own resource, the far form's input
+   * handle as its target, and the Canner ratio the gesture fetched; the
+   * solver bridges the two forms through a hidden free Tank.
+   */
+  connectCrossFormEdge: (
+    source: { nodeId: string; handleId: string },
+    target: { nodeId: string; handleId: string },
+    resource: Pick<ResourceAmount, "kind" | "id" | "displayName">,
+    litresPerCell: number,
+  ) => void;
   /** Swaps the node onto another recipe (crop pick), resetting per-recipe state. */
   setNodeRecipe: (nodeId: string, recipe: Recipe) => void;
   deleteNode: (nodeId: string) => void;
@@ -291,8 +328,8 @@ interface FactoryStore {
   ) => void;
   /** Drains only: flip between pulling the feeder flat out and catching the extra. */
   setStorageDrainMode: (storageId: string, drainMode: StorageDrainMode) => void;
-  /** Sketch mode: solve as if every bare slot had its boundary drawer. */
-  setAssumeBoundaries: (assumeBoundaries: boolean) => void;
+  /** Free inputs and free outputs: what the board does off its own edges. */
+  setSetupRules: (rules: Partial<SetupRules>) => void;
   deleteStorage: (storageId: string) => void;
   /** Clone a node (same recipe/config, no wires) beside the original. */
   duplicateNode: (nodeId: string) => void;
@@ -529,7 +566,8 @@ interface FactoryStore {
   autoConnectNode: (nodeId: string) => void;
   optimizeMachineCount: (nodeId: string) => void;
   optimizeMachineCounts: () => void;
-  deleteEdge: (edgeId: string) => void;
+  /** One wire, or a batch deleted together as a single undo entry. */
+  deleteEdge: (edgeId: string | string[]) => void;
   setTargetRate: (targetRate?: TargetRate) => void;
   selectFuelProfile: (fuelProfileId: string) => void;
   renameProject: (name: string) => void;
@@ -608,6 +646,17 @@ export interface RecipeBrowserResource {
   anchorNodeId?: string;
 }
 
+/** One pre-filled condition of the recipe search's stencil. */
+export interface RecipeSeedClause {
+  role: "makes" | "takes";
+  kind: ResourceKind;
+  id: string;
+  displayName?: string;
+  iconPath?: string;
+  iconAtlas?: ResourceAmount["iconAtlas"];
+  dominantColor?: string;
+}
+
 export interface PendingRecipeAdd {
   id: number;
   /** The recipe's display name, for the board's "on its way" chip. */
@@ -648,6 +697,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   maxTierFilter: "all",
   recipeBrowserResource: undefined,
   recipeBrowserMode: "recipes",
+  recipeBrowserSeed: undefined,
+  recipeBrowserRefactorNodeId: undefined,
   recipeResourceHistory: [],
   pendingRecipeAdds: [],
   pendingResourceConnection: undefined,
@@ -849,6 +900,10 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       return {
         recipeBrowserResource: resource,
         recipeBrowserMode: mode,
+        // A plain browse is not a refactor: the stencil seeds from this one
+        // resource and an add places a new card.
+        recipeBrowserSeed: undefined,
+        recipeBrowserRefactorNodeId: undefined,
         recipeResourceHistory,
         selectedNodeId: resource.anchorNodeId,
       };
@@ -862,8 +917,71 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   clearResourceBrowser: () => {
     set({
       recipeBrowserResource: undefined,
+      recipeBrowserSeed: undefined,
+      recipeBrowserRefactorNodeId: undefined,
       recipeSearch: "",
       highlightSearch: "",
+    });
+  },
+  beginRecipeRefactor: (nodeId) => {
+    set((state) => {
+      const node = state.project.nodes.find((entry) => entry.id === nodeId);
+      const recipe = state.project.recipes.find((entry) => entry.id === node?.recipeId);
+      if (!node || !recipe) {
+        return state;
+      }
+
+      const effectiveRecipe = applyRecipeInputOverrides(recipe, node);
+      const seed: RecipeSeedClause[] = [];
+      const seen = new Set<string>();
+      const push = (role: RecipeSeedClause["role"], resource: ResourceAmount) => {
+        // An oredict slot goes in as its first concrete face - a search
+        // condition is a thing, not a dictionary entry.
+        const face =
+          (isOreDictionaryResource(resource) ? resource.alternatives?.[0] : undefined) ?? resource;
+        const key = `${role}:${face.kind}:${face.id}`;
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        seed.push({
+          role,
+          kind: face.kind,
+          id: face.id,
+          displayName: face.displayName,
+          iconPath: face.iconPath,
+          iconAtlas: face.iconAtlas,
+          dominantColor: face.dominantColor ?? face.iconAtlas?.dominantColor,
+        });
+      };
+      for (const input of effectiveRecipe.inputs) {
+        if (isRecipeInputConsumed(input)) {
+          push("takes", input);
+        }
+      }
+      for (const output of effectiveRecipe.outputs) {
+        push("makes", output);
+      }
+      if (seed.length === 0) {
+        return state;
+      }
+
+      const primary = seed.find((clause) => clause.role === "makes") ?? seed[0];
+      return {
+        recipeBrowserResource: {
+          kind: primary.kind,
+          id: primary.id,
+          displayName: primary.displayName,
+          iconPath: primary.iconPath,
+          iconAtlas: primary.iconAtlas,
+          dominantColor: primary.dominantColor,
+          anchorNodeId: nodeId,
+        },
+        recipeBrowserMode: "recipes" as const,
+        recipeBrowserSeed: seed,
+        recipeBrowserRefactorNodeId: nodeId,
+        selectedNodeId: nodeId,
+      };
     });
   },
   beginRecipeAdd: (label) => {
@@ -1062,8 +1180,11 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       return addConnectedRecipeNodeToState(state, recipe, anchorNodeId, resource);
     });
   },
-  addConnectedNodeForRecipeObject: (recipe, anchorNodeId, resource) => {
-    set((state) => addConnectedRecipeNodeToState(state, recipe, anchorNodeId, resource));
+  addConnectedNodeForRecipeObject: (recipe, anchorNodeId, resource, options) => {
+    set((state) => addConnectedRecipeNodeToState(state, recipe, anchorNodeId, resource, options));
+  },
+  refactorNodeWithRecipe: (nodeId, recipe, options) => {
+    set((state) => refactorNodeToState(state, nodeId, recipe, options));
   },
   updateNode: (nodeId, patch) => {
     set((state) => {
@@ -2883,6 +3004,35 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
     });
   },
+  connectCrossFormEdge: (source, target, resource, litresPerCell) => {
+    set((state) => {
+      if (!(litresPerCell > 0)) {
+        return state;
+      }
+      const edge: FactoryEdge = {
+        id: createId("edge"),
+        source: source.nodeId,
+        target: target.nodeId,
+        sourceHandle: source.handleId,
+        targetHandle: target.handleId,
+        resourceKind: resource.kind,
+        resourceId: resource.id,
+        label: resource.displayName,
+        crossForm: { litresPerCell },
+      };
+      if (findDuplicateEdge(state.project.edges, edge)) {
+        return state;
+      }
+      const finalProject = touchProject({
+        ...state.project,
+        edges: [...state.project.edges, edge],
+      });
+      return withProjectHistory(state, {
+        project: finalProject,
+        lastResult: calculateThroughput(finalProject),
+      });
+    });
+  },
   reconnectEdge: (edgeId, connection) => {
     set((state) => {
       const oldEdge = state.project.edges.find((edge) => edge.id === edgeId);
@@ -3070,10 +3220,11 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   deleteEdge: (edgeId) => {
     set((state) => {
+      const ids = new Set(Array.isArray(edgeId) ? edgeId : [edgeId]);
       const project = touchProject(
         pruneOrphanStorages({
           ...state.project,
-          edges: state.project.edges.filter((edge) => edge.id !== edgeId),
+          edges: state.project.edges.filter((edge) => !ids.has(edge.id)),
         }),
       );
       return withProjectHistory(state, {
@@ -3094,11 +3245,12 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
     });
   },
-  setAssumeBoundaries: (assumeBoundaries) => {
+  setSetupRules: (rules) => {
     set((state) => {
+      const { assumeBoundaries: _legacy, ...rest } = state.project;
       const project = touchProject({
-        ...state.project,
-        assumeBoundaries: assumeBoundaries || undefined,
+        ...rest,
+        setupRules: packSetupRules({ ...getSetupRules(state.project), ...rules }),
       });
       return withProjectHistory(state, {
         project,
@@ -3212,6 +3364,7 @@ function addRecipeNodeToState(
     colorTag?: FactoryNodeColorTag;
     machineHandlerId?: string;
     inputPicks?: RecipeInputPicks;
+    focusCamera?: boolean;
   },
 ): Partial<FactoryStore> {
   const index = state.project.nodes.length;
@@ -3221,6 +3374,20 @@ function addRecipeNodeToState(
         y: state.flowViewportCenter.y - 160,
       })
     : undefined;
+  const desiredPosition =
+    viewportPosition ??
+    snapPositionToGrid({
+      x: 100 + index * 80,
+      y: 120 + (index % 4) * 80,
+    });
+  // Never on top of anything: the same magnet a drag obeys, applied at spawn.
+  const position = snapPositionToGrid(
+    nearestFreeSpot(
+      { ...desiredPosition, width: RECIPE_NODE_WIDTH, height: BOARD_GRID * 14 },
+      projectBlockerRects(state.project),
+      BOARD_GRID,
+    ),
+  );
   // A machine picked in the recipe finder spawns the node with that handler
   // selected, at the handler's own minimum tier.
   const spawnHandler = options?.machineHandlerId
@@ -3241,12 +3408,7 @@ function addRecipeNodeToState(
     // drops, so it spawns green like that one rather than as a grey machine.
     colorTag: options?.colorTag ?? (isCropFarmRecipe(recipe) ? "green" : undefined),
     enabled: true,
-    position:
-      viewportPosition ??
-      snapPositionToGrid({
-        x: 100 + index * 80,
-        y: 120 + (index % 4) * 80,
-      }),
+    position,
   };
   const recipeAlreadyInProject = state.project.recipes.some((entry) => entry.id === recipe.id);
   const project = touchProject({
@@ -3265,6 +3427,17 @@ function addRecipeNodeToState(
     selectedRecipeId: recipe.id,
     placedBoardIds: [node.id],
     placedBoardToken: state.placedBoardToken + 1,
+    // The magnet can carry the card away from the viewport centre, so the
+    // camera goes to where it actually landed.
+    ...(options?.focusCamera
+      ? {
+          boardFocusRequest: {
+            mode: "centre" as const,
+            nodeIds: [node.id],
+            token: (state.boardFocusRequest?.token ?? 0) + 1,
+          },
+        }
+      : {}),
     lastResult: calculateThroughput(project),
   });
 }
@@ -3274,13 +3447,45 @@ function addConnectedRecipeNodeToState(
   recipe: Recipe,
   anchorNodeId: string,
   resource: RecipeInputContextResource,
+  options?: { machineHandlerId?: string; inputPicks?: RecipeInputPicks },
 ): Partial<FactoryStore> {
   const anchorNode = state.project.nodes.find((node) => node.id === anchorNodeId);
   const anchorRecipe = state.project.recipes.find((entry) => entry.id === anchorNode?.recipeId);
 
   if (!anchorNode || !anchorRecipe) {
-    return state;
+    // The anchor can be deleted while the search sits open; the add still
+    // lands, just unwired and wherever there is room.
+    return addRecipeNodeToState(state, recipe, resource, { ...options, focusCamera: true });
   }
+
+  const spawnHandler = options?.machineHandlerId
+    ? recipe.machineHandlers?.find((handler) => handler.id === options.machineHandlerId)
+    : undefined;
+  // "recipes" asked who MAKES the clicked thing, so the new card feeds the
+  // anchor and stands upstream of it; "uses" is the mirror.
+  const feedsAnchor = resource.mode === "recipes";
+  const anchorFrame =
+    anchorNode.pocketId !== undefined
+      ? computeOpenBoardRects(computeBoardLevelView(state.project).openBoards).find(
+          (rect) => rect.id === anchorNode.pocketId,
+        )
+      : undefined;
+  const beside = snapPositionToGrid({
+    x: anchorNode.position.x + (feedsAnchor ? -440 : 440),
+    y: anchorNode.position.y,
+  });
+  // Inside an open board the classic beside-spot stands - the frame is the
+  // player's own room to arrange. On the open canvas the magnet finds clear
+  // floor so the newcomer never lands on another card.
+  const position = anchorFrame
+    ? beside
+    : snapPositionToGrid(
+        nearestFreeSpot(
+          { ...beside, width: RECIPE_NODE_WIDTH, height: BOARD_GRID * 14 },
+          projectBlockerRects(state.project),
+          BOARD_GRID,
+        ),
+      );
 
   const recipeAlreadyInProject = state.project.recipes.some((entry) => entry.id === recipe.id);
   const nextNode: FactoryNode = {
@@ -3288,17 +3493,18 @@ function addConnectedRecipeNodeToState(
     recipeId: recipe.id,
     machineCount: 1,
     parallel: 1,
-    overclockTier: recipe.minimumTier,
-    recipeInputOverrides: buildRecipeInputOverrides(recipe, resource),
-    enabled: true,
-    position: snapPositionToGrid(
-      resource.mode === "recipes"
-        ? { x: anchorNode.position.x - 440, y: anchorNode.position.y }
-        : { x: anchorNode.position.x + 440, y: anchorNode.position.y },
+    machineHandlerId: spawnHandler?.id,
+    overclockTier: spawnHandler?.minimumTier ?? recipe.minimumTier,
+    recipeInputOverrides: mergeRecipeInputOverrides(
+      buildRecipeInputOverrides(recipe, resource),
+      buildRecipeInputPickOverrides(recipe, options?.inputPicks),
     ),
+    colorTag: isCropFarmRecipe(recipe) ? "green" : undefined,
+    enabled: true,
+    position,
     // Spawned beside its anchor, in the anchor's own coordinates - so it
     // joins the anchor's board and the relative placement stays true.
-    pocketId: anchorNode.pocketId,
+    pocketId: anchorFrame ? anchorNode.pocketId : undefined,
   };
 
   const projectWithNode: FactoryProject = {
@@ -3311,7 +3517,24 @@ function addConnectedRecipeNodeToState(
     nodes: [...state.project.nodes, nextNode],
   };
 
-  const project = touchProject(projectWithNode);
+  // The wire the click promised: the browsed resource, maker to taker, laid
+  // only where the two recipes actually meet on it. A pick that no longer
+  // touches the clicked resource simply lands unwired.
+  const wires = buildResourceEdgesBetweenNodes(
+    projectWithNode,
+    feedsAnchor ? nextNode.id : anchorNodeId,
+    feedsAnchor ? anchorNodeId : nextNode.id,
+    resource,
+  );
+  const projectWired =
+    wires.length > 0
+      ? applyEdgeInputOverrides(
+          { ...projectWithNode, edges: [...projectWithNode.edges, ...wires] },
+          wires,
+        )
+      : projectWithNode;
+
+  const project = touchProject(projectWired);
 
   return withProjectHistory(state, {
     project,
@@ -3319,6 +3542,231 @@ function addConnectedRecipeNodeToState(
     selectedRecipeId: recipe.id,
     placedBoardIds: [nextNode.id],
     placedBoardToken: state.placedBoardToken + 1,
+    boardFocusRequest: {
+      mode: "centre" as const,
+      nodeIds: [nextNode.id],
+      token: (state.boardFocusRequest?.token ?? 0) + 1,
+    },
+    lastResult: calculateThroughput(project),
+  });
+}
+
+/**
+ * Everything solid on the canvas as flow-space rects: cards, drawers,
+ * minimized board cards, and every OPEN frame as one whole rect - a spawned
+ * card never lands inside somebody's board uninvited. Members hidden inside
+ * a minimized board block nothing, exactly as they render. Footprints are
+ * the same estimates the wrap tool uses; overshooting only spreads cards out.
+ */
+function projectBlockerRects(project: FactoryProject): PlacementRect[] {
+  const view = computeBoardLevelView(project);
+  const frameOrigins = new Map(
+    computeOpenBoardRects(view.openBoards).map((rect) => [rect.id, rect] as const),
+  );
+  const absolutize = (
+    position: { x: number; y: number },
+    home: string | undefined,
+  ): { x: number; y: number } => {
+    const origin = home !== undefined ? frameOrigins.get(home) : undefined;
+    return origin ? { x: position.x + origin.x, y: position.y + origin.y } : position;
+  };
+  const visible = (home: string | undefined) => home === undefined || frameOrigins.has(home);
+
+  const rects: PlacementRect[] = [];
+  for (const node of project.nodes) {
+    if (!visible(node.pocketId)) {
+      continue;
+    }
+    rects.push({
+      ...absolutize(node.position, node.pocketId),
+      width: RECIPE_NODE_WIDTH,
+      height: BOARD_GRID * 14,
+    });
+  }
+  for (const storage of project.storages ?? []) {
+    if (!visible(storage.pocketId)) {
+      continue;
+    }
+    rects.push({
+      ...absolutize(storage.position, storage.pocketId),
+      width: STORAGE_NODE_WIDTH,
+      height: STORAGE_NODE_HEIGHT,
+    });
+  }
+  for (const pocket of project.pockets ?? []) {
+    if (!visible(pocket.parentPocketId)) {
+      continue;
+    }
+    rects.push({
+      ...absolutize(pocket.position, pocket.parentPocketId),
+      width: pocket.expanded ? boardWindowSize(pocket).width : RECIPE_NODE_WIDTH,
+      height: pocket.expanded ? boardWindowSize(pocket).height : BOARD_GRID * 14,
+    });
+  }
+  return rects;
+}
+
+/**
+ * {@link buildCompatibleEdgesBetweenNodes} narrowed to ONE resource: the one
+ * whose port row was clicked. Wiring every compatible pair would also hook up
+ * byproducts nobody asked about.
+ */
+function buildResourceEdgesBetweenNodes(
+  project: FactoryProject,
+  sourceNodeId: string,
+  targetNodeId: string,
+  resource: Pick<ResourceAmount, "kind" | "id">,
+): FactoryEdge[] {
+  const sourceNode = project.nodes.find((node) => node.id === sourceNodeId);
+  const targetNode = project.nodes.find((node) => node.id === targetNodeId);
+  const sourceRecipe = project.recipes.find((recipe) => recipe.id === sourceNode?.recipeId);
+  const targetRecipe = project.recipes.find((recipe) => recipe.id === targetNode?.recipeId);
+
+  if (!sourceNode || !targetNode || !sourceRecipe || !targetRecipe) {
+    return [];
+  }
+
+  const matchesResource = (slot: ResourceAmount) =>
+    (slot.kind === resource.kind && slot.id === resource.id) ||
+    resourceMatchesInput(resource, slot);
+  const effectiveSource = applyRecipeInputOverrides(sourceRecipe, sourceNode);
+  const effectiveTarget = applyRecipeInputOverrides(targetRecipe, targetNode);
+  const edges: FactoryEdge[] = [];
+
+  effectiveSource.outputs.forEach((output, outputIndex) => {
+    if (!matchesResource(output)) {
+      return;
+    }
+    effectiveTarget.inputs.forEach((input, inputIndex) => {
+      if (
+        !isRecipeInputConsumed(input) ||
+        !resourceMatchesInput(output, input) ||
+        !matchesResource(input)
+      ) {
+        return;
+      }
+      edges.push({
+        id: createId("edge"),
+        source: sourceNode.id,
+        target: targetNode.id,
+        sourceHandle: makeResourceHandleId("output", output, outputIndex),
+        targetHandle: makeResourceHandleId("input", input, inputIndex),
+        resourceKind: output.kind,
+        resourceId: output.id,
+        label: resourceLabel(output),
+      });
+    });
+  });
+
+  return dedupeEdgeWires(edges);
+}
+
+/**
+ * The refactor's landing. The pick replaces the card IN PLACE when at least
+ * one of its wires still has a matching port on the new recipe - a card with
+ * no wires replaces trivially - and the surviving wires re-dock onto the new
+ * recipe's slots while the rest are dropped. When every wire would be lost,
+ * the old card is left standing and the pick lands beside it instead: a
+ * replace that severs everything is not a refactor.
+ */
+function refactorNodeToState(
+  state: FactoryStore,
+  nodeId: string,
+  recipe: Recipe,
+  options?: { machineHandlerId?: string },
+): Partial<FactoryStore> {
+  const node = state.project.nodes.find((entry) => entry.id === nodeId);
+  if (!node) {
+    return addRecipeNodeToState(state, recipe, undefined, { ...options, focusCamera: true });
+  }
+  if (node.recipeId === recipe.id) {
+    return state;
+  }
+
+  const spawnHandler = options?.machineHandlerId
+    ? recipe.machineHandlers?.find((handler) => handler.id === options.machineHandlerId)
+    : undefined;
+  const touching = state.project.edges.filter(
+    (edge) => edge.source === nodeId || edge.target === nodeId,
+  );
+  const carried: FactoryEdge[] = [];
+  for (const edge of touching) {
+    const wireResource = { kind: edge.resourceKind, id: edge.resourceId };
+    const matchesWire = (slot: ResourceAmount) =>
+      (slot.kind === wireResource.kind && slot.id === wireResource.id) ||
+      resourceMatchesInput(wireResource, slot);
+    if (edge.source === nodeId) {
+      const outputIndex = recipe.outputs.findIndex(matchesWire);
+      if (outputIndex >= 0) {
+        carried.push({
+          ...edge,
+          sourceHandle: makeResourceHandleId("output", recipe.outputs[outputIndex], outputIndex),
+        });
+      }
+    } else {
+      const inputIndex = recipe.inputs.findIndex(
+        (input) => isRecipeInputConsumed(input) && matchesWire(input),
+      );
+      if (inputIndex >= 0) {
+        carried.push({
+          ...edge,
+          targetHandle: makeResourceHandleId("input", recipe.inputs[inputIndex], inputIndex),
+        });
+      }
+    }
+  }
+
+  if (touching.length > 0 && carried.length === 0) {
+    // Nothing survives: the pick lands beside the old card, which stays.
+    const context: RecipeInputContextResource = {
+      kind: recipe.outputs[0]?.kind ?? "item",
+      id: recipe.outputs[0]?.id ?? recipe.id,
+      mode: "uses",
+    };
+    return addConnectedRecipeNodeToState(state, recipe, nodeId, context, options);
+  }
+
+  const recipeAlreadyInProject = state.project.recipes.some((entry) => entry.id === recipe.id);
+  const projectBase: FactoryProject = {
+    ...state.project,
+    recipes: recipeAlreadyInProject
+      ? state.project.recipes.map((entry) =>
+          entry.id === recipe.id ? mergeRecipe(entry, recipe) : entry,
+        )
+      : [...state.project.recipes, recipe],
+    nodes: state.project.nodes.map((entry) =>
+      entry.id === nodeId
+        ? {
+            ...entry,
+            recipeId: recipe.id,
+            machineHandlerId: spawnHandler?.id,
+            overclockTier: spawnHandler?.minimumTier ?? recipe.minimumTier,
+            machineConfigTiers: undefined,
+            coilTier: undefined,
+            recipeInputOverrides: undefined,
+          }
+        : entry,
+    ),
+    edges: [
+      ...state.project.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+      ...carried,
+    ],
+  };
+  const project = touchProject(
+    pruneOrphanStorages(applyEdgeInputOverrides(projectBase, carried)),
+  );
+
+  return withProjectHistory(state, {
+    project,
+    selectedNodeId: nodeId,
+    selectedRecipeId: recipe.id,
+    placedBoardIds: [nodeId],
+    placedBoardToken: state.placedBoardToken + 1,
+    boardFocusRequest: {
+      mode: "centre" as const,
+      nodeIds: [nodeId],
+      token: (state.boardFocusRequest?.token ?? 0) + 1,
+    },
     lastResult: calculateThroughput(project),
   });
 }
@@ -3658,6 +4106,32 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
 
   const effectiveSourceRecipe = applyRecipeInputOverrides(sourceRecipe, sourceNode);
   const effectiveTargetRecipe = applyRecipeInputOverrides(targetRecipe, targetNode);
+
+  // A LOOSE CELL WIRE's two ends are honest in different forms: the source
+  // must still make the wire's own resource, the target must still take the
+  // far form the wire's own target handle names - the fluid under a cell
+  // wire, the cell under a fluid wire.
+  if (edge.crossForm) {
+    const handleParts = (edge.targetHandle ?? "").split(":");
+    const farKind =
+      handleParts[1] === "fluid" || handleParts[1] === "item" ? handleParts[1] : undefined;
+    const farId =
+      handleParts[0] === "input" && farKind && handleParts[2]
+        ? decodeURIComponent(handleParts[2])
+        : undefined;
+    return Boolean(
+      farKind &&
+        farId &&
+        effectiveSourceRecipe.outputs.some((output) =>
+          resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
+        ) &&
+        effectiveTargetRecipe.inputs.some(
+          (input) =>
+            isRecipeInputConsumed(input) &&
+            resourceMatchesInput({ kind: farKind, id: farId }, input),
+        ),
+    );
+  }
 
   return (
     effectiveSourceRecipe.outputs.some((output) =>

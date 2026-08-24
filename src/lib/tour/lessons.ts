@@ -12,23 +12,19 @@ import {
   Grid3x3,
   ImagePlus,
   Link,
-  Magnet,
   MoveUpRight,
   Network,
   Paintbrush,
-  Presentation,
   Search,
   Share2,
   Sprout,
   Square,
   Trash,
   Trash2,
-  TriangleAlert,
   Type,
   Undo2,
   Upload,
   User,
-  Zap,
 } from "lucide-react";
 import type { GlanceRow } from "@/components/tour/card-parts";
 import { openSidebarTab } from "@/lib/sidebar-tab";
@@ -43,29 +39,17 @@ import {
   frameTourBlocked,
   frameTourBottleneck,
   frameTourBufferDrawer,
-  frameTourByproductDrawer,
   frameTourProductDrawer,
-  frameTourSourceDrawer,
   openTourPlan,
-  restoreDrawerLab,
   restoreTheDecks,
   restoreTourRateUnit,
   tuneTourRateUnit,
   tourBlockedInputsSelector,
-  tourBlockedOutputsSelector,
-  tourBlockedSelector,
   tourBlockedUsageSelector,
-  tourBottleneckInputsSelector,
-  tourBottleneckOutputsSelector,
   tourBottleneckSelector,
   tourBottleneckUsageSelector,
   tourBufferDrawerSelector,
-  tourByproductDrawerSelector,
-  tourLabArmQuiet,
-  tourLabQuiet,
-  tourLabReset,
   tourProductDrawerSelector,
-  tourSourceDrawerSelector,
 } from "./tour-boards";
 
 /**
@@ -87,15 +71,17 @@ import {
  * ROWS, and every row leads with the same mark the screen does: the button's
  * own icon, a key chip, or a little mouse with the right button lit. Keep a row
  * to one line's worth of words, put the words that matter between *asterisks*
- * so they come out lit, and let the icon carry the rest. Six rows is the most
+ * so they come out lit, and let the icon carry the rest. Five rows is the most
  * any step should ever want.
  *
  * EVERY CLAIM MUST BE TRUE ON THE LIVE BOARD. The second lesson's steps were
  * checked against the posted titanium line with the real solver (the equation
- * books, 2026-08-20): what a full input bar means, which card gets marked and
- * why, what the drawer lab's flip actually changes - which is bookkeeping and
- * one word, never a speed. `tour-board-alive.test.ts` pins the solves the
- * copy leans on. Rewrite a row only with the board open.
+ * books, 2026-08-20). `tour-board-alive.test.ts` pins the solves the copy
+ * leans on. Rewrite a row only with the board open.
+ *
+ * A tour only ever POINTS. It moves the camera and opens columns, but it never
+ * edits the plan under the reader - the live pill-flip experiment the second
+ * lesson used to run was removed for exactly that (2026-08-23).
  *
  * `before` runs just ahead of the step and is for making the target visible:
  * opening a column, landing the sidebar on a tab. A step must never leave the
@@ -166,7 +152,7 @@ function showSidebarTab(tab: "items" | "blueprints" | "setups") {
 const LOOK_AROUND: TourLesson = {
   id: "look-around",
   title: "A look around the planner",
-  blurb: "Where everything is: the board, every toolbar around it, and both columns.",
+  blurb: "Where everything is: the board, the toolbars, and both columns.",
   nextLessonId: "read-the-board",
   steps: [
     {
@@ -214,21 +200,8 @@ const LOOK_AROUND: TourLesson = {
         { icon: Grid3x3, text: "Background *style and pattern*." },
         { icon: Cable, text: "Thickness, *moving dashes* and rate labels on the wires." },
         { icon: Anchor, text: "Wires dock anywhere, or at fixed ports." },
-        { icon: Presentation, text: "*Calm colours*, for presenting a plan." },
-        { icon: Magnet, text: "*Motion*: cards glide and numbers ease, or snap." },
-      ],
-    },
-    {
-      anchor: "glance",
-      side: "left",
-      title: "Framing",
-      rows: [
         { icon: Focus, text: "*Fits the whole plan* on the screen." },
-        { text: "Zoomed out, cards can show:" },
-        { icon: Box, text: "*What they are*." },
-        { icon: Gauge, text: "*How hard they run*: red is idle, green is full speed." },
-        { icon: TriangleAlert, text: "*Why*: bottleneck, starved, clogged." },
-        { icon: Zap, text: "*Power*: draw, hatches and tier." },
+        { icon: Box, text: "Zoomed out, cards can show *what they are*, *how hard they run*, or *power*." },
       ],
     },
     {
@@ -241,7 +214,6 @@ const LOOK_AROUND: TourLesson = {
         { chip: "INPUTS", tone: "need", text: "You have to bring this in yourself." },
         { chip: "OUTPUTS", tone: "output", text: "This leaves the plan." },
         { chip: "INTERNAL", tone: "internal", text: "Made and used right here." },
-        { chip: "NET", tone: "output", text: "Outputs switch between *raw and net* rates." },
         { text: "Hover a row and every card carrying it *lights up*." },
       ],
     },
@@ -276,7 +248,6 @@ const LOOK_AROUND: TourLesson = {
       rows: [
         { chip: "+", text: "A new empty board." },
         { mouse: "left", text: "Double click a tab to *rename* it." },
-        { chip: "⋯", text: "Copy it, close it, or close every tab to one side." },
         { text: "Everything saves in this browser as you work." },
       ],
     },
@@ -296,21 +267,9 @@ const LOOK_AROUND: TourLesson = {
       before: showSidebarTab("setups"),
       title: "Shared setups",
       rows: [
-        { icon: Globe, text: "*Public*: every setup people have posted." },
-        { icon: User, text: "*Mine*: the ones you have posted." },
-        { mouse: "left", text: "Open one and it becomes *a new tab* you can edit." },
-        { text: "Vote the good ones up so they are easier to find." },
-      ],
-    },
-    {
-      anchor: "share-setup",
-      side: "right",
-      before: showSidebarTab("setups"),
-      title: "Share your own",
-      rows: [
-        { icon: Share2, text: "Shares *the board you have open*, under a name you pick." },
-        { icon: Link, text: "You get a *link to send a friend*. It opens the setup in their planner." },
-        { text: "It also appears on the Public shelf. You can take it down any time." },
+        { icon: Globe, text: "*Public*: every setup people have posted. Open one and it becomes *a new tab* you can edit." },
+        { icon: Share2, text: "*Share* posts the board you have open, and you get a *link to send a friend*." },
+        { icon: User, text: "*Mine*: the ones you have posted. Take one down any time." },
         { text: "Needs an account: just a *username and password*." },
       ],
     },
@@ -331,16 +290,16 @@ const LOOK_AROUND: TourLesson = {
  * The second walk: the canvas and nothing else.
  *
  * It opens a real posted setup, says what the board is at arm's length, then
- * flies in on one machine and reads it out loud. The card it picks is the most
- * wired-up one that is NOT running flat out (see `pickCards`), so there is
- * always a real number to explain rather than a shrug.
+ * flies in on one machine and reads it out loud. The cards it picks are the
+ * real bottleneck and blocked machines (see `pickCards`), so there is always
+ * a real number to explain rather than a shrug. It points and explains; it
+ * never edits the plan under the reader.
  */
 const READ_THE_BOARD: TourLesson = {
   id: "read-the-board",
   title: "Read the board",
   recommended: true,
-  blurb:
-    "Opens a real titanium line: what the words on the cards mean, what each drawer does, and one live change to watch.",
+  blurb: "Opens a real titanium line: what the words on the cards mean and what each drawer does.",
   // Both columns out of the way for the duration: this lesson is about the
   // canvas and nothing else, and with them open there is not enough board left
   // to magnify a card into. They come back exactly as they were.
@@ -351,12 +310,10 @@ const READ_THE_BOARD: TourLesson = {
     // stamp straight over a dial turned any earlier.
     return openTourPlan().then(tuneTourRateUnit);
   },
-  // The lab steps rewrite the plan to make their point. However the lesson
-  // ends - finished, skipped, closed - the plan goes back exactly as it loaded,
-  // and so do the rate dial and the columns.
+  // However the lesson ends - finished, skipped, closed - the rate dial and
+  // the columns go back exactly as they were.
   teardown: () => {
     hideTourLoopNoticeExample();
-    restoreDrawerLab();
     restoreTourRateUnit();
     restoreTheDecks();
   },
@@ -368,7 +325,7 @@ const READ_THE_BOARD: TourLesson = {
       rows: [
         { text: "Every box is *one machine* doing *one recipe*." },
         { text: "Every wire is *one thing moving*, from whoever makes it to whoever needs it." },
-        { text: "Everything else is detail on a box." },
+        { text: "Nothing here idles by choice: every machine runs *as fast as its supplies allow*." },
       ],
     },
     {
@@ -384,26 +341,14 @@ const READ_THE_BOARD: TourLesson = {
       ],
     },
     {
-      anchorSelector: tourBottleneckInputsSelector,
+      anchorSelector: tourBottleneckSelector,
       side: "right",
-      title: "The inputs are fine",
+      title: "Fed, and still short",
       rows: [
-        { text: "One row per ingredient, with its arrival rate." },
-        { text: "Full bars: everything this machine wants *arrives*." },
-        { text: "Nothing here is holding it back." },
-      ],
-    },
-    {
-      anchorSelector: tourBottleneckOutputsSelector,
-      side: "right",
-      title: "The outputs fall short",
-      rows: [
-        { text: "One row per product, with its output rate." },
+        { text: "The input bars are full: everything this machine wants *arrives*." },
+        { text: "The next machine wants *far more* of its output than it can make." },
         {
-          text: "The next machine wants *far more* of one of these than this machine can make.",
-        },
-        {
-          text: "The *percentage* on an output row is how much of what was asked for actually arrived at the next machine.",
+          text: "The *percentage* on an output row is how much of what was asked for actually arrived.",
         },
       ],
     },
@@ -423,25 +368,16 @@ const READ_THE_BOARD: TourLesson = {
       ],
     },
     {
-      anchorSelector: tourBlockedSelector,
-      side: "right",
-      before: frameTourBlocked,
-      title: "Now a different machine",
-      rows: [
-        { text: "Further down the chain." },
-        { text: "Same three parts." },
-      ],
-    },
-    {
       anchorSelector: tourBlockedInputsSelector,
       side: "right",
+      before: frameTourBlocked,
       title: "Only one input is the problem",
       rows: [
+        { text: "A different machine, further down the chain." },
         { text: "The bars still look full: it gets all it asks for *at its current speed*." },
         {
-          text: "One input is *marked*: the one whose supply sets that speed.",
+          text: "One input is *marked*: the one whose supply sets that speed. Fix the marked one; the others are already covered.",
         },
-        { text: "Fix the marked one. The others are already covered." },
       ],
     },
     {
@@ -457,16 +393,9 @@ const READ_THE_BOARD: TourLesson = {
         {
           text: "Adding more of *this* machine would not help. It cannot use what it already gets.",
         },
-      ],
-    },
-    {
-      anchorSelector: tourBlockedOutputsSelector,
-      side: "right",
-      title: "It slows the next machine too",
-      rows: [
-        { text: "What it makes is nowhere near enough." },
-        { text: "The machine waiting on it gets *a fraction* of what it needs." },
-        { text: "One short machine becomes a whole chain of slowed machines." },
+        {
+          text: "And everything after it goes short too: one short machine becomes *a whole chain of slowed machines*.",
+        },
       ],
     },
     {
@@ -483,15 +412,12 @@ const READ_THE_BOARD: TourLesson = {
         {
           chip: "NO WIRES",
           tone: "starved",
-          text: "A slot has no wire, so the machine cannot run. The bare slots *flash white*. Wire them and the word goes away.",
+          text: "A slot has no wire, so the machine cannot run. The bare slots *flash white*.",
         },
         {
           chip: "CLOGGED",
           tone: "clogged",
-          text: "It makes more of something than its takers use, and the spare has *nowhere* to go. It slows to the pace they set, as in game.",
-        },
-        {
-          text: "Wire the spare to a *Byproduct* drawer and it speeds back up.",
+          text: "The spare it makes has *nowhere* to go, so it slows to its takers' pace, as in game. A *Byproduct* drawer fixes it.",
         },
       ],
     },
@@ -504,9 +430,7 @@ const READ_THE_BOARD: TourLesson = {
       },
       title: "When a line feeds itself",
       rows: [
-        {
-          text: "Machines can feed each other in a circle. Two diseases live there, and the board calls each one out like this.",
-        },
+        { text: "Machines can feed each other in a circle. Two diseases live there." },
         {
           chip: "DEAD LOOP",
           tone: "bottleneck",
@@ -526,51 +450,25 @@ const READ_THE_BOARD: TourLesson = {
       anchor: "board",
       side: "inside",
       before: frameTourWholeBoard,
-      title: "Machines run as fast as they can",
-      rows: [
-        {
-          text: "Almost nothing here sits at *100 percent*, and nothing here idles by choice.",
-        },
-        {
-          text: "Each machine runs at whatever pace its supplies allow, so one short machine slows every machine after it.",
-        },
-        {
-          chip: "BOTTLENECK",
-          tone: "bottleneck",
-          text: "Where to act. *Add machines* or *raise voltage* there and the next bottleneck appears somewhere else.",
-        },
-      ],
-    },
-    {
-      anchor: "board",
-      side: "inside",
-      before: frameTourWholeBoard,
       title: "Drawers decide",
       rows: [
         { text: "Machines make. *Drawers decide* what enters, what leaves, and what waits." },
-        { chip: "SOURCE", tone: "need", text: "*Red, rounded*: never runs out. The plan's inputs." },
+        {
+          chip: "SOURCE",
+          tone: "need",
+          text: "*Red, rounded*: never runs out. The plan's inputs, which *your real base must supply*.",
+        },
         { chip: "PRODUCT", tone: "product", text: "*Blue, square*: what the plan outputs." },
-        { chip: "BYPRODUCT", tone: "output", text: "*Green, shield*: catches the spare." },
+        {
+          chip: "BYPRODUCT",
+          tone: "output",
+          text: "*Green, shield*: catches the spare so it cannot back up and clog its maker.",
+        },
         {
           chip: "BUFFER",
           tone: "internal",
           text: "*Steel, hexagon*: flow passes through, and extra piles up here.",
         },
-      ],
-    },
-    {
-      anchorSelector: tourSourceDrawerSelector,
-      side: "right",
-      before: frameTourSourceDrawer,
-      title: "A Source is infinite",
-      rows: [
-        { text: "Nothing feeds it, so it *creates* its item or fluid. These two feed the line." },
-        {
-          chip: "INPUTS",
-          tone: "need",
-          text: "Everything a Source hands out is something your real base must supply.",
-        },
-        { text: "Draw a wire *out* of any drawer into empty board and a Source appears to feed it." },
       ],
     },
     {
@@ -581,32 +479,10 @@ const READ_THE_BOARD: TourLesson = {
       rows: [
         { text: "The *titanium ingot* drawer. The freezer fills it, and nothing draws from it." },
         {
-          chip: "PRODUCT",
-          tone: "product",
-          text: "Marks what the plan is *for*. What lands here is the plan's output.",
+          text: "It does not make the freezer run faster. No drawer does: *speed comes from supply*.",
         },
         {
-          text: "It does not make the freezer run faster. No drawer does: speed comes from supply.",
-        },
-        {
-          text: "The button on its header flips it to a Byproduct. The next steps do exactly that.",
-        },
-      ],
-    },
-    {
-      anchorSelector: tourByproductDrawerSelector,
-      side: "right",
-      before: frameTourByproductDrawer,
-      title: "A Byproduct catches the spare",
-      rows: [
-        { text: "Two of them here: *cast iron* and *carbon monoxide*." },
-        {
-          chip: "BYPRODUCT",
-          tone: "output",
-          text: "A machine makes these *alongside* the thing you want. They land here so they cannot back up and clog it.",
-        },
-        {
-          text: "Product or Byproduct changes what the plan counts as its goal. It never changes speed.",
+          text: "The button on its header flips it to a Byproduct. That changes what the plan counts as its goal, *never a speed*.",
         },
       ],
     },
@@ -623,9 +499,6 @@ const READ_THE_BOARD: TourLesson = {
           text: "It hands the freezer what arrives and *stores* anything the freezer does not take.",
         },
         {
-          text: "Today it stores nothing: the freezer takes *every ingot* the furnace makes, and still wants more.",
-        },
-        {
           text: "It never creates supply: the freezer is short because the furnace makes too few, and no tank fixes that.",
         },
         {
@@ -634,61 +507,18 @@ const READ_THE_BOARD: TourLesson = {
       ],
     },
     {
-      anchor: "board",
-      side: "inside",
-      before: tourLabArmQuiet,
-      title: "Next: the Product pill flips",
-      rows: [
-        {
-          text: "*The blue titanium drawer is blinking*: it is the one about to change.",
-        },
-        {
-          text: "Press *Next* and it becomes a Byproduct.",
-        },
-        { text: "Watch each card's *usage* number. Not one of them will change." },
-      ],
-    },
-    {
-      anchor: "board",
-      side: "inside",
-      before: tourLabQuiet,
-      title: "Nothing slowed down",
-      rows: [
-        {
-          text: "The titanium drawer is a *Byproduct* now, and every usage number *held still*.",
-        },
-        {
-          text: "The freezer is still fed and its ingots still have a place to land, so it *runs exactly as before*.",
-        },
-        {
-          text: "Its word changed: *starved* became *on demand*. Nothing is waiting on titanium now, so its pace stopped being a problem.",
-        },
-        { text: "The pill moves titanium out of the plan's goals. It never touches speed." },
-      ],
-    },
-    {
-      anchor: "board",
-      side: "inside",
-      before: tourLabReset,
-      title: "Back where we started",
-      rows: [
-        { text: "The titanium drawer is a *Product* again. The speeds never moved." },
-        {
-          text: "The pill says which drawers are *the point* and which just catch spillover. The machines never noticed.",
-        },
-        { text: "The header buttons flip a drawer's job in one click. No rewiring." },
-      ],
-    },
-    {
-      anchor: "sketch",
+      anchor: "setup-rules",
       side: "bottom",
-      title: "Sketch mode",
+      title: "Setup rules",
       rows: [
         {
-          text: "The wand is *sketch mode*: every unwired input is fed for free, and every unwired output is exported.",
+          text: "*Free inputs*: anything short of stock takes the rest from off the setup.",
         },
         {
-          text: "Made for quick math on a half-built plan. Turn it off when you are ready to wire real drawers.",
+          text: "*Free outputs*: anything with nowhere to go leaves the setup instead of backing up.",
+        },
+        {
+          text: "Both off, you wire the boundary yourself and the setup tells you what is missing.",
         },
       ],
     },

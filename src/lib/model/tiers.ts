@@ -15,14 +15,12 @@ export const GT_VOLTAGE_TIERS: Array<{ tier: Exclude<MachineTier, "DEMO">; maxEu
   { tier: "UIV", maxEuT: 33554432 },
   { tier: "UMV", maxEuT: 134217728 },
   { tier: "UXV", maxEuT: 536870912 },
-  { tier: "MAX", maxEuT: Number.POSITIVE_INFINITY },
+  // A real tier, not an infinity marker: GTValues.V[14] is
+  // Integer.MAX_VALUE - 7, and the wireless energy hatch family reaches it.
+  { tier: "MAX", maxEuT: 2147483640 },
 ];
 
-export const GT_OVERCLOCK_TIERS = GT_VOLTAGE_TIERS.filter((entry) => Number.isFinite(entry.maxEuT));
-
-export function getHighestFiniteVoltageTier(): Exclude<MachineTier, "DEMO"> {
-  return GT_OVERCLOCK_TIERS[GT_OVERCLOCK_TIERS.length - 1]?.tier ?? "UXV";
-}
+export const GT_OVERCLOCK_TIERS = GT_VOLTAGE_TIERS;
 
 export function getVoltageTierForEuT(euT: number): Exclude<MachineTier, "DEMO"> {
   if (!Number.isFinite(euT) || euT <= 0) {
@@ -69,11 +67,7 @@ export function resolveVoltageTier(
     return "UXV";
   }
 
-  if (value === "MAX") {
-    return getHighestFiniteVoltageTier();
-  }
-
-  return defaultTier === "MAX" ? getHighestFiniteVoltageTier() : defaultTier;
+  return defaultTier;
 }
 
 /** The lowest voltage that can run this recipe at all: its structural gate or its EU/t draw. */

@@ -9,9 +9,18 @@
 # Required environment: none. The instance is resolved in this order:
 #   1. SUSY_INSTANCE_DIR (explicit, validated)
 #   2. auto-detected: ./temp/.minecraft, ./temp checkouts, known launcher
-#      instance roots (Prism/PolyMC/MultiMC/ATLauncher/CurseForge/vanilla)
+#      instance roots (Prism/PolyMC/MultiMC/ATLauncher/CurseForge/vanilla),
+#      including Prism-style wrappers whose game dir lives one level down in
+#      minecraft/ or .minecraft/
 #   3. nothing found: a barebone instance is downloaded into ./temp/.minecraft
 #      (bootstrap-susy-instance.mjs; SUSY_BOOTSTRAP=0 disables this)
+#
+# Launcher-managed instances (Prism & co) have no start script; the runner
+# then launches through the launcher CLI itself (`flatpak run ... -l <id>` for
+# a flatpak launcher, forwarding JAVA_TOOL_OPTIONS into the sandbox). The
+# flatpak sandbox can only write inside its own app data, so when the instance
+# lives under ~/.var/app/ the recipedump and rendered icons are produced
+# beside the game dir and moved into SUSY_RAW_EXPORT_DIR afterwards.
 #
 # Optional:
 #   SUSY_BOOTSTRAP_REF         pack ref for the bootstrap (release tag or
@@ -66,8 +75,17 @@ mkdir -p "$SUSY_DATASET_OUT_DIR" "$SUSY_RAW_EXPORT_DIR"
 
 runtime_log="$SUSY_RAW_EXPORT_DIR/susy-runtime.log"
 runner_log="$SUSY_RAW_EXPORT_DIR/export-runner.log"
-recipedump_path="$(realpath -m "$SUSY_RAW_EXPORT_DIR/recipedump.json")"
-rendered_icon_dir="$(realpath -m "$SUSY_RAW_EXPORT_DIR/rendered-icons")"
+
+# A flatpak sandboxed launcher can only write inside its own app data, so the
+# JVM-written artifacts must live beside the instance; the logs stay host-side
+# because tee/tail run outside the sandbox.
+case "$(realpath "$SUSY_INSTANCE_DIR")" in
+  "$HOME"/.var/app/*) jvm_export_root="$SUSY_INSTANCE_DIR/.susy-oracle-export" ;;
+  *) jvm_export_root="$SUSY_RAW_EXPORT_DIR" ;;
+esac
+mkdir -p "$jvm_export_root"
+recipedump_path="$(realpath -m "$jvm_export_root/recipedump.json")"
+rendered_icon_dir="$(realpath -m "$jvm_export_root/rendered-icons")"
 
 exec > >(tee -a "$runner_log") 2>&1
 
@@ -98,29 +116,53 @@ if [[ -f "$SUSY_INSTANCE_DIR/options.txt" ]]; then
   sed -i 's/^pauseWhenEmpty:.*/pauseWhenEmpty:false/' "$SUSY_INSTANCE_DIR/options.txt" || true
 fi
 
+# Command-line -D properties beat JAVA_TOOL_OPTIONS, so stale susy.oracle
+# flags left over in a launcher's per-instance JvmArgs would silently redirect
+# the dump and icons away from the paths this script watches.
+if [[ -n "${PRISMINSTANCEID:-}" ]]; then
+  instance_cfg="$(dirname "$SUSY_INSTANCE_DIR")/instance.cfg"
+  if [[ -f "$instance_cfg" ]]; then
+    sed -i -E -e 's/(^|[[:space:]]|=)-Dsusy\.oracle\.[^[:space:]]*/\1/g' \
+      -e '/^JvmArgs=/s/[[:space:]]+$//' "$instance_cfg"
+  fi
+fi
+
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} \
 -Dsusy.oracle.autorun=true \
 -Dsusy.oracle.dumpRecipes=true \
 -Dsusy.oracle.recipedumpPath=$recipedump_path \
 -Dsusy.oracle.iconDir=$rendered_icon_dir"
 
-if [[ -n "${SUSY_LAUNCH_COMMAND:-}" ]]; then
-  runtime_command="$SUSY_LAUNCH_COMMAND"
-else
+if [[ -z "${SUSY_LAUNCH_COMMAND:-}" && -n "${LAUNCHSCRIPT:-}" ]]; then
+  SUSY_LAUNCH_COMMAND="bash '$LAUNCHSCRIPT'"
+fi
+if [[ -z "${SUSY_LAUNCH_COMMAND:-}" && -n "${PRISMINSTANCEID:-}" ]]; then
+  # Launcher-managed instance (Prism/PolyMC/...): launch through the launcher
+  # itself so it supplies Java, libraries and assets. A flatpak launcher needs
+  # JAVA_TOOL_OPTIONS forwarded explicitly or the oracle never sees its flags.
+  if [[ -n "${PRISMFLATPAKAPPID:-}" ]]; then
+    SUSY_LAUNCH_COMMAND="flatpak run --env=\"JAVA_TOOL_OPTIONS=$JAVA_TOOL_OPTIONS\" '$PRISMFLATPAKAPPID' -l '$PRISMINSTANCEID'"
+  else
+    SUSY_LAUNCH_COMMAND="prismlauncher -l '$PRISMINSTANCEID'"
+  fi
+  echo "No start script; launching through the launcher CLI."
+fi
+
+if [[ -z "${SUSY_LAUNCH_COMMAND:-}" ]]; then
   start_script="$(
     find "$SUSY_INSTANCE_DIR" -maxdepth 2 -type f \( -iname '*start*.sh' -o -iname 'launch*.sh' -o -iname '*.bat' \) \
       | sort | head -n 1
   )"
   if [[ -n "$start_script" && ${start_script##*.} == "sh" ]]; then
     chmod +x "$start_script"
-    runtime_command="bash '$(realpath "$start_script")'"
+    SUSY_LAUNCH_COMMAND="bash '$(realpath "$start_script")'"
   else
-    runtime_command="xvfb-run -a bash -lc 'cd \"$SUSY_INSTANCE_DIR\" && java -jar binClient-modified.jar nogui'"
-    echo "No start script found; falling back to: $runtime_command"
+    SUSY_LAUNCH_COMMAND="xvfb-run -a bash -lc 'cd \"$SUSY_INSTANCE_DIR\" && java -jar binClient-modified.jar nogui'"
+    echo "No start script found; falling back to: $SUSY_LAUNCH_COMMAND"
   fi
 fi
 
-setsid bash -lc "cd '$SUSY_INSTANCE_DIR' && $runtime_command" >>"$runtime_log" 2>&1 &
+setsid bash -lc "cd '$SUSY_INSTANCE_DIR' && $SUSY_LAUNCH_COMMAND" >>"$runtime_log" 2>&1 &
 runtime_pid=$!
 tail -n 0 -f "$runtime_log" &
 tail_pid=$!
@@ -158,6 +200,15 @@ while (( SECONDS < deadline )); do
         dump_ready=1
         break
       fi
+      if [[ -n "${PRISMINSTANCEID:-}" ]]; then
+        # Launched through a launcher CLI: the launcher stays open after the
+        # game exits (QuitAfterGameStop=false), so process death never comes.
+        # The dump runs synchronously on the client thread right before the
+        # shutdown, so a settled file means the pipeline is complete.
+        echo "recipedump.json settled; treating the export as complete."
+        dump_ready=1
+        break
+      fi
       echo "recipedump.json present but the client is still running; waiting for its own exit."
     fi
   fi
@@ -176,6 +227,16 @@ trap - EXIT
 if (( dump_ready != 1 )); then
   echo "Timed out waiting for $recipedump_path." >&2
   exit 1
+fi
+
+# Bring the JVM-written artifacts back next to the logs when the sandbox
+# forced them beside the instance.
+if [[ "$jvm_export_root" != "$SUSY_RAW_EXPORT_DIR" ]]; then
+  mv -f "$recipedump_path" "$SUSY_RAW_EXPORT_DIR/recipedump.json"
+  rm -rf "$SUSY_RAW_EXPORT_DIR/rendered-icons"
+  mv "$rendered_icon_dir" "$SUSY_RAW_EXPORT_DIR/rendered-icons"
+  recipedump_path="$SUSY_RAW_EXPORT_DIR/recipedump.json"
+  rendered_icon_dir="$SUSY_RAW_EXPORT_DIR/rendered-icons"
 fi
 
 echo "Normalizing SusyCore recipedump into the planner dataset."
