@@ -22,7 +22,7 @@ import {
   TriangleAlert,
   Undo2,
   Upload,
-  Wand2,
+  SlidersHorizontal,
   Zap,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
@@ -170,8 +170,8 @@ const CALLOUTS: Array<{
     rows: [
       { icon: Undo2, text: "Undo and redo" },
       { chip: "/s", text: "Rates per tick, second, minute or hour" },
-      { icon: Wand2, text: "*Sketch mode*: unwired slots come free" },
       { icon: Trash, text: "Place *farm*, *trash can*, *custom rate*" },
+      { icon: SlidersHorizontal, text: "*Setup rules*: free inputs and free outputs" },
       { icon: Network, text: "*Auto-arrange* the whole board" },
     ],
   },
@@ -277,6 +277,7 @@ const TOUCH_MOVES: GlanceRow[] = [
  */
 const NOTICES: GlanceRow[] = [
   { chip: "NOT WIRED UP", tone: "fine", text: "Slots still to wire, with a *Show me*" },
+  { chip: "LOOSE WIRES", tone: "bottleneck", text: "Cell wires dead with their rule off: delete them or *turn it back on*" },
   { chip: "DEAD LOOP", tone: "bottleneck", text: "A ring losing material, starved to *0%*" },
   { chip: "CLOG LOCK", tone: "clogged", text: "A ring jammed by its own spare: give it *a drawer*" },
 ];

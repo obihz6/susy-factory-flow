@@ -10,7 +10,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { ChevronDown, Copy, Cpu, Minus, Plus, Sprout } from "lucide-react";
+import { ChevronDown, Copy, Cpu, Minus, Plus, RefreshCw, Sprout, Zap } from "lucide-react";
 import type {
   FactoryNode,
   MachineConfigTierOption,
@@ -29,6 +29,19 @@ import {
   type NodeSteamReport,
 } from "@/lib/solver/power-report";
 import { isMultiblockRecipe } from "@/lib/solver/power";
+import {
+  energyHatchTypeExistsAtTier,
+  getEnergyHatchType,
+  STANDARD_ENERGY_HATCH_ID,
+} from "@/lib/machines/energy-hatches";
+import { energyHatchCatalogKey, useEnergyHatchCatalog } from "./use-energy-hatch-catalog";
+import { areChipClicksInverted } from "@/lib/chip-clicks";
+import {
+  EnergyHatchArt,
+  EnergySupplyMenu,
+  EnergyTierMenu,
+  energySupplyOptionsForTier,
+} from "./EnergyHatchMenu";
 import { prefersCuratedMachineMath } from "@/lib/solver/runtime-calculation";
 import {
   applyMachineOutputMultipliers,
@@ -40,7 +53,6 @@ import {
   formatRate,
   applyMachineHandlerToRecipe,
   GT_OVERCLOCK_TIERS,
-  getHighestFiniteVoltageTier,
   getRecipeMachineHandlers,
   getRecipeMachineConfigTierControls,
   getRecipeCoilTierControl,
@@ -186,6 +198,16 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     key: string;
   }>();
   const [isCropMenuOpen, setCropMenuOpen] = useState(false);
+  // Screen coords of each chip's corner while its dropdown is open; the
+  // menus are fixed body portals, so they need a place, not just a flag.
+  const [supplyMenuAnchor, setSupplyMenuAnchor] = useState<{ x: number; top: number; bottom: number }>();
+  const [tierMenuAnchor, setTierMenuAnchor] = useState<{ x: number; top: number; bottom: number }>();
+  // Hovering a dropdown row shows the card AS IF it were picked, through the
+  // same previewed-node channel the config knobs use.
+  const [hatchMenuPreview, setHatchMenuPreview] = useState<
+    { kind: "tier"; tier: string } | { kind: "supply"; familyId: string; hatches: number }
+  >();
+  const isHatchMenuOpen = supplyMenuAnchor !== undefined || tierMenuAnchor !== undefined;
   const recipeSearch = useFactoryStore((state) => state.highlightSearch);
   // The right panel's PEAK/AVG switch drives the card's power figures too,
   // so the board and the power list always tell one story.
@@ -196,10 +218,12 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   const selectedNodeBottlenecks = useFactoryStore((state) => state.selectedNodeBottlenecks);
   const deleteNode = useFactoryStore((state) => state.deleteNode);
   const duplicateNode = useFactoryStore((state) => state.duplicateNode);
+  const beginRecipeRefactor = useFactoryStore((state) => state.beginRecipeRefactor);
   const updateNode = useFactoryStore((state) => state.updateNode);
   const nodeColorPaintMode = useFactoryStore((state) => state.nodeColorPaintMode);
   const pendingResourceConnection = useFactoryStore((state) => state.pendingResourceConnection);
   const dataset = useFactoryStore((state) => state.dataset);
+  const energyHatchCatalog = useEnergyHatchCatalog(dataset?.datasetVersionId);
   const isSearchHighlighted = recipeContainsSearchResource(recipe, recipeSearch);
   const isFlowResourceHighlighted = recipeContainsResourceKey(
     recipe,
@@ -240,22 +264,39 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   // search. It also rebuilt `overclockedRecipe` each time, whose fresh identity
   // defeated NeiRecipeWindow's memo and re-ran the whole NEI pipeline downstream.
   const previewedNode = useMemo(() => {
-    if (!previewConfigTier) {
+    if (!previewConfigTier && !hatchMenuPreview) {
       return projectNode;
     }
     return {
       ...projectNode,
-      machineConfigTiers: {
-        ...(projectNode.machineConfigTiers ?? {}),
-        [previewConfigTier.controlId]: previewConfigTier.key,
-      },
-      // The coil knob still has its own legacy field; a preview that only
-      // wrote the generic map would show nothing on a heating coil.
-      ...(previewConfigTier.controlId === "heatingCoil"
-        ? { coilTier: previewConfigTier.key }
+      ...(previewConfigTier
+        ? {
+            machineConfigTiers: {
+              ...(projectNode.machineConfigTiers ?? {}),
+              [previewConfigTier.controlId]: previewConfigTier.key,
+            },
+            // The coil knob still has its own legacy field; a preview that
+            // only wrote the generic map would show nothing on a heating coil.
+            ...(previewConfigTier.controlId === "heatingCoil"
+              ? { coilTier: previewConfigTier.key }
+              : undefined),
+          }
+        : undefined),
+      // The dropdowns' hover-simulate: the row under the pointer, worn live.
+      ...(hatchMenuPreview?.kind === "tier"
+        ? { overclockTier: hatchMenuPreview.tier }
+        : undefined),
+      ...(hatchMenuPreview?.kind === "supply"
+        ? {
+            energyHatchType:
+              hatchMenuPreview.familyId === STANDARD_ENERGY_HATCH_ID
+                ? undefined
+                : hatchMenuPreview.familyId,
+            energyHatches: hatchMenuPreview.hatches,
+          }
         : undefined),
     };
-  }, [previewConfigTier, projectNode]);
+  }, [hatchMenuPreview, previewConfigTier, projectNode]);
   const derived = useMemo(() => {
     const projectNode = previewedNode;
     const machineHandlers = getRecipeMachineHandlers(recipe);
@@ -287,6 +328,10 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     const showHatchControl = Boolean(
       powerReport?.isMultiblock && prefersCuratedMachineMath(effectiveRecipe),
     );
+    // Which hatch family feeds the build: the plain 2 A pair, or one exotic
+    // hatch (multi-amp, laser) carrying its whole rating. Picked in the
+    // chip's own menu, top right, where the count and tier already live.
+    const energyHatchType = getEnergyHatchType(projectNode.energyHatchType);
     const coilControl = getRecipeCoilTierControl(effectiveRecipe, projectNode);
     const coilResource = coilControl
       ? resolveDatasetMachineConfigResource(coilControl.resource, dataset)
@@ -389,6 +434,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       powerReport,
       steamReport,
       showHatchControl,
+      energyHatchType,
     };
   }, [dataset, previewedNode, recipe]);
 
@@ -419,7 +465,13 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     powerReport,
     steamReport,
     showHatchControl,
+    energyHatchType,
   } = derived;
+  // The chip's own art: the concrete hatch item this tier-and-family pair
+  // names, from the once-per-dataset catalog.
+  const hatchChipEntry = tierControl
+    ? energyHatchCatalog.get(energyHatchCatalogKey(tierControl.current, energyHatchType.id))
+    : undefined;
   // The full footer — usage, power, parallel, machines, circuit — does not
   // fit the fixed card width on one line. When power and the parallel chip
   // would share the row, the parallel chip steps UP: into the config panel's
@@ -494,14 +546,39 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       direction,
     );
     if (nextTier !== tierControl.current) {
-      updateNode(projectNode.id, { overclockTier: nextTier });
+      updateNode(projectNode.id, {
+        overclockTier: nextTier,
+        // A hatch family that does not exist at the new tier (a laser below
+        // IV) goes back to the plain pair rather than modelling a build the
+        // game cannot make.
+        ...(energyHatchTypeExistsAtTier(projectNode.energyHatchType, nextTier)
+          ? undefined
+          : { energyHatchType: undefined }),
+      });
     }
   };
-  const updateHatches = (direction: -1 | 1) => {
-    const current = powerReport?.hatches ?? 1;
-    const next = Math.min(16, Math.max(1, current + direction));
-    if (next !== current) {
-      updateNode(projectNode.id, { energyHatches: next });
+  // Shift-click on the supply chip walks the supply ladder without the menu:
+  // regular counts first, then the exotic hatches, in the menu's own order.
+  const stepSupply = (direction: -1 | 1) => {
+    if (!tierControl) {
+      return;
+    }
+    const options = energySupplyOptionsForTier(tierControl.current, energyHatchCatalog);
+    const currentIndex = options.findIndex(
+      (option) =>
+        option.familyId === energyHatchType.id &&
+        (option.familyId !== STANDARD_ENERGY_HATCH_ID ||
+          option.hatches === (powerReport?.hatches ?? 1)),
+    );
+    const next =
+      options[
+        Math.min(options.length - 1, Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + direction))
+      ];
+    if (next) {
+      updateNode(projectNode.id, {
+        energyHatchType: next.familyId === STANDARD_ENERGY_HATCH_ID ? undefined : next.familyId,
+        energyHatches: next.hatches,
+      });
     }
   };
   const updateCoilTier = (nextTier: string) => {
@@ -593,6 +670,9 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     updateNode(projectNode.id, {
       machineHandlerId: nextHandler.id,
       overclockTier: nextHandler.minimumTier,
+      ...(energyHatchTypeExistsAtTier(projectNode.energyHatchType, nextHandler.minimumTier)
+        ? undefined
+        : { energyHatchType: undefined }),
     });
     setCompareOpen(false);
     setPreviewHandlerId(undefined);
@@ -664,7 +744,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   // about what the plan is allowed to contain, and reading it as a verdict meant
   // filtering the book to LV accused a third of the board of being wrong.
   const cardOutlineRings = [
-    ...(selected ? [{ width: 2, color: "#a855f7" }] : []),
+    ...(selected ? [{ width: 2, color: "var(--selection)" }] : []),
     ...(isSearchHighlighted ? [{ width: 4, color: "#7dd3fc" }] : []),
   ];
 
@@ -900,7 +980,9 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
           word={
             powerReport
               ? powerReport.isMultiblock
-                ? `${powerReport.hatches}× ${powerReport.tier}`
+                ? energyHatchType.exotic
+                  ? `${energyHatchType.chip} ${powerReport.tier}`
+                  : `${powerReport.hatches}× ${powerReport.tier}`
                 : powerReport.tier
               : steamReport
                 ? steamReport.highPressure
@@ -959,12 +1041,20 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
           // Tailwind can only emit the ones spelled out in full.
           style={{
             gridTemplateColumns: [
-              // Calm mode drops the delete/clone chrome; the title takes the row.
-              ...(calmMode ? [] : ["24px", "24px"]),
+              // Calm mode drops the delete/clone/refactor chrome; the title
+              // takes the row. Placeholder cards (crop pick, dial-a-rate)
+              // have nothing to refactor, so they keep two buttons.
+              ...(calmMode
+                ? []
+                : isCropFarmPlaceholder || isCustomRateNode
+                  ? ["24px", "24px"]
+                  : ["24px", "24px", "24px"]),
               "minmax(0,1fr)",
-              // The tier chip, with its hatch-count sister fused on the left
-              // when the machine is a multiblock that takes energy hatches.
-              ...(tierControl ? [showHatchControl ? "78px" : "50px"] : []),
+              // The tier chip, with its hatch sister fused on the left when
+              // the machine is a multiblock that takes energy hatches. The
+              // pair sizes to content: a laser hatch's amp rating is wider
+              // than a plain hatch count.
+              ...(tierControl ? [showHatchControl ? "max-content" : "50px"] : []),
             ].join(" "),
           }}
         >
@@ -994,6 +1084,20 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
               >
                 <Copy aria-hidden className="h-3.5 w-3.5" />
               </button>
+              {!isCropFarmPlaceholder && !isCustomRateNode ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    beginRecipeRefactor(projectNode.id);
+                  }}
+                  className="nodrag flex h-6 w-6 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:bg-[var(--mc-61)]"
+                  title="Refactor: search for a replacement recipe"
+                  aria-label="Refactor node"
+                >
+                  <RefreshCw aria-hidden className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
             </>
           ) : null}
           <div className="relative min-w-0">
@@ -1082,13 +1186,14 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
             ) : null}
           </div>
           {tierControl && tierColor ? (
-            // The fused chip pair is ONE hover surface telling the whole
+            // The fused chip trio is ONE hover surface telling the whole
             // power story - the same panel the footer's POWER cell shows -
-            // so tier, hatches and power all speak one language. The native
+            // so count, hatch and tier all speak one language. The native
             // titles survive only where there is no report to tell it.
+            <div className="relative">
             <MinecraftTooltip
               content={
-                powerReport ? (
+                powerReport && !isHatchMenuOpen ? (
                   <PowerStoryContent
                     report={powerReport}
                     utilization={result?.utilization}
@@ -1099,43 +1204,93 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
             >
             <div className="flex">
               {showHatchControl ? (
+                // The SUPPLY dropdown's chip: what powers the build (count
+                // and item, or an exotic's amp badge), fused left of the
+                // tier. Clicking opens every concrete supply at this tier.
                 <button
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    updateHatches(1);
+                    // Shift-click steps to the next supply without the menu
+                    // (or plain click, when the setting inverts the pair).
+                    if (event.shiftKey !== areChipClicksInverted()) {
+                      stepSupply(1);
+                      return;
+                    }
+                    setTierMenuAnchor(undefined);
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setSupplyMenuAnchor((open) =>
+                      open ? undefined : { x: rect.right, top: rect.top, bottom: rect.bottom },
+                    );
                   }}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    updateHatches(-1);
+                    // Right click steps back, with or without shift: the
+                    // browser menu is suppressed anyway, so a plain right
+                    // click as a dead gesture only read as broken.
+                    stepSupply(-1);
                   }}
-                  // The tier chip's sister: same paint, fused on its left
-                  // (no right border), so "2x MV" reads as one fact.
-                  className="nodrag h-6 w-[28px] border-2 border-r-0 text-[11px] font-bold leading-[18px] shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)] hover:brightness-110"
+                  data-hatch-menu-anchor
+                  // Wheel over the chip steps the supply: the one cycling
+                  // gesture every browser honours (Firefox forces its menu on
+                  // shift-right-click and cannot be overridden).
+                  onWheel={(event) => {
+                    event.stopPropagation();
+                    stepSupply(event.deltaY < 0 ? 1 : -1);
+                  }}
+                  className="nodrag nowheel flex h-6 items-center justify-center gap-0.5 whitespace-nowrap border-2 border-r-0 px-0.5 text-[11px] font-bold leading-none shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)] hover:brightness-110"
                   style={{
                     backgroundColor: tierColor.background,
                     borderColor: tierColor.border,
                     color: tierColor.text,
                     textShadow: `1px 1px 0 ${tierColor.shadow}`,
                   }}
-                  aria-label={`${powerReport?.hatches ?? 1} energy hatches`}
+                  aria-label="Pick energy supply"
                 >
-                  {powerReport?.hatches ?? 1}×
+                  <span className="pb-[3px]">
+                    {energyHatchType.exotic
+                      ? energyHatchType.chip
+                      : `${powerReport?.hatches ?? 1}×`}
+                  </span>
+                  {hatchChipEntry ? (
+                    <EnergyHatchArt entry={hatchChipEntry} boxClass="h-7 w-7" />
+                  ) : (
+                    <Zap className="h-3.5 w-3.5" style={{ color: tierColor.text }} />
+                  )}
                 </button>
               ) : null}
               <button
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
+                  // The TIER dropdown on multiblocks; singleblocks keep the
+                  // classic cycle, and shift-click cycles everywhere.
+                  if (showHatchControl && event.shiftKey === areChipClicksInverted()) {
+                    setSupplyMenuAnchor(undefined);
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setTierMenuAnchor((open) =>
+                      open ? undefined : { x: rect.right, top: rect.top, bottom: rect.bottom },
+                    );
+                    return;
+                  }
                   updateTier(1);
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
+                  // Right click steps the tier down, with or without shift:
+                  // requiring shift left plain right click doing nothing,
+                  // which read as broken (and Firefox forces its own menu on
+                  // shift-right-click, so plain is the one that always works).
                   updateTier(-1);
                 }}
-                className="nodrag h-6 w-[50px] border-2 px-1 text-[11px] font-bold leading-[18px] shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)] hover:brightness-110"
+                data-hatch-menu-anchor
+                onWheel={(event) => {
+                  event.stopPropagation();
+                  updateTier(event.deltaY < 0 ? 1 : -1);
+                }}
+                className="nodrag nowheel flex h-6 w-[50px] items-center justify-center border-2 px-1 pb-[3px] text-[11px] font-bold leading-none shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)] hover:brightness-110"
                 style={{
                   backgroundColor: tierColor.background,
                   borderColor: tierColor.border,
@@ -1149,6 +1304,55 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
               </button>
             </div>
             </MinecraftTooltip>
+            {supplyMenuAnchor && showHatchControl ? (
+              <EnergySupplyMenu
+                anchor={supplyMenuAnchor}
+                tier={tierControl.current}
+                currentFamilyId={energyHatchType.id}
+                currentHatches={powerReport?.hatches ?? 1}
+                catalog={energyHatchCatalog}
+                onPick={(familyId, hatches) => {
+                  updateNode(projectNode.id, {
+                    energyHatchType: familyId === STANDARD_ENERGY_HATCH_ID ? undefined : familyId,
+                    energyHatches: hatches,
+                  });
+                  setHatchMenuPreview(undefined);
+                  setSupplyMenuAnchor(undefined);
+                }}
+                onPreview={(option) =>
+                  setHatchMenuPreview(option ? { kind: "supply", ...option } : undefined)
+                }
+                onClose={() => {
+                  setHatchMenuPreview(undefined);
+                  setSupplyMenuAnchor(undefined);
+                }}
+              />
+            ) : null}
+            {tierMenuAnchor && showHatchControl ? (
+              <EnergyTierMenu
+                anchor={tierMenuAnchor}
+                currentTier={tierControl.current}
+                minimumTier={powerReport?.minimumTier}
+                onPick={(tier) => {
+                  updateNode(projectNode.id, {
+                    overclockTier: tier,
+                    ...(energyHatchTypeExistsAtTier(projectNode.energyHatchType, tier)
+                      ? undefined
+                      : { energyHatchType: undefined }),
+                  });
+                  setHatchMenuPreview(undefined);
+                  setTierMenuAnchor(undefined);
+                }}
+                onPreview={(tier) =>
+                  setHatchMenuPreview(tier ? { kind: "tier", tier } : undefined)
+                }
+                onClose={() => {
+                  setHatchMenuPreview(undefined);
+                  setTierMenuAnchor(undefined);
+                }}
+              />
+            ) : null}
+            </div>
           ) : null}
         </div>
         </div>
@@ -2178,17 +2382,20 @@ export function OutputSocketRow({
       ) : (
         <MinecraftTooltip
           label={
-            port.nameplatePerSecond > 0
-              ? "Nothing takes this, so it backs up and the machine stops. Wire it to a machine that wants it, a DRAIN drawer, or a trash can."
-              : "Empty socket: nothing plugged in."
+            port.nameplatePerSecond <= 0
+              ? "Empty socket: nothing plugged in."
+              : port.boundaryFree
+                ? "Free outputs is on, so this leaves the setup."
+                : "Nothing takes this, so it backs up and the machine stops. Wire it to a machine that wants it, a DRAIN drawer, or a trash can."
           }
         >
           {/* The mirror of an input's NO SUPPLY. It used to read "—" beside a
               tooltip saying the output vanished, which is exactly the thing
-              that stopped being true when the plan became a closed system. */}
+              that stopped being true when the plan became a closed system.
+              With FREE OUTPUTS on it is true again, so the mark comes off. */}
           <span className="flow-socket-empty nodrag">
             <PlugDragHandle nodeId={nodeId} port={port} />
-            {port.nameplatePerSecond > 0 ? (
+            {port.nameplatePerSecond > 0 && !port.boundaryFree ? (
               <span className="text-[7px] font-black leading-3 tracking-[0.5px] text-[var(--verdict-unwired-ink)]">
                 NO TAKER
               </span>
@@ -2259,7 +2466,7 @@ function PlugBlock({ nodeId, port }: { nodeId: string; port: RailPort }) {
   return (
     <MinecraftTooltip
       label={`${port.displayName}: who takes it`}
-      content={renderPlugHoverContent(port, nodeId)}
+      content={() => renderPlugHoverContent(port, nodeId)}
     >
       <span
         className={["flow-plug nodrag", `flow-plug--${plug.state}`].join(" ")}
@@ -2679,7 +2886,7 @@ export function PortChip({
       </span>
       <MinecraftTooltip
         label={port.resource?.tooltip ?? port.displayName}
-        content={renderPortHoverContent(port, nodeId)}
+        content={() => renderPortHoverContent(port, nodeId)}
       >
         <Handle
           id={port.handleId}
@@ -3127,16 +3334,7 @@ function getAdjacentTier(current: VoltageTier, floor: VoltageTier | undefined, d
 }
 
 function resolveVoltageTier(value: string, defaultTier: VoltageTier): VoltageTier {
-  const tier = GT_OVERCLOCK_TIERS.find((entry) => entry.tier === value)?.tier;
-  if (tier) {
-    return tier;
-  }
-
-  if (value === "MAX") {
-    return getHighestFiniteVoltageTier();
-  }
-
-  return tier ?? defaultTier;
+  return GT_OVERCLOCK_TIERS.find((entry) => entry.tier === value)?.tier ?? defaultTier;
 }
 
 function resolveDatasetMachineConfigResource(
@@ -4257,12 +4455,21 @@ function PowerStoryContent({
         <div>
           {report.isMultiblock ? (
             <>
-              {report.hatches}× <StoryTierChip tier={report.tier} /> energy{" "}
-              {report.hatches === 1 ? "hatch gets" : "hatches get"} you{" "}
+              {report.hatchTypeLabel ? (
+                <>
+                  A <StoryTierChip tier={report.tier} /> {report.hatchTypeLabel} gets you
+                </>
+              ) : (
+                <>
+                  {report.hatches}× <StoryTierChip tier={report.tier} /> energy{" "}
+                  {report.hatches === 1 ? "hatch gets" : "hatches get"} you
+                </>
+              )}{" "}
               <span className="whitespace-nowrap">
                 <span className="font-bold">{formatCompact(report.poolEuT)} EU/t</span>
               </span>{" "}
-              to spend{report.amps > 1 ? ` (${report.amps} A)` : ""}
+              to spend
+              {report.amps > 1 ? ` (${formatCompact(report.amps)} A)` : ""}
             </>
           ) : (
             <>

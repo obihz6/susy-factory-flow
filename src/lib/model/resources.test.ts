@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatRate,
+  getCrossFormCellMatch,
   getFilledCellFluidEquivalent,
   isVirtualChoiceResource,
   resourceLabel,
@@ -9,6 +10,26 @@ import {
 } from "./resources";
 
 describe("resource helpers", () => {
+  it("matches a cell to its fluid both ways round, tolerant of id spelling", () => {
+    const cell = {
+      kind: "item" as const,
+      id: "gregtech:gt.metaitem.99@304",
+      displayName: "Molten Cast Iron Cell",
+    };
+    // The fluid id does not spell the display name ("molten.castiron", one
+    // word): the name-tolerant equivalence must still pair them.
+    const fluid = { kind: "fluid" as const, id: "molten.castiron", displayName: "Molten Cast Iron" };
+    const expected = { cellId: cell.id, fluidId: fluid.id };
+    expect(getCrossFormCellMatch(cell, fluid)).toEqual(expected);
+    expect(getCrossFormCellMatch(fluid, cell)).toEqual(expected);
+    // An unrelated fluid stays unmatched, and same-kind pairs never answer.
+    expect(
+      getCrossFormCellMatch(cell, { kind: "fluid", id: "water", displayName: "Water" }),
+    ).toBeUndefined();
+    expect(getCrossFormCellMatch(cell, cell)).toBeUndefined();
+    expect(getCrossFormCellMatch(fluid, fluid)).toBeUndefined();
+  });
+
   it("identifies virtual choice resources that should stay out of resource pickers", () => {
     expect(isVirtualChoiceResource({ id: "oredict:stickWood", displayName: "Stick Wood" })).toBe(
       true,

@@ -101,6 +101,11 @@ const ROLE_PRESENTATION: Record<
     boundary: true,
     line: "Catches what is left over. Asks for nothing.",
   },
+  trash: {
+    word: "TRASH",
+    boundary: true,
+    line: "Voids what arrives. Asks for nothing.",
+  },
   buffer: {
     word: "BUFFER",
     boundary: false,
@@ -130,6 +135,8 @@ const ROLE_TINTS: Record<StorageRole, string> = {
   source: "#ef4444",
   product: "#10b981",
   byproduct: "#10b981",
+  // A bin is neither an import nor a shipment: dull steel, like the plumbing.
+  trash: "#8a93a6",
   buffer: "#8a93a6",
   idle: "#5d6877",
 };
@@ -248,7 +255,9 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
         ? "buffer"
         : storage.drainMode === "byproduct"
           ? "byproduct"
-          : "product"
+          : storage.drainMode === "trash"
+            ? "trash"
+            : "product"
       : hasOut
         ? "source"
         : "idle";
@@ -372,7 +381,7 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
                   ? "storage-rim--glow -inset-[3px]"
                   : "storage-rim--glow -inset-[2px]",
             ].join(" ")}
-            style={{ background: selected ? "#a855f7" : "var(--glow-line)" }}
+            style={{ background: selected ? "var(--selection)" : "var(--glow-line)" }}
           />
         ) : null}
         {/* The SHAPE, on its own layer rather than on the card.
@@ -469,7 +478,7 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
             matter which pixel of a small tile the pointer found. The span is
             display:contents, so the flex column underneath lays out as if it
             were not there. */}
-        <MinecraftTooltip content={renderStorageHoverContent(storage, role)}>
+        <MinecraftTooltip content={() => renderStorageHoverContent(storage, role)}>
         <div
           data-storage-shape={role}
           className="storage-shape-content relative z-10 flex min-h-0 flex-1 flex-col"
@@ -594,9 +603,11 @@ const NET_LINE_WIDTH_BY_ROLE: Record<StorageRole, number> = {
   idle: 92,
   source: 84,
   buffer: 70,
-  // The shield's base taper is the deepest bite of the four, and it takes it
+  // The shield's base taper is the deepest bite of the set, and it takes it
   // exactly across this line's lowest pixels.
   byproduct: 66,
+  // The bin's straight taper reaches ~13px a side at the line's depth.
+  trash: 72,
 };
 /**
  * Advance per character at each step. Measured against the rendered bold
@@ -748,13 +759,15 @@ function BufferModeSwap({ storageId, strict }: { storageId: string; strict: bool
  * wiring and cannot be picked; which kind of end-of-the-line this is cannot be
  * read off anything, so it gets a control.
  *
- * Both halves are always shown rather than one label that toggles: the whole
- * point is that a reader who has never met the distinction can see there IS
- * one, and read both answers, without clicking anything.
+ * A three-way cycle since 2026-08-23: product, byproduct, trash. The trash
+ * step is what replaced the toolbar's separate trash can node.
  */
 function DrainModeSwap({ storageId, role }: { storageId: string; role: StorageRole }) {
   const setStorageDrainMode = useFactoryStore((state) => state.setStorageDrainMode);
-  const next: StorageDrainMode = role === "byproduct" ? "product" : "byproduct";
+  // Always the cycle arrows: the button is the CONTROL, and the tile's word
+  // and silhouette already say which state it is in.
+  const next: StorageDrainMode =
+    role === "product" ? "byproduct" : role === "byproduct" ? "trash" : "product";
 
   return (
     <button
@@ -764,9 +777,11 @@ function DrainModeSwap({ storageId, role }: { storageId: string; role: StorageRo
         setStorageDrainMode(storageId, next);
       }}
       title={
-        role === "byproduct"
-          ? "Byproduct: catches what is left over. Click to make it a product."
-          : "Product: pulls the machine flat out. Click to make it a byproduct."
+        role === "product"
+          ? "Product: pulls the machine flat out. Click to make it a byproduct."
+          : role === "byproduct"
+            ? "Byproduct: catches what is left over. Click to make it a trash bin."
+            : "Trash: voids what arrives. Click to make it a product."
       }
       aria-label={`Switch to ${next}`}
       className="board-edit-chrome nodrag relative z-40 ml-auto flex h-4 w-4 shrink-0 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_1px_1px_0_var(--mc-85),inset_-1px_-1px_0_var(--mc-25)] hover:bg-[var(--mc-61)]"

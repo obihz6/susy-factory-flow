@@ -56,7 +56,14 @@ const versions = discoveredVersions.filter(
   (version) => version.channel !== "daily" || version.id === latestDailyVersion,
 );
 
-versions.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+// Newest PACK first, not newest publish: the app defaults to versions[0], and
+// sorting by publishedAt once handed everyone 2.8.4 because it happened to be
+// re-normalized a few minutes after 2.9.
+versions.sort(
+  (a, b) =>
+    b.gtnhVersion.localeCompare(a.gtnhVersion, undefined, { numeric: true }) ||
+    b.publishedAt.localeCompare(a.publishedAt),
+);
 
 const latestStableVersion = versions.find((version) => version.channel === "stable")?.id;
 const manifest = {

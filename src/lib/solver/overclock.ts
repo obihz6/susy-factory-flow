@@ -77,7 +77,7 @@ export function getOverclockedRecipeStats(
     FactoryNode,
     "overclockTier" | "coilTier" | "machineHandlerId" | "machineConfigTiers"
   > &
-    Partial<Pick<FactoryNode, "energyHatches">>,
+    Partial<Pick<FactoryNode, "energyHatches" | "energyHatchType">>,
 ): OverclockedRecipeStats {
   const effectiveRecipe = recipe.machineType
     ? applyMachineHandlerToRecipe(recipe as Recipe, node)

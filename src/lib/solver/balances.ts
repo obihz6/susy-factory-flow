@@ -271,7 +271,9 @@ function applyBoundaryDrawerBalances(
     }
 
     // Landing in a DRAIN drawer: the plan declared this an export, and which
-    // of the two kinds is the player's own answer on the drawer's pill.
+    // kind is the player's own answer on the drawer's pill. A TRASH drain is
+    // deliberately NOT here: what it eats is voided by
+    // `applyTrashedOutputBalances`, never shipped.
     const into = storagesById.get(edge.target);
     const intoRole = into ? roles.get(into.id) : undefined;
     if (into && (intoRole === "product" || intoRole === "byproduct")) {
@@ -314,10 +316,11 @@ function applyBoundaryDrawerBalances(
 }
 
 /**
- * Whatever flows into a trash can never existed as far as the plan's books
- * are concerned: it leaves the produced column (floored at zero, so a mid-
- * convergence overshoot can never mint a phantom deficit) and therefore
- * never appears in the unconsumed-outputs panel.
+ * Whatever flows into a trash can - the legacy can node or a drawer whose
+ * pill says TRASH - never existed as far as the plan's books are concerned:
+ * it leaves the produced column (floored at zero, so a mid-convergence
+ * overshoot can never mint a phantom deficit) and therefore never appears in
+ * the unconsumed-outputs panel.
  */
 function applyTrashedOutputBalances(
   project: FactoryProject,
@@ -325,12 +328,16 @@ function applyTrashedOutputBalances(
   balances: Map<ResourceKey, ResourceBalance>,
 ): void {
   const trashNodeIds = collectTrashNodeIds(project);
-  if (trashNodeIds.size === 0) {
+  const storageRoles = getStorageRoles(project);
+  const trashStorageIds = new Set(
+    [...storageRoles.entries()].filter(([, role]) => role === "trash").map(([id]) => id),
+  );
+  if (trashNodeIds.size === 0 && trashStorageIds.size === 0) {
     return;
   }
 
   for (const edge of project.edges) {
-    if (!trashNodeIds.has(edge.target)) {
+    if (!trashNodeIds.has(edge.target) && !trashStorageIds.has(edge.target)) {
       continue;
     }
     const transferredPerSecond = edgeResults[edge.id]?.transferredPerSecond ?? 0;

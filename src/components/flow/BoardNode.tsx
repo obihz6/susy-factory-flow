@@ -46,8 +46,12 @@ export const BOARD_DRAG_HANDLE_CLASS = "board-window-grab";
  */
 export const BOARD_EDGE = 4;
 
-/** The ring every selected thing on this board wears (Tailwind purple-500). */
-export const SELECTION_RING = "#a855f7";
+/**
+ * The ring every selected thing on this board wears. The colour itself lives
+ * in `--selection` (globals.css) with the rest of the selection marks, so the
+ * board and the panels cannot drift apart.
+ */
+export const SELECTION_RING = "var(--selection)";
 
 type ResizeSide = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 

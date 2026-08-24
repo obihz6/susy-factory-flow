@@ -45,15 +45,49 @@ export function getRecipeMachineHandlers(
   }
 
   const baseMachineType = machineHandlerFamilyLabel(recipe.machineType);
-  return [
-    {
-      id: slug(baseMachineType),
-      label: baseMachineType,
-      machineType: baseMachineType,
-      minimumTier: recipe.minimumTier,
-      kind: "single",
-    },
-  ];
+  const fallback: MachineHandler = {
+    id: slug(baseMachineType),
+    label: baseMachineType,
+    machineType: baseMachineType,
+    minimumTier: recipe.minimumTier,
+    kind: "single",
+  };
+  if (isHandCraftingRecipeMap(recipe)) {
+    return [autoWorkbenchHandler(), fallback];
+  }
+  return [fallback];
+}
+
+/** Whether this recipe comes off the crafting-grid maps the oracle exports. */
+export function isHandCraftingRecipeMap(recipe: Pick<Recipe, "machineType" | "source">): boolean {
+  const normalized = normalizeRecipeMapName(recipeMapName(recipe));
+  return normalized === "shaped crafting" || normalized === "shapeless crafting";
+}
+
+/**
+ * The machine that runs crafting-grid recipes: GT++'s Electric Auto Workbench
+ * (MTEElectricAutoWorkbench, tiers LV through UV). Its dataset recipes carry
+ * no handlers, so the two choices are synthesized here: the Auto Workbench
+ * first, because it is the machine a plan actually places, with the crafting
+ * table's instant hand-craft still offered behind it. In normal crafting mode
+ * the machine bills a flat 2048 EU per craft and takes its power at the
+ * tier's voltage, so the LV seed is 2048/32 = 64 ticks at 32 EU/t; the
+ * machine table's "Auto Workbench" entry supplies the perfect overclock that
+ * keeps energy per craft constant up the tiers, capped at EV's one craft per
+ * tick.
+ */
+export const AUTO_WORKBENCH_HANDLER_ID = "auto-workbench";
+
+function autoWorkbenchHandler(): MachineHandler {
+  return {
+    id: AUTO_WORKBENCH_HANDLER_ID,
+    label: "Auto Workbench",
+    machineType: "Auto Workbench",
+    minimumTier: "LV",
+    kind: "single",
+    durationTicks: 64,
+    eut: 32,
+  };
 }
 
 /**
@@ -188,6 +222,12 @@ export function getRecipeCoilTierControl(
   recipe: Pick<Recipe, "machineType" | "source" | "nei" | "machineConfigControls">,
   node: { coilTier?: string },
 ) {
+  // The coil rides its own legacy path around dropHiddenControls, so the
+  // table's hidesControls must be honoured here too - the Large Chemical
+  // Reactor's structural coil is any tier and does nothing at runtime.
+  if (getMachineHiddenControlIds(recipe.machineType).includes("heatingCoil")) {
+    return undefined;
+  }
   const control =
     getMachineTableControls(recipe.machineType).find((entry) => entry.id === "heatingCoil") ??
     findMachineConfigControl(recipe, "heatingCoil");

@@ -1,5 +1,14 @@
 import type { Metadata, Viewport } from "next";
+import {
+  Andika,
+  Atkinson_Hyperlegible,
+  Comic_Neue,
+  Inter,
+  JetBrains_Mono,
+  Lexend,
+} from "next/font/google";
 import localFont from "next/font/local";
+import { APP_FONT_STORAGE_KEY, DEFAULT_APP_FONT } from "@/lib/app-font";
 import { Analytics } from "./Analytics";
 import { AnalyticsHeartbeat } from "./AnalyticsHeartbeat";
 import { WhatsNewGate } from "@/components/WhatsNewGate";
@@ -18,6 +27,76 @@ const monocraft = localFont({
   variable: "--font-minecraft",
   display: "swap",
 });
+
+/*
+ * The alternative fonts the settings dialog offers (src/lib/app-font.ts).
+ * next/font downloads the Google ones at build time and serves everything
+ * from our own origin, so offering them costs no runtime request to Google.
+ */
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
+
+const lexend = Lexend({
+  subsets: ["latin"],
+  variable: "--font-lexend",
+  display: "swap",
+});
+
+const atkinson = Atkinson_Hyperlegible({
+  subsets: ["latin"],
+  weight: ["400", "700"],
+  variable: "--font-atkinson",
+  display: "swap",
+});
+
+const andika = Andika({
+  subsets: ["latin"],
+  weight: ["400", "700"],
+  variable: "--font-andika",
+  display: "swap",
+});
+
+const comicNeue = Comic_Neue({
+  subsets: ["latin"],
+  weight: ["400", "700"],
+  variable: "--font-comic-neue",
+  display: "swap",
+});
+
+/* Not on Google Fonts; vendored under its SIL OFL (OpenDyslexic-LICENSE). */
+const openDyslexic = localFont({
+  src: [
+    { path: "./fonts/OpenDyslexic-Regular.otf", weight: "400", style: "normal" },
+    { path: "./fonts/OpenDyslexic-Bold.otf", weight: "700", style: "normal" },
+  ],
+  variable: "--font-open-dyslexic",
+  display: "swap",
+  // OpenDyslexic's x-height runs far past every other face here, so at the
+  // same px size it rendered a size up and overflowed fixed-height chrome.
+  // size-adjust scales the glyphs, not the layout, back into the app's scale.
+  declarations: [{ prop: "size-adjust", value: "82%" }],
+});
+
+/*
+ * Restamps the saved font choice before anything paints, so a reload never
+ * flashes Monocraft at someone who switched away from it. Unknown or absent
+ * values simply match no CSS rule and land on the default; setAppFont owns
+ * the real validation.
+ */
+const appFontBootScript = `try{var f=localStorage.getItem(${JSON.stringify(
+  APP_FONT_STORAGE_KEY,
+)});if(f&&f!==${JSON.stringify(
+  DEFAULT_APP_FONT,
+)})document.documentElement.setAttribute("data-app-font",f)}catch(e){}`;
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gtnhplanner.com";
 
@@ -127,8 +206,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${monocraft.variable} h-full`}>
+    <html
+      lang="en"
+      className={`${monocraft.variable} ${inter.variable} ${jetbrainsMono.variable} ${lexend.variable} ${atkinson.variable} ${andika.variable} ${comicNeue.variable} ${openDyslexic.variable} h-full`}
+      // The boot script above stamps `data-app-font` on this element before
+      // React ever renders, and the server markup does not carry it.
+      suppressHydrationWarning
+    >
       <body className="min-h-full">
+        <script dangerouslySetInnerHTML={{ __html: appFontBootScript }} />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}

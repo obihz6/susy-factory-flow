@@ -291,6 +291,17 @@ const waypointDots = new Map<string, EdgeWaypointDot[]>();
 
 /** The dot circles the dash canvas must not paint over, per edge. */
 export function publishEdgeWaypointDots(edgeId: string, dots: EdgeWaypointDot[]) {
+  const existing = waypointDots.get(edgeId);
+  if (
+    existing &&
+    existing.length === dots.length &&
+    existing.every(
+      (dot, index) =>
+        dot.x === dots[index].x && dot.y === dots[index].y && dot.r === dots[index].r,
+    )
+  ) {
+    return;
+  }
   waypointDots.set(edgeId, dots);
 }
 

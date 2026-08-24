@@ -22,21 +22,24 @@ import type { FactoryProject } from "./types";
  *
  * - `product`    pulls its feeder flat out. The thing the factory is for.
  * - `byproduct`  asks for nothing and catches what is left over.
+ * - `trash`      asks for nothing and VOIDS what arrives. The drawer as a
+ *                bin: it un-clogs its feeder exactly like the old trash can
+ *                node, and what it eats never appears in the books.
  *
- * That last pair is the difference between "make as much of this as you can"
- * and "the extra has to go somewhere", which is the difference between a
- * product and a byproduct in every real base.
+ * Product vs byproduct is the difference between "make as much of this as
+ * you can" and "the extra has to go somewhere"; trash is "the extra stops
+ * existing", which is what every overflow-into-a-void setup really is.
  */
-export type StorageRole = "source" | "buffer" | "product" | "byproduct" | "idle";
+export type StorageRole = "source" | "buffer" | "product" | "byproduct" | "trash" | "idle";
 
-/** The three that sit ON the boundary rather than inside it. */
+/** The ones that sit ON the boundary rather than inside it. */
 export function isBoundaryRole(role: StorageRole): boolean {
-  return role === "source" || role === "product" || role === "byproduct";
+  return role === "source" || role === "product" || role === "byproduct" || role === "trash";
 }
 
-/** The two ends of a drain: both accept freely, only one of them asks. */
+/** The ends of a drain: all accept freely, only the product asks. */
 export function isDrainRole(role: StorageRole): boolean {
-  return role === "product" || role === "byproduct";
+  return role === "product" || role === "byproduct" || role === "trash";
 }
 
 /**
@@ -75,7 +78,9 @@ export function getStorageRoles(project: FactoryProject): Map<string, StorageRol
           ? "buffer"
           : storage.drainMode === "byproduct"
             ? "byproduct"
-            : "product"
+            : storage.drainMode === "trash"
+              ? "trash"
+              : "product"
         : drawn
           ? "source"
           : "idle",

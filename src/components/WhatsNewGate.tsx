@@ -6,6 +6,7 @@ import { ChangelogDialog } from "@/components/ChangelogDialog";
 import { CHANGELOG, type ChangelogEntry } from "@/lib/changelog";
 import { useDeployedVersion } from "@/lib/use-deployed-version";
 import {
+  isUpdatePopupEnabled,
   markVersionSeenAndNotify,
   needsInterrupting,
   pendingForcedEntries,
@@ -39,6 +40,12 @@ export function WhatsNewGate() {
   // After mount, never during render: it reads localStorage, and a server
   // render has none, so deciding this any earlier is a hydration mismatch.
   useEffect(() => {
+    // The settings mute. Nothing is stamped seen or shown on its account:
+    // the releases stay unread and the header dot still announces them, this
+    // browser has just asked not to be interrupted about it.
+    if (!isUpdatePopupEnabled()) {
+      return;
+    }
     // Two questions, and the second one exists because the first cannot always
     // be answered. `unseenEntries` needs a stamp to compare against and treats
     // a browser without one as a first visit; `pendingForcedEntries` is for the

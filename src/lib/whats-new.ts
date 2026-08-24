@@ -31,6 +31,34 @@ const LAST_SEEN_KEY = "gtnh-factory-flow.last-seen-version.v1";
  */
 const FORCED_SHOWN_KEY = "gtnh-factory-flow.forced-notes.v1";
 
+/**
+ * The settings dialog's mute for the update popup. "off" means the notes
+ * never arrive by themselves; the dot on the What's new button still marks
+ * unread releases, so nothing goes unannounced, just uninterrupted. Absent
+ * means on, so a fresh profile and a never-touched setting are the same.
+ */
+const POPUP_MUTED_KEY = "gtnh-factory-flow.update-popup.v1";
+
+export function isUpdatePopupEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(POPUP_MUTED_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function setUpdatePopupEnabled(enabled: boolean): void {
+  try {
+    if (enabled) {
+      window.localStorage.removeItem(POPUP_MUTED_KEY);
+    } else {
+      window.localStorage.setItem(POPUP_MUTED_KEY, "off");
+    }
+  } catch {
+    // A blocked quota must never break the app.
+  }
+}
+
 function readLastSeen(): string | undefined {
   try {
     return window.localStorage.getItem(LAST_SEEN_KEY) ?? undefined;

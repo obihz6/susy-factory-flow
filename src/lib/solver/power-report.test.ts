@@ -68,6 +68,79 @@ describe("energy hatches", () => {
     expect(stats.eut).toBe(120 * 16);
   });
 
+  it("carries an exotic hatch's whole rating as amps, one hatch only", () => {
+    // One IV 256A laser target hatch: 8,192 x 256 = 2,097,152 EU/t of pool.
+    // The stored hatch count is clamped to the single hatch the game allows,
+    // so the voltage ordinal stays the hatch's own tier
+    // (getMaxInputVoltageMulti sums voltages, never amps). The recipe still
+    // has to be within one tier of the hatch voltage - amps never buy
+    // tier-skip - so the draw here sits inside IV x 4.
+    const report = getNodePowerReport(lcrRecipe(30720, "IV"), {
+      overclockTier: "IV",
+      energyHatches: 8,
+      energyHatchType: "laser256",
+    });
+
+    expect(report.state).toBe("ok");
+    expect(report.hatches).toBe(1);
+    expect(report.amps).toBe(256);
+    expect(report.poolEuT).toBe(8192 * 256);
+    expect(report.hatchTypeLabel).toBe("256A Laser Target Hatch");
+  });
+
+  it("runs a draw one lone regular hatch cannot on a multi-amp hatch", () => {
+    // The complaint that started this: 16,384 EU/t at IV is a legal one-tier
+    // skip, but a lone regular hatch works at 1 amp (8,192 EU/t) and stalls.
+    // One 16A hatch carries it with room to spare.
+    const regular = getNodePowerReport(lcrRecipe(16384, "IV"), {
+      overclockTier: "IV",
+      energyHatches: 1,
+    });
+    const multiAmp = getNodePowerReport(lcrRecipe(16384, "IV"), {
+      overclockTier: "IV",
+      energyHatchType: "amp16",
+    });
+
+    expect(regular.state).toBe("under-powered");
+    expect(multiAmp.state).toBe("ok");
+    expect(multiAmp.amps).toBe(16);
+  });
+
+  it("gives a mega every hatch's full amps and unlimited tier skips", () => {
+    // MegaMultiBlockBase.setProcessingLogicPower: the pool is getMaxInputEu()
+    // (each regular hatch's whole 2 amps, a lone one included) and
+    // setUnlimitedTierSkips - a recipe far above the hatch tier is merely
+    // under-powered, never refused outright.
+    const mega = {
+      ...lcrRecipe(30720, "HV"),
+      machineType: "Mega Blast Furnace",
+    } as Recipe;
+    const oneHatch = getNodePowerReport(mega, { overclockTier: "MV", energyHatches: 1 });
+    expect(oneHatch.amps).toBe(2);
+    expect(oneHatch.state).toBe("under-powered");
+
+    const fourHatches = getNodePowerReport(mega, { overclockTier: "MV", energyHatches: 4 });
+    expect(fourHatches.amps).toBe(8);
+
+    // The same draw on a plain multiblock is refused as over-tier.
+    const plain = getNodePowerReport(lcrRecipe(30720, "HV"), {
+      overclockTier: "MV",
+      energyHatches: 2,
+    });
+    expect(plain.state).toBe("over-tier");
+  });
+
+  it("treats an unknown hatch type as the plain pair", () => {
+    const report = getNodePowerReport(lcrRecipe(480, "HV"), {
+      overclockTier: "MV",
+      energyHatches: 2,
+      energyHatchType: "not-a-hatch",
+    });
+
+    expect(report.amps).toBe(4);
+    expect(report.hatchTypeLabel).toBeUndefined();
+  });
+
   it("keeps single hatches identical to the old model", () => {
     const withField = getOverclockedRecipeStats(lcrRecipe(120, "MV"), {
       overclockTier: "HV",

@@ -14,6 +14,7 @@ import { isCustomRateRecipe } from "@/lib/model/custom-rate";
 import { collectTrashNodeIds } from "@/lib/model/trash";
 import { describeStorage, getStorageRole, getStorageRoles } from "@/lib/model/storage-role";
 import { makeResourceHandleId } from "./resource-handles";
+import { getSetupRules, type ResolvedSetupRules } from "@/lib/model/setup-rules";
 
 type ProjectEdge = FactoryProject["edges"][number];
 
@@ -436,11 +437,13 @@ export function deriveNodeVerdict(
   // STARVED means a feeder cannot keep up, CLOGGED means a wired output cannot
   // shift its surplus. Neither should ever mean "you have not wired it yet".
   //
-  // In SKETCH MODE the plan assumes its own boundary, so a bare slot is not a
-  // to-do item: the solve already fed and drained it, and the card reads off
-  // the numbers like any other.
-  if (!project.assumeBoundaries) {
-    const bare = findBareSlots(project, nodeResult, incoming, outgoing);
+  // A BOARD RULE takes its own side out of that: with free inputs on, the
+  // solve already fed every bare input, so marking it is nagging about
+  // something the plan has answered. The other side still speaks up - the
+  // rules are separate on purpose, and half a closed plan is still a plan.
+  const rules = getSetupRules(project);
+  if (!rules.freeInputs || !rules.freeOutputs) {
+    const bare = findBareSlots(project, nodeResult, incoming, outgoing, rules);
     if (bare || (incoming.length === 0 && outgoing.length === 0)) {
       // The second clause catches a card with no wires AND nothing to wire -
       // a recipe the solver has no flows for. There are no bare slots to mark,
@@ -541,9 +544,10 @@ export function findUnwiredNodeIds(
   project: FactoryProject,
   result: ThroughputResult | undefined,
 ): string[] {
-  // Sketch mode feeds and drains every bare slot itself; a checklist of
-  // things the mode already handled would just nag.
-  if (project.assumeBoundaries) {
+  // With both board rules on, the solve feeds and drains every bare slot
+  // itself; a checklist of things the rules already handled would just nag.
+  const rules = getSetupRules(project);
+  if (rules.freeInputs && rules.freeOutputs) {
     return [];
   }
   const incomingBy = new Map<string, ProjectEdge[]>();
@@ -575,7 +579,7 @@ export function findUnwiredNodeIds(
     const incoming = incomingBy.get(node.id) ?? [];
     const outgoing = outgoingBy.get(node.id) ?? [];
     if (
-      findBareSlots(project, nodeResult, incoming, outgoing) ||
+      findBareSlots(project, nodeResult, incoming, outgoing, rules) ||
       (incoming.length === 0 && outgoing.length === 0)
     ) {
       ids.push(node.id);
@@ -596,6 +600,7 @@ function findBareSlots(
   nodeResult: NodeThroughputResult,
   incoming: ProjectEdge[],
   outgoing: ProjectEdge[],
+  rules: ResolvedSetupRules,
 ): NodeVerdict["bare"] {
   const describe = (
     flow: { kind: ResourceKind; resourceId: string; displayName?: string },
@@ -605,17 +610,23 @@ function findBareSlots(
   const wiredOn = (edges: ProjectEdge[], key: string) =>
     edges.some((edge) => makeResourceKey(edge.resourceKind, edge.resourceId) === key);
 
+  // A side the board rules answer has no bare slots to report: the solve fed
+  // or drained it, so there is nothing left for the player to do there.
   const inputs: NonNullable<NodeVerdict["bare"]>["inputs"] = [];
-  for (const [key, flow] of Object.entries(nodeResult.inputs)) {
-    if (flow.amountPerSecond > RATE_EPSILON && !wiredOn(incoming, key)) {
-      inputs.push(describe(flow, key));
+  if (!rules.freeInputs) {
+    for (const [key, flow] of Object.entries(nodeResult.inputs)) {
+      if (flow.amountPerSecond > RATE_EPSILON && !wiredOn(incoming, key)) {
+        inputs.push(describe(flow, key));
+      }
     }
   }
 
   const outputs: NonNullable<NodeVerdict["bare"]>["outputs"] = [];
-  for (const [key, flow] of Object.entries(nodeResult.outputs)) {
-    if (flow.amountPerSecond > RATE_EPSILON && !wiredOn(outgoing, key)) {
-      outputs.push(describe(flow, key));
+  if (!rules.freeOutputs) {
+    for (const [key, flow] of Object.entries(nodeResult.outputs)) {
+      if (flow.amountPerSecond > RATE_EPSILON && !wiredOn(outgoing, key)) {
+        outputs.push(describe(flow, key));
+      }
     }
   }
 
@@ -1163,6 +1174,12 @@ export interface RailPort {
    * assumed a bare input arrived by hand forever.
    */
   unsupplied: boolean;
+  /**
+   * This port's side is answered by a board rule, so a bare slot here is not
+   * a to-do item: the solve feeds or drains it. Outputs read this to keep the
+   * NO TAKER mark off a slot the plan has an answer for.
+   */
+  boundaryFree: boolean;
   currentPerSecond: number;
   nameplatePerSecond: number;
   /**
@@ -1216,8 +1233,13 @@ export function buildRailPorts(
     const storage = storagesById.get(id);
     return storage ? describeStorage(storage, storageRoles.get(id)) : "Drawer";
   };
+  const rules = getSetupRules(project);
   const buildSide = (side: "input" | "output"): RailPort[] => {
     const isInput = side === "input";
+    // A board rule ANSWERS its whole side: with free inputs on there is no
+    // such thing as a slot with nothing to supply it, so the bare-slot marks
+    // come off and the port reads as the ordinary working port it now is.
+    const freeSide = isInput ? rules.freeInputs : rules.freeOutputs;
     const flows = isInput ? nodeResult?.inputs : nodeResult?.outputs;
     const resources = isInput ? displayRecipe.inputs : displayRecipe.outputs;
     const sideEdges = isInput ? incoming : outgoing;
@@ -1312,7 +1334,7 @@ export function buildRailPorts(
         fillFraction = connected
           ? clamp01(askRate > RATE_EPSILON ? available / askRate : 1, 1)
           : 1;
-        if (!connected) {
+        if (!connected && !freeSide) {
           // Every bare slot marked, not one crowned: they are all equally the
           // reason, and the card's job is to show you the whole list of wires
           // to draw. `idle` was for the old world where a bare input was a
@@ -1333,7 +1355,7 @@ export function buildRailPorts(
         // The chip is the MACHINE's story only: at full speed it reads green
         // no matter how loudly the plugs beg — "everything here is amazing,
         // it's the plug that says where's my stuff". One machine, one color.
-        if (!connected) {
+        if (!connected && !freeSide) {
           // The mirror of a bare input: a product with no taker stops the
           // machine just as dead, so it is marked just as loudly. Checked
           // first because it outranks both readings below it.
@@ -1411,7 +1433,8 @@ export function buildRailPorts(
         handleId: makeResourceHandleId(side, { kind, id: resourceId }),
         resource,
         connected,
-        unsupplied: isInput && !connected,
+        unsupplied: isInput && !connected && !freeSide,
+        boundaryFree: freeSide,
         currentPerSecond,
         nameplatePerSecond: nameplate,
         wantedPerSecond,

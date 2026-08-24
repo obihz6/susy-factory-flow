@@ -47,13 +47,32 @@ export async function fetchRecipeDatasetVersion(
   return dataset;
 }
 
+/**
+ * 2.8.4 is temporarily withdrawn from the picker (2026-08-23): everyone plays
+ * on 2.9 betas and the manifest's order cannot be trusted to keep 2.9 first.
+ * Delete the entry to offer it again.
+ */
+export const HIDDEN_DATASET_VERSION_IDS = new Set(["local-2.8.4"]);
+
+export function listSelectableDatasetVersions(manifest: DatasetManifest): DatasetVersion[] {
+  const selectable = manifest.versions.filter(
+    (version) => !HIDDEN_DATASET_VERSION_IDS.has(version.id),
+  );
+  // A manifest holding only hidden versions still needs to offer something.
+  return selectable.length > 0 ? selectable : manifest.versions;
+}
+
 export function pickDefaultDatasetVersion(manifest: DatasetManifest): DatasetVersion | undefined {
+  const selectable = listSelectableDatasetVersions(manifest);
   const preferredId = manifest.latestStableVersion ?? manifest.latestDailyVersion;
   if (preferredId) {
-    return manifest.versions.find((version) => version.id === preferredId);
+    const preferred = selectable.find((version) => version.id === preferredId);
+    if (preferred) {
+      return preferred;
+    }
   }
 
-  return manifest.versions[0];
+  return selectable[0];
 }
 
 export function resolveDatasetUrl(manifestUrl: string, datasetPath: string): string {

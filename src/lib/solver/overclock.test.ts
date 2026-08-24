@@ -90,7 +90,7 @@ const NITROBENZENE = {
 };
 
 describe("GT overclocking", () => {
-  it("treats MAX as a filter/display tier instead of an extra overclock voltage", () => {
+  it("treats MAX as a real tier: GTValues.V[14], one overclock step past UXV", () => {
     const stats = getOverclockedRecipeStats(
       {
         minimumTier: "MV",
@@ -103,9 +103,9 @@ describe("GT overclocking", () => {
       },
     );
 
-    expect(stats.tier).toBe("UXV");
-    expect(stats.overclockSteps).toBe(11);
-    expect(stats.eut).toBe(120 * 4 ** 11);
+    expect(stats.tier).toBe("MAX");
+    expect(stats.overclockSteps).toBe(12);
+    expect(stats.eut).toBe(120 * 4 ** 12);
   });
 
   it("spends the voltage budget on parallels before overclocks", () => {
@@ -306,6 +306,33 @@ describe("GT overclocking", () => {
     expect(stats.overclockSteps).toBe(1);
     expect(stats.durationTicks).toBe(150);
     expect(stats.eut).toBe(8);
+  });
+
+  it("runs crafting recipes on the Auto Workbench: 2048 EU a craft, one per tick from EV", () => {
+    // MTEElectricAutoWorkbench: every craft costs a flat 2048 EU and input is
+    // capped at the tier's voltage, so the LV seed is 64 ticks at 32 EU/t and
+    // each tier is a perfect step. Three steps reach the one-craft-per-tick
+    // ceiling at EV; past that the game neither speeds up nor charges more.
+    const crafting = {
+      machineType: "Shaped Crafting",
+      minimumTier: "NONE",
+      durationTicks: 1,
+      eut: 0,
+      source: { recipeMap: "Shaped Crafting" },
+    };
+
+    for (const [tier, ticks, eut] of [
+      ["LV", 64, 32],
+      ["MV", 16, 128],
+      ["HV", 4, 512],
+      ["EV", 1, 2048],
+      ["IV", 1, 2048],
+      ["UV", 1, 2048],
+    ] as const) {
+      const stats = getOverclockedRecipeStats(crafting, { overclockTier: tier });
+
+      expect([tier, stats.durationTicks, stats.eut]).toEqual([tier, ticks, eut]);
+    }
   });
 
   it("bills the arc furnace family triple, on triple amps", () => {
