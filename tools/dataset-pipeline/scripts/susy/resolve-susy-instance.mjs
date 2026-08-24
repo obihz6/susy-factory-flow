@@ -27,6 +27,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   compareVersions,
+  findLauncherInstanceInfo,
   findOracleJar,
   inspectInstanceDir,
 } from "./susy-instance-lib.mjs";
@@ -142,7 +143,14 @@ function collectCandidates() {
     push(root, source);
     if (looksLikeInstanceRoot) {
       for (const entry of entries) {
-        if (entry.isDirectory()) push(path.join(root, entry.name), source);
+        if (!entry.isDirectory()) continue;
+        const wrapper = path.join(root, entry.name);
+        push(wrapper, source);
+        // Prism/PolyMC/MultiMC wrappers keep the actual game dir one level
+        // down (minecraft/ or .minecraft/); the wrapper itself only holds
+        // launcher metadata like instance.cfg.
+        push(path.join(wrapper, "minecraft"), source);
+        push(path.join(wrapper, ".minecraft"), source);
       }
     }
   }
@@ -169,16 +177,19 @@ function bestCandidate() {
 }
 
 function resultFor(info, source) {
+  const launcher = findLauncherInstanceInfo(info.dir);
   return {
     found: true,
     instanceDir: info.dir,
-    version: info.pack?.version,
+    version: info.pack?.version ?? launcher?.managedPackVersion,
     minecraft: info.pack?.minecraft ?? "1.12.2",
     forge: info.pack?.forge,
     source,
     launchScript: info.launchScript,
     susyCoreJar: info.susyCoreJar,
     susyJar: info.susyJar,
+    prismInstanceId: launcher?.instanceId,
+    prismFlatpakAppId: launcher?.flatpakAppId,
     oracleJar: findOracleJar(repoRoot),
   };
 }

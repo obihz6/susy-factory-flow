@@ -151,6 +151,62 @@ export function inspectInstanceDir(dir) {
 }
 
 /**
+ * Walks up from a game directory to the launcher instance wrapper that owns
+ * it (the directory holding instance.cfg, as written by Prism/PolyMC/MultiMC).
+ * Returns what the export runner needs to work against such an instance: the
+ * instance id (wrapper folder name, what `prism -l` takes), the flatpak app id
+ * when the launcher runs as a flatpak sandbox, and the managed pack metadata
+ * those launchers keep instead of a packwiz pack.toml.
+ */
+export function findLauncherInstanceInfo(startDir) {
+  let current = path.resolve(startDir);
+  for (let depth = 0; depth < 8; depth += 1) {
+    const cfgPath = path.join(current, "instance.cfg");
+    let cfgText;
+    try {
+      cfgText = fs.readFileSync(cfgPath, "utf8");
+    } catch {
+      cfgText = undefined;
+    }
+    if (cfgText !== undefined) {
+      const meta = parseInstanceCfg(cfgText);
+      return {
+        dir: current,
+        instanceId: path.basename(current),
+        flatpakAppId: flatpakAppIdFor(current),
+        managedPackName: meta.managedPackName,
+        managedPackVersion: meta.managedPackVersion,
+      };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+  return undefined;
+}
+
+/** Minimal instance.cfg reader: only the managed-pack keys the pipeline needs. */
+function parseInstanceCfg(text) {
+  const result = { managedPackName: undefined, managedPackVersion: undefined };
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const pair = /^([^=]+?)\s*=\s*(.*)$/.exec(rawLine.trim());
+    if (!pair) continue;
+    const key = pair[1].trim();
+    if (key === "ManagedPackName") result.managedPackName = pair[2].trim() || undefined;
+    if (key === "ManagedPackVersionName") result.managedPackVersion = pair[2].trim() || undefined;
+  }
+  return result;
+}
+
+/** The flatpak app id when `dir` lives inside ~/.var/app/<app id>/, else undefined. */
+function flatpakAppIdFor(dir) {
+  const parts = path.resolve(dir).split(path.sep);
+  const varIndex = parts.lastIndexOf(".var");
+  if (varIndex < 0 || parts[varIndex + 1] !== "app") return undefined;
+  return parts[varIndex + 2] || undefined;
+}
+
+/**
  * Where the susy-hei-oracle mod jar can come from, best first:
  * SUSY_HEI_ORACLE_JAR, the pipeline's own build, then a repo-local checkout.
  */

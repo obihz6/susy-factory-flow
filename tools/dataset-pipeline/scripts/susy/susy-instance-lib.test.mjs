@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   compareVersions,
+  findLauncherInstanceInfo,
   findOracleJar,
   inspectInstanceDir,
   parsePackToml,
@@ -115,6 +116,63 @@ describe("inspectInstanceDir", () => {
     const dir = makeDir({ "mods/readme.txt": "hi" });
     expect(inspectInstanceDir(dir).kind).toBe("unknown");
     expect(inspectInstanceDir(path.join(dir, "missing")).kind).toBe("unknown");
+  });
+});
+
+describe("findLauncherInstanceInfo", () => {
+  function makeWrapper(files) {
+    const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), "susy-wrapper-"));
+    for (const [name, content] of Object.entries(files)) {
+      const full = path.join(wrapper, name);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, content);
+    }
+    return wrapper;
+  }
+
+  const INSTANCE_CFG = [
+    "[General]",
+    "name=Supersymmetry",
+    "ManagedPackName=Supersymmetry",
+    "ManagedPackVersionName=0.1.16.14.1",
+    "",
+  ].join("\n");
+
+  it("finds the wrapper above a Prism-style game dir and reads managed pack metadata", () => {
+    const wrapper = makeWrapper({
+      "instance.cfg": INSTANCE_CFG,
+      "minecraft/mods/susycore-1.4.jar": "jar",
+    });
+    const info = findLauncherInstanceInfo(path.join(wrapper, "minecraft"));
+    expect(info?.instanceId).toBe(path.basename(wrapper));
+    expect(info?.managedPackName).toBe("Supersymmetry");
+    expect(info?.managedPackVersion).toBe("0.1.16.14.1");
+    expect(info?.flatpakAppId).toBeUndefined();
+  });
+
+  it("detects a flatpak app id from a .var/app path", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "susy-flatpak-"));
+    const instance = path.join(
+      root,
+      ".var",
+      "app",
+      "org.prismlauncher.PrismLauncher",
+      "data",
+      "PrismLauncher",
+      "instances",
+      "SUSY Oracle Export",
+    );
+    fs.mkdirSync(path.join(instance, "minecraft"), { recursive: true });
+    fs.writeFileSync(path.join(instance, "instance.cfg"), INSTANCE_CFG);
+    const info = findLauncherInstanceInfo(path.join(instance, "minecraft"));
+    expect(info?.instanceId).toBe("SUSY Oracle Export");
+    expect(info?.flatpakAppId).toBe("org.prismlauncher.PrismLauncher");
+  });
+
+  it("returns undefined when no launcher wrapper owns the directory", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "susy-plain-"));
+    fs.mkdirSync(path.join(dir, "mods"), { recursive: true });
+    expect(findLauncherInstanceInfo(dir)).toBeUndefined();
   });
 });
 
