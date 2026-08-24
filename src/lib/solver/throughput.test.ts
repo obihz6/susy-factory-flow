@@ -300,7 +300,9 @@ describe("calculateThroughput", () => {
         {
           id: "crafting",
           name: "Crafting",
-          machineType: "Shaped Crafting",
+          // A neutral machine on purpose: "Shaped Crafting" would synthesize
+          // the Auto Workbench handler and rewrite the duration.
+          machineType: "Test Bench",
           minimumTier: "LV",
           durationTicks: 20,
           eut: 0,

@@ -1,6 +1,11 @@
 "use client";
 
 import type { MachineTier, Recipe, RecipeOutput, ResourceAmount } from "@/lib/model/types";
+import {
+  serializeRecipeQueryClause,
+  type RecipeQueryClause,
+  type RecipeQuerySideOp,
+} from "./recipe-query";
 import type { SearchCorrection, SearchPhase } from "@/lib/search";
 import type {
   DatasetResourceIndexEntry,
@@ -11,10 +16,26 @@ import type {
 
 type TierFilter = "all" | Exclude<MachineTier, "DEMO">;
 
+export interface RecipeMapSelection {
+  mode: "exclude" | "include";
+  maps: string[];
+}
+
 export interface RecipeDatasetQuery {
   query: string;
   resource?: Pick<ResourceAmount, "kind" | "id">;
   mode: "recipes" | "uses";
+  /** Multi-condition search; when present these replace resource+mode. */
+  clauses?: RecipeQueryClause[];
+  takesOp?: RecipeQuerySideOp;
+  makesOp?: RecipeQuerySideOp;
+  /** Page across every recipe map instead of scoping to one. */
+  allMaps?: boolean;
+  /**
+   * The machine chips' multi-select: "exclude" lists the unselected maps,
+   * "include" the selected ones (empty include = none). Absent means all.
+   */
+  mapSelection?: RecipeMapSelection;
   recipeMap?: string;
   maxTier: TierFilter;
   offset: number;
@@ -25,6 +46,7 @@ export interface RecipeDatasetQueryResult {
   recipes: RecipeSummary[];
   total: number;
   recipeMaps: string[];
+  recipeMapCounts?: Record<string, number>;
   recipeMapIcons?: Record<string, DatasetResourceIndexEntry>;
   offset: number;
   limit: number;
@@ -39,7 +61,7 @@ export interface RecipeDatasetResourceQuery {
   limit: number;
   kind?: "item" | "fluid";
   mod?: string;
-  sort?: "relevance" | "name" | "mod" | "recipes";
+  sort?: "relevance" | "name" | "mod" | "recipes" | "made" | "uses";
   /** Narrow to what a crop can grow or a bee can make. */
   source?: "plants" | "bees";
 }
@@ -185,6 +207,24 @@ export async function queryRecipeDatasetRecipes(
   if (query.resource) {
     url.searchParams.set("resourceKind", query.resource.kind);
     url.searchParams.set("resourceId", query.resource.id);
+  }
+  for (const clause of query.clauses ?? []) {
+    url.searchParams.append("clause", serializeRecipeQueryClause(clause));
+  }
+  if (query.takesOp && query.takesOp !== "any") {
+    url.searchParams.set("takesOp", query.takesOp);
+  }
+  if (query.makesOp && query.makesOp !== "any") {
+    url.searchParams.set("makesOp", query.makesOp);
+  }
+  if (query.allMaps) {
+    url.searchParams.set("allMaps", "1");
+  }
+  if (query.mapSelection) {
+    url.searchParams.set("mapMode", query.mapSelection.mode);
+    for (const map of query.mapSelection.maps) {
+      url.searchParams.append("map", map);
+    }
   }
 
   return fetchJson<RecipeDatasetQueryResult>(url.toString(), { signal: options.signal });

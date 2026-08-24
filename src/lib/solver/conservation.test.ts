@@ -425,6 +425,53 @@ describe("conservation: a product pulls, a byproduct catches", () => {
     expect(result.edges["g1"].transferredPerSecond).toBeCloseTo(5);
     expect(result.storages["spare"].producedPerSecond).toBeCloseTo(5);
   });
+
+  it("a TRASH drawer voids the flow: no demand, no clog, nothing on the books", () => {
+    const result = calculateThroughput(
+      project({
+        ...TARGETED,
+        storages: [{ ...drawer("d", "plate"), drainMode: "trash" as const }],
+        edges: [wire("o", "m", "d", "plate")],
+      }),
+      { generatedAt: "fixed" },
+    );
+
+    // Same shape as the byproduct: catches without asking, the machine runs.
+    expect(result.nodes["m"].utilization).toBeCloseTo(1);
+    expect(result.edges["o"].demandPerSecond).toBeCloseTo(0);
+    expect(result.edges["o"].transferredPerSecond).toBeCloseTo(10);
+
+    // But unlike the byproduct, what it eats never existed: not shipped, not
+    // spare, not in the unconsumed column.
+    const balance = result.resources["item:plate"];
+    expect(balance?.byproductPerSecond ?? 0).toBeCloseTo(0);
+    expect(balance?.productPerSecond ?? 0).toBeCloseTo(0);
+    expect(balance?.surplusPerSecond ?? 0).toBeCloseTo(0);
+    expect(result.unconsumedOutputs.some((entry) => entry.resourceId === "plate")).toBe(false);
+  });
+
+  it("a trash drawer un-clogs its machine exactly like the old trash can", () => {
+    const result = calculateThroughput(
+      project({
+        recipes: DUAL,
+        nodes: [node("dual", "dual"), node("au", "eat-gold")],
+        storages: [
+          drawer("d-au", "goldblock"),
+          { ...drawer("bin", "redstone"), drainMode: "trash" as const },
+        ],
+        edges: [
+          wire("g1", "dual", "au", "gold"),
+          wire("r2", "dual", "bin", "redstone"),
+          wire("d2", "au", "d-au", "goldblock"),
+        ],
+      }),
+      { generatedAt: "fixed" },
+    );
+
+    expect(result.nodes["dual"].utilization).toBeCloseTo(1);
+    expect(result.nodes["dual"].clogOutputKey).toBeUndefined();
+    expect(result.edges["g1"].transferredPerSecond).toBeCloseTo(5);
+  });
 });
 
 describe("conservation: drawers", () => {

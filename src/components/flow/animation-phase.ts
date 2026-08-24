@@ -31,9 +31,11 @@ export const BOARD_PULSE_ANIMATIONS = [
   // one drawers wear.
   "resource-breathe",
   "resource-breathe-led",
-  // A card with a slot nobody wired: the dashed slot, the reason cell, the ring.
+  // A card with a slot nobody wired: the dashed slot, the reason cell, the
+  // ring, and the wash layer the cell and the board notice fade on.
   "unwired-port-breathe",
   "unwired-reason-breathe",
+  "unwired-wash-breathe",
   "unwired-ring-breathe",
   // A ring of machines feeding each other with nothing coming in, and the
   // wires that close the loop.

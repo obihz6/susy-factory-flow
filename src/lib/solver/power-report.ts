@@ -6,7 +6,8 @@ import {
   isSmeltingRecipeMap,
   isSteamMachineHandler,
 } from "@/lib/model/recipe-rules";
-import { STEAM_PRESSURE } from "@/lib/machines/machine-table";
+import { getEnergyHatchType } from "@/lib/machines/energy-hatches";
+import { getMachineBehaviour, STEAM_PRESSURE } from "@/lib/machines/machine-table";
 import {
   getRecipeMinimumVoltageTier,
   getVoltageTierForEuT,
@@ -37,7 +38,7 @@ type PowerReportNode = Pick<
   FactoryNode,
   "overclockTier" | "coilTier" | "machineHandlerId" | "machineConfigTiers"
 > &
-  Partial<Pick<FactoryNode, "energyHatches">>;
+  Partial<Pick<FactoryNode, "energyHatches" | "energyHatchType">>;
 
 /**
  * Whether the build can start at all, straight from the game's checks. There
@@ -53,6 +54,10 @@ export interface NodePowerReport {
   minimumTier: VoltageTier;
   /** Hatch count on a multiblock; 1 and meaningless on a singleblock. */
   hatches: number;
+  /** The exotic hatch family's item name; undefined on plain energy hatches. */
+  hatchTypeLabel?: string;
+  /** Its short amp badge ("256A"), worn where the hatch count would sit. */
+  hatchChip?: string;
   isMultiblock: boolean;
   /** Working amps: hatch amps on a multiblock, machine amperage otherwise. */
   amps: number;
@@ -94,6 +99,7 @@ export function getNodePowerReport(recipe: Recipe, node: PowerReportNode): NodeP
   const tier = getNodeRunTier(effectiveRecipe, node);
   const isMultiblock = isMultiblockRecipe(effectiveRecipe);
   const hatches = getNodeEnergyHatches(effectiveRecipe, node);
+  const hatchType = getEnergyHatchType(node.energyHatchType);
   const amps = getNodePowerAmps(effectiveRecipe, node);
   const poolEuT = getVoltageTierMaxEuT(tier) * amps;
 
@@ -117,6 +123,8 @@ export function getNodePowerReport(recipe: Recipe, node: PowerReportNode): NodeP
     tier,
     minimumTier,
     hatches,
+    hatchTypeLabel: isMultiblock && hatchType.exotic ? hatchType.label : undefined,
+    hatchChip: isMultiblock && hatchType.exotic ? hatchType.chip : undefined,
     isMultiblock,
     amps,
     poolEuT,
@@ -158,7 +166,10 @@ function getPowerState(
   if (isMultiblock) {
     // `OverclockCalculator.getAllowedTierSkip`: a recipe more than one tier
     // above the hatch voltage never runs, however many amps are stacked.
-    if (rawEuT > getVoltageTierMaxEuT(tier) * 4) {
+    if (
+      rawEuT > getVoltageTierMaxEuT(tier) * 4 &&
+      !getMachineBehaviour(effectiveRecipe.machineType)?.unlimitedTierSkip
+    ) {
       return "over-tier";
     }
     // `ParallelHelper.determineParallel`: the pool must carry one whole
@@ -257,10 +268,12 @@ export function isPowerStalled(report: NodePowerReport): boolean {
 /** One-line reason for a stalled build, used by node warnings. */
 export function describePowerStall(report: NodePowerReport): string | undefined {
   if (report.state === "under-powered") {
+    const supply = report.hatchTypeLabel
+      ? `the ${report.tier} ${report.hatchTypeLabel} supplies`
+      : `${report.hatches}x ${report.tier} ${report.hatches === 1 ? "hatch supplies" : "hatches supply"}`;
     return (
       `Underpowered: the recipe draws ${report.singleDrawEuT} EU/t but ` +
-      `${report.hatches}x ${report.tier} ${report.hatches === 1 ? "hatch supplies" : "hatches supply"} ` +
-      `${report.poolEuT} EU/t. Add hatches or raise the tier.`
+      `${supply} ${report.poolEuT} EU/t. Add amperage or raise the tier.`
     );
   }
   if (report.state === "over-tier") {

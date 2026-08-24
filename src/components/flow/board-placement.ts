@@ -140,22 +140,7 @@ export function nearestFreeSpot(
     !spotIsFree({ x, y, width: rect.width, height: rect.height }, near, gap, bounds, regions);
 
   for (let radius = 1; radius <= SEARCH_LIMIT_CELLS; radius += 1) {
-    const offsets: Array<{ dx: number; dy: number }> = [];
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      for (let dy = -radius; dy <= radius; dy += 1) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) === radius) {
-          offsets.push({ dx, dy });
-        }
-      }
-    }
-    // Closest first; ties go to the top-left so the magnet is predictable.
-    offsets.sort(
-      (left, right) =>
-        left.dx * left.dx + left.dy * left.dy - (right.dx * right.dx + right.dy * right.dy) ||
-        left.dy - right.dy ||
-        left.dx - right.dx,
-    );
-    for (const { dx, dy } of offsets) {
+    for (const { dx, dy } of ringOffsets(radius)) {
       const x = rect.x + dx * BOARD_GRID;
       const y = rect.y + dy * BOARD_GRID;
       if (!collidesNear(x, y)) {
@@ -165,4 +150,36 @@ export function nearestFreeSpot(
   }
 
   return { x: rect.x, y: rect.y };
+}
+
+/**
+ * The cells of the square ring at `radius`, closest first, ties top-left so
+ * the magnet is predictable. Pure function of the radius, so each ring is
+ * built and sorted once for the lifetime of the page — the magnet runs per
+ * drag frame, and rebuilding (2r+1)² scans plus a sort per frame was most of
+ * a contended drag's cost.
+ */
+const ringOffsetsByRadius: Array<ReadonlyArray<{ dx: number; dy: number }>> = [];
+
+function ringOffsets(radius: number): ReadonlyArray<{ dx: number; dy: number }> {
+  const cached = ringOffsetsByRadius[radius];
+  if (cached) {
+    return cached;
+  }
+  const offsets: Array<{ dx: number; dy: number }> = [];
+  for (let dx = -radius; dx <= radius; dx += 1) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) === radius) {
+        offsets.push({ dx, dy });
+      }
+    }
+  }
+  offsets.sort(
+    (left, right) =>
+      left.dx * left.dx + left.dy * left.dy - (right.dx * right.dx + right.dy * right.dy) ||
+      left.dy - right.dy ||
+      left.dx - right.dx,
+  );
+  ringOffsetsByRadius[radius] = offsets;
+  return offsets;
 }

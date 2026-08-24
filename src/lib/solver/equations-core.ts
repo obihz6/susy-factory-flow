@@ -151,7 +151,7 @@ export function solveEquationsCore(
     if (role === "source") {
       return "source";
     }
-    if (role === "product" || role === "byproduct") {
+    if (role === "product" || role === "byproduct" || role === "trash") {
       return "sink";
     }
     return storage.bufferMode === "strict" ? "strict-buffer" : "buffer";

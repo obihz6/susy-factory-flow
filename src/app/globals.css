@@ -59,6 +59,14 @@
 :root {
   color-scheme: dark;
 
+  /*
+   * The one font the whole app renders in. Monocraft unless the settings
+   * dialog stamped a choice on <html>; the option list, the storage key and
+   * these same stacks live in src/lib/app-font.ts, and the boot script in
+   * layout.tsx restores the attribute before first paint.
+   */
+  --app-font: var(--font-minecraft), monospace;
+
   --background: #1b1d21;
   --foreground: #f5f5f5;
 
@@ -131,11 +139,27 @@
   --mc-bad: #f87171;
   --mc-info: #22d3ee;
 
+  /* SELECTION, in one place. Every mark that answers "what did I click" is
+     this colour: a card's inner ring, a drawer's rim, a board frame's ring,
+     the marquee you drag, and the panel band that says the numbers are a
+     selection. It is the site's own accent (--mc-info's cyan), so the board
+     agrees with the chrome around it instead of running its own hue.
+
+     It was Tailwind purple-500 (#a855f7), which belonged to nothing else
+     here. Change these five and every selection mark moves together; nothing
+     else should hardcode a selection colour. */
+  --selection: #22d3ee;
+  --selection-soft: rgba(34, 211, 238, 0.6);
+  --selection-line: rgba(34, 211, 238, 0.5);
+  --selection-wash: rgba(34, 211, 238, 0.2);
+  --selection-ink: #a5f3fc;
+  --selection-ink-dim: rgba(207, 250, 254, 0.7);
+
   /* The glow: one warm colour for "this carries the hovered resource" —
      cards outline in it, wires halo in it. The old look stacked a yellow
      outline on a cyan ring on a cyan blur; three colours said less than
-     one. Selection stays cyan: a glow answers "where is this item", a
-     ring answers "what did I click". */
+     one. A glow answers "where is this item", a ring answers "what did I
+     click", and they are kept different weights so both can be on at once. */
   --glow-line: #ffd257;
   --glow-halo: rgba(255, 202, 84, 0.8);
 
@@ -341,14 +365,49 @@
   --color-fg-muted: var(--fg-muted);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
-  --font-sans: var(--font-minecraft);
-  --font-mono: var(--font-minecraft);
+  --font-sans: var(--app-font);
+  --font-mono: var(--app-font);
+}
+
+/* Kept in step with APP_FONTS in src/lib/app-font.ts. */
+html[data-app-font="inter"] {
+  --app-font: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+html[data-app-font="jetbrains-mono"] {
+  --app-font: var(--font-jetbrains-mono), ui-monospace, monospace;
+}
+
+html[data-app-font="lexend"] {
+  --app-font: var(--font-lexend), ui-sans-serif, system-ui, sans-serif;
+}
+
+html[data-app-font="atkinson-hyperlegible"] {
+  --app-font: var(--font-atkinson), ui-sans-serif, system-ui, sans-serif;
+}
+
+html[data-app-font="open-dyslexic"] {
+  --app-font: var(--font-open-dyslexic), ui-sans-serif, system-ui, sans-serif;
+}
+
+html[data-app-font="andika"] {
+  --app-font: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* (rules above are switched by the settings dialog; see src/lib/app-font.ts) */
+
+html[data-app-font="comic-neue"] {
+  --app-font: var(--font-comic-neue), ui-sans-serif, system-ui, sans-serif;
+}
+
+html[data-app-font="system"] {
+  --app-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-minecraft), monospace;
+  font-family: var(--app-font);
 }
 
 html,
@@ -609,6 +668,13 @@ textarea {
   will-change: transform;
 }
 
+/* NO gesture hides the drop-shadows. A pan never re-rasterises a composited
+   filter, and during a zoom the compositor scales the existing raster and
+   only re-rasterises at rest - so switching the filters off mid-gesture
+   (tried for both pan and zoom, 2026-08-23) saved close to nothing and read
+   as the board losing its depth every time the camera moved. Do not bring
+   the gate back without profiling first. */
+
 .factory-flow-board .react-flow__node {
   contain: layout style;
   /* Everything on the paper casts a shadow. drop-shadow follows each node's
@@ -750,25 +816,33 @@ textarea {
   background-color: var(--glance-bg, transparent);
 }
 
-/* The fade across the LOD threshold: sinking into the glance is slow enough
-   to read as the board settling into its far view; coming back in is quick,
-   because that is the direction someone is trying to WORK in. `visibility`
-   rides along with a delay only on the way OUT of sight, so whichever side is
-   appearing shows its whole fade and whichever is going stays interactive-
-   invisible only after it has finished going.
+/* The fade across the LOD threshold, and it is the SAME crossing both ways:
+   slow enough to read as the board settling between its two views, going out
+   and coming back. It used to snap back in at a quarter of the time on the
+   grounds that in is the direction someone is trying to work in; what that
+   actually bought was one gesture that answers at two different speeds
+   depending on which way the wheel went. `visibility` rides along with a
+   delay only on the way OUT of sight, so whichever side is appearing shows
+   its whole fade and whichever is going stays interactive-invisible only
+   after it has finished going.
+
+   The two sides move TOGETHER on one clock, one going as the other comes —
+   the step is a single continuous action, not two half-length ones queued up.
+   Sequencing them was tried and it reads as two events: the card empties, sits
+   blank for a beat, and the icon then arrives as a separate arrival.
 
    Scoped to the value-motion class on purpose: the motion switch is the one
    promise that the board holds still, and the image export flips it off
    before capturing — a photograph taken two frames after the detail flip must
    not come out half-faded. */
 .factory-flow-board--value-motion [data-node-detail="glance"] {
-  transition: opacity 220ms ease, visibility 0s 220ms;
+  transition: opacity 560ms ease, visibility 0s 560ms;
 }
 
 .factory-flow-board--value-motion [data-node-glance-root] > *:not([data-node-detail="glance"]),
 .factory-flow-board--value-motion [data-node-glance-root] > [data-tooltip-root] > *,
 .factory-flow-board--value-motion .machine-tab-zone {
-  transition: opacity 220ms ease, visibility 0s;
+  transition: opacity 560ms ease, visibility 0s;
 }
 
 .factory-flow-board--value-motion[data-detail-level="glance"] [data-node-detail="glance"] {
@@ -778,7 +852,14 @@ textarea {
      arrives as a NEW element already at opacity 1, which is why mode
      switches used to pop while the card colour underneath glided. An
      animation runs whenever the rule starts applying, mounts included, so
-     the incoming layer fades in on the same clock as the wash. */
+     the incoming layer fades in on the same clock as the wash.
+
+     It is also, in practice, what draws the fade INTO the glance: an animation
+     is part of the style a transition is measured against, so the transition
+     above finds no change to start from and the animation does the whole job.
+     Keep the two timed alike, and give this NO fill — an animation that holds
+     its end value is one the fade OUT cannot start from, and the icon would
+     vanish on the spot instead of leaving. */
   animation: glance-layer-in 560ms ease;
 }
 
@@ -802,8 +883,8 @@ textarea {
 /* The paper's ruling — the stock dot/line pattern and the ruled/graph
    rulings — sinks out with the rest of the near view: the glance step is lit
    tiles on dark ground, and a grid under them is close-up furniture the far
-   view has no use for. Same clock as the cards, slow out and quick back, and
-   only the motion rules below animate it so an export capture stays clean. */
+   view has no use for. Same clock as the cards, the same both ways, and only
+   the motion rules below animate it so an export capture stays clean. */
 .factory-flow-board[data-detail-level="glance"] .react-flow__background,
 .factory-flow-board[data-detail-level="glance"] .board-ruling {
   opacity: 0;
@@ -812,7 +893,7 @@ textarea {
 
 .factory-flow-board--value-motion .react-flow__background,
 .factory-flow-board--value-motion .board-ruling {
-  transition: opacity 220ms ease, visibility 0s;
+  transition: opacity 560ms ease, visibility 0s;
 }
 
 .factory-flow-board--value-motion[data-detail-level="glance"] .react-flow__background,
@@ -1115,6 +1196,15 @@ img {
   z-index: 60;
 }
 
+/* The marquee. React Flow ships its own royal blue here, which was a THIRD
+   blue on a board that already has a selection colour and a search colour;
+   the box you drag and the rings it leaves behind are one gesture and should
+   be one hue. */
+.factory-flow-board .react-flow__selection {
+  background: var(--selection-wash);
+  border: 1px solid var(--selection);
+}
+
 .factory-flow-board .react-flow__edge-path {
   cursor: pointer;
   pointer-events: stroke;
@@ -1216,6 +1306,99 @@ img {
   border-radius: 8px;
 }
 
+/*
+   The recipe search's scrollers: a wide bar that is ALWAYS there, dark track
+   visibly recessed, bright grab bar. Paired with overflow-y: scroll on the
+   containers so the lane shows even before anything overflows. Firefox gets
+   the colours through scrollbar-color; Chromium turns that off (auto) so the
+   webkit sizing below applies.
+*/
+.recipe-search-scroll {
+  scrollbar-color: var(--mc-100) var(--mc-25);
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .recipe-search-scroll {
+    scrollbar-color: auto;
+  }
+
+  .recipe-search-scroll::-webkit-scrollbar {
+    width: 14px;
+  }
+
+  .recipe-search-scroll::-webkit-scrollbar-track {
+    background: var(--mc-33);
+    border: 2px solid var(--mc-15);
+  }
+
+  .recipe-search-scroll::-webkit-scrollbar-thumb {
+    background: var(--mc-100);
+    border: 2px solid var(--mc-33);
+  }
+
+  .recipe-search-scroll::-webkit-scrollbar-thumb:hover {
+    background: #71747e;
+  }
+}
+
+/*
+   The recipe search's loading state: ghost result cards in the real card
+   anatomy, breathing in a staggered wave, each with its arrow filling like a
+   furnace's progress bar. The wave reads as work happening; the shapes say
+   what is about to appear.
+*/
+@keyframes recipe-search-skeleton-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/*
+   Seamless loop: the overlay is INVISIBLE at both ends of the cycle, so the
+   restart never snaps - it eases in empty, wipes across, and eases out full.
+*/
+@keyframes recipe-search-arrow-fill {
+  0% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+  14% {
+    clip-path: inset(0 88% 0 0);
+    opacity: 1;
+  }
+  68% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0;
+  }
+}
+
+.recipe-search-skeleton {
+  animation: recipe-search-skeleton-breathe 1.8s ease-in-out infinite;
+}
+
+.recipe-search-arrow-fill {
+  animation: recipe-search-arrow-fill 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recipe-search-skeleton,
+  .recipe-search-arrow-fill {
+    animation: none;
+  }
+
+  .recipe-search-skeleton {
+    opacity: 0.6;
+  }
+}
+
 .nei-tab-strip {
   scrollbar-width: none;
 }
@@ -1225,7 +1408,7 @@ img {
 }
 
 .minecraft-title {
-  font-family: var(--font-minecraft), monospace;
+  font-family: var(--app-font);
   font-weight: 400;
   letter-spacing: 0;
   color: #ffffff;
@@ -1390,6 +1573,15 @@ img {
   );
 }
 
+/* TRASH: the bin - square shoulders, sides tapering straight down to a
+   narrower base. Same square top row as the shield, so the pill's buttons
+   stay planted through the three-way swap. */
+.storage-shape[data-storage-shape="trash"],
+.storage-shape[data-storage-shape="trash"] .storage-shape-fill,
+.storage-shape-content[data-storage-shape="trash"] {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 16px) 100%, 16px 100%);
+}
+
 /* BUFFER: the hexagon, points left and right - a pipe joint the flow passes
    through, in one side and out the other. Strict buffers share the shape;
    the border treatment (see .storage-buffer-inlay) and the header button
@@ -1446,30 +1638,43 @@ img {
 
 /* The loud one. A slot with no wire is drawn like an unfinished line on a
    plan - dashed - and swings the full width of the chalk range, picking up a
-   halo at the top of the breath so it carries at a distance. */
+   halo at the top of the breath so it carries at a distance.
+
+   Compositor-only, like the rings below: the element holds the dim state and
+   a ::after carries the lit dashed ring and halo, fading on OPACITY. The old
+   version animated border-color, background and box-shadow - all paint
+   properties, repainting every marked chip every frame, forever. */
 @keyframes unwired-port-breathe {
   0%,
   100% {
-    border-color: #8f9bad;
-    background: #2f3640;
-    box-shadow: none;
+    opacity: 0;
   }
   50% {
-    border-color: #ffffff;
-    background: #5b6879;
-    box-shadow: 0 0 0 2px rgba(238, 242, 248, 0.5);
+    opacity: 1;
   }
 }
 
-/* The middle one: the whole REASON cell, label included. */
+/* The middle one: the whole REASON cell, label included. The element's own
+   opacity breathes (compositor); the background wash rides a ::after whose
+   opacity fades on the same clock (unwired-wash-breathe below) - animating
+   the background itself repainted the cell, and the board-level notice that
+   shares this mark repainted its whole overlay layer, every frame. */
 @keyframes unwired-reason-breathe {
   0%,
   100% {
-    background: transparent;
     opacity: 0.62;
   }
   50% {
-    background: rgba(238, 242, 248, 0.16);
+    opacity: 1;
+  }
+}
+
+@keyframes unwired-wash-breathe {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
     opacity: 1;
   }
 }
@@ -1477,26 +1682,54 @@ img {
 /* The quiet one: the card itself, a ring only. Width is constant and only
    colour and halo move, for the reason the dead-loop ring documents at
    length - a ring that thins below a device pixel at glance zoom does not
-   dim, it vanishes and comes back. */
+   dim, it vanishes and comes back.
+
+   The breath is two STACKED shadows cross-faded by opacity, not an animated
+   box-shadow: box-shadow is a paint property, so animating it repainted
+   every marked card (and re-ran its drop-shadow filter) sixty times a
+   second, forever, on an idle board. The dim ring sits on the element, the
+   lit ring on a ::after whose opacity fades - compositor-only, same read. */
 @keyframes unwired-ring-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 var(--unwired-ring) rgba(200, 210, 224, 0.25);
+    opacity: 0;
   }
   50% {
-    box-shadow:
-      0 0 0 var(--unwired-ring) rgba(238, 242, 248, 0.85),
-      0 0 var(--unwired-halo) 2px rgba(220, 230, 244, 0.28);
+    opacity: 1;
   }
 }
 
 .recipe-node-shell[data-verdict="unwired"] .flow-port--bind {
+  position: relative;
   border-style: dashed;
+  border-color: #8f9bad;
+  background: #2f3640;
+}
+
+.recipe-node-shell[data-verdict="unwired"] .flow-port--bind::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  pointer-events: none;
+  border: 2px dashed #ffffff;
+  box-shadow: 0 0 0 2px rgba(238, 242, 248, 0.5);
+  opacity: 0;
   animation: unwired-port-breathe var(--board-pulse) ease-in-out infinite;
 }
 
 .recipe-node-shell[data-verdict="unwired"] .verdict-reason-cell {
+  position: relative;
   animation: unwired-reason-breathe var(--board-pulse) ease-in-out infinite;
+}
+
+.recipe-node-shell[data-verdict="unwired"] .verdict-reason-cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(238, 242, 248, 0.16);
+  opacity: 0;
+  animation: unwired-wash-breathe var(--board-pulse) ease-in-out infinite;
 }
 
 .unwired-ring {
@@ -1506,6 +1739,17 @@ img {
   pointer-events: none;
   --unwired-ring: 2px;
   --unwired-halo: 12px;
+  box-shadow: 0 0 0 var(--unwired-ring) rgba(200, 210, 224, 0.25);
+}
+
+.unwired-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    0 0 0 var(--unwired-ring) rgba(238, 242, 248, 0.85),
+    0 0 var(--unwired-halo) 2px rgba(220, 230, 244, 0.28);
+  opacity: 0;
   animation: unwired-ring-breathe var(--board-pulse) ease-in-out infinite;
 }
 
@@ -1525,7 +1769,18 @@ img {
 
 /* The board-level tally breathes on the same clock as the cards it counts. */
 .unwired-notice {
+  position: relative;
   animation: unwired-reason-breathe var(--board-pulse) ease-in-out infinite;
+}
+
+.unwired-notice::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(238, 242, 248, 0.16);
+  opacity: 0;
+  animation: unwired-wash-breathe var(--board-pulse) ease-in-out infinite;
 }
 
 /* Same bargain the dead-loop ring strikes: keep the mark, drop the movement. */
@@ -1539,8 +1794,16 @@ img {
   .recipe-node-shell[data-verdict="unwired"] .flow-port--bind {
     border-color: #ffffff;
   }
+  .recipe-node-shell[data-verdict="unwired"] .flow-port--bind::after,
+  .recipe-node-shell[data-verdict="unwired"] .verdict-reason-cell::after,
+  .unwired-notice::after {
+    content: none;
+  }
   .unwired-ring {
     box-shadow: 0 0 0 var(--unwired-ring) rgba(238, 242, 248, 0.85);
+  }
+  .unwired-ring::after {
+    content: none;
   }
 }
 
@@ -1550,8 +1813,18 @@ img {
   animation: none;
 }
 
+.factory-flow-board--calm .recipe-node-shell[data-verdict="unwired"] .flow-port--bind::after,
+.factory-flow-board--calm .recipe-node-shell[data-verdict="unwired"] .verdict-reason-cell::after,
+.factory-flow-board--calm .unwired-notice::after {
+  content: none;
+}
+
 .factory-flow-board--calm .unwired-ring {
   box-shadow: 0 0 0 var(--unwired-ring) #7b8b9c;
+}
+
+.factory-flow-board--calm .unwired-ring::after {
+  content: none;
 }
 
 /* The one state whose wash is cool. See --verdict-clogged-ink. */
@@ -1603,17 +1876,17 @@ img {
    where the compositor has anything left to draw. The mark did not dim, it
    disappeared and came back, which reads as a rendering fault rather than as
    a pulse. Nothing that has to survive zoom-out may animate its size. */
+/* Same two-layer bargain as the unwired ring: the dim shadow lives on the
+   element, the lit one on a ::after, and only the ::after's OPACITY animates.
+   An animated box-shadow is a paint property - it repainted every ring card
+   and its drop-shadow filter every frame, forever. */
 @keyframes dead-loop-breathe {
   0%,
   100% {
-    box-shadow:
-      0 0 0 var(--dead-loop-ring) #a83b3b,
-      0 0 var(--dead-loop-halo) 1px rgba(200, 60, 60, 0.25);
+    opacity: 0;
   }
   50% {
-    box-shadow:
-      0 0 0 var(--dead-loop-ring) #ff6b6b,
-      0 0 var(--dead-loop-halo-lit) 6px rgba(255, 90, 90, 0.6);
+    opacity: 1;
   }
 }
 
@@ -1625,6 +1898,19 @@ img {
   --dead-loop-ring: 3px;
   --dead-loop-halo: 10px;
   --dead-loop-halo-lit: 24px;
+  box-shadow:
+    0 0 0 var(--dead-loop-ring) #a83b3b,
+    0 0 var(--dead-loop-halo) 1px rgba(200, 60, 60, 0.25);
+}
+
+.dead-loop-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    0 0 0 var(--dead-loop-ring) #ff6b6b,
+    0 0 var(--dead-loop-halo-lit) 6px rgba(255, 90, 90, 0.6);
+  opacity: 0;
   animation: dead-loop-breathe var(--board-pulse) ease-in-out infinite;
 }
 
@@ -1633,14 +1919,10 @@ img {
 @keyframes clog-lock-breathe {
   0%,
   100% {
-    box-shadow:
-      0 0 0 var(--dead-loop-ring) #3d7291,
-      0 0 var(--dead-loop-halo) 1px rgba(111, 178, 214, 0.25);
+    opacity: 0;
   }
   50% {
-    box-shadow:
-      0 0 0 var(--dead-loop-ring) #6fb2d6,
-      0 0 var(--dead-loop-halo-lit) 6px rgba(120, 190, 230, 0.6);
+    opacity: 1;
   }
 }
 
@@ -1652,6 +1934,19 @@ img {
   --dead-loop-ring: 3px;
   --dead-loop-halo: 10px;
   --dead-loop-halo-lit: 24px;
+  box-shadow:
+    0 0 0 var(--dead-loop-ring) #3d7291,
+    0 0 var(--dead-loop-halo) 1px rgba(111, 178, 214, 0.25);
+}
+
+.clog-lock-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    0 0 0 var(--dead-loop-ring) #6fb2d6,
+    0 0 var(--dead-loop-halo-lit) 6px rgba(120, 190, 230, 0.6);
+  opacity: 0;
   animation: clog-lock-breathe var(--board-pulse) ease-in-out infinite;
 }
 
@@ -1702,16 +1997,21 @@ img {
    movement: hold it at the bright end rather than dropping the signal. */
 @media (prefers-reduced-motion: reduce) {
   .dead-loop-ring {
-    animation: none;
     box-shadow:
       0 0 0 var(--dead-loop-ring) #ff6b6b,
       0 0 var(--dead-loop-halo-lit) 4px rgba(255, 90, 90, 0.4);
   }
+  .dead-loop-ring::after {
+    content: none;
+  }
 }
 
 .factory-flow-board--calm .dead-loop-ring {
-  animation: none;
   box-shadow: 0 0 0 var(--dead-loop-ring) #7b8b9c;
+}
+
+.factory-flow-board--calm .dead-loop-ring::after {
+  content: none;
 }
 
 /* The ring's wires, on the SAME clock as its cards: the whole circle has to

@@ -309,6 +309,7 @@ export const factoryNodeSchema = z.object({
     .min(1)
     .max(64)
     .optional(),
+  energyHatchType: z.string().min(1).optional(),
   machineHandlerId: z.string().min(1).optional(),
   coilTier: z.string().min(1).optional(),
   machineConfigTiers: z.record(z.string().min(1), z.string().min(1)).optional(),
@@ -335,7 +336,7 @@ export const factoryStorageSchema = z.object({
   capacity: z.number().positive().optional(),
   // Absent on every plan written before drains had a mode, and absent is
   // `product` - the pulling one - so nothing anybody has saved changes pace.
-  drainMode: z.enum(["product", "byproduct"]).optional(),
+  drainMode: z.enum(["product", "byproduct", "trash"]).optional(),
   // Absent means `overflow`: every buffer catches surplus unless the player
   // deliberately sets it strict.
   bufferMode: z.enum(["overflow", "strict"]).optional(),
@@ -423,6 +424,8 @@ export const factoryEdgeSchema = z.object({
   ratePerSecond: z.number().positive().optional(),
   labelOffset: z.object({ x: z.number(), y: z.number() }).optional(),
   waypoints: z.array(z.object({ x: z.number(), y: z.number() })).optional(),
+  // A loose cell wire's Canner ratio; see FactoryEdge.crossForm.
+  crossForm: z.object({ litresPerCell: z.number().positive() }).optional(),
 });
 
 export const fuelProfileSchema = z
@@ -480,7 +483,15 @@ export const factoryProjectSchema = z.object({
   icon: entryIconSchema.optional(),
   view: planViewStateSchema.optional(),
   targetRate: targetRateSchema.optional(),
-  // Sketch mode: solve as if every bare slot had its boundary drawer.
+  // What the board does with an input nothing feeds and output nothing takes.
+  setupRules: z
+    .object({
+      freeInputs: z.boolean().optional(),
+      freeOutputs: z.boolean().optional(),
+      looseCellWires: z.boolean().optional(),
+    })
+    .optional(),
+  // Legacy sketch mode, rewritten as both rules on load.
   assumeBoundaries: z.boolean().optional(),
   recipes: z.array(recipeSchema),
   nodes: z.array(factoryNodeSchema),

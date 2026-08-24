@@ -291,6 +291,14 @@ describe("curated machine table", () => {
         "Mega Blast Furnace",
         "Arc Furnace",
         "Short Circuit Heater",
+        // The plain parallels-per-voltage-tier batch, from
+        // gregtech.common.tileentities.machines.multi (MTEIndustrialChemicalBath
+        // and siblings); the reference calculator never covered these.
+        "Industrial Chemical Bath",
+        "Industrial Bending Machine",
+        "Industrial 3D Copying Machine",
+        "Mass Solidifier",
+        "L.A.T.E.X.",
         // The steam multiblocks, from MTESteamMacerator and its siblings in
         // gregtech.common.tileentities.machines.multi.steam.
         "Steam Grinder",
@@ -301,6 +309,10 @@ describe("curated machine table", () => {
         "Steam Blender",
         "Steam Fuser",
         "Steam Hearth",
+        // GT++'s Electric Auto Workbench, from MTEElectricAutoWorkbench in
+        // gtPlusPlus.xmod.gregtech.common.tileentities.automation; not a
+        // recipe-map machine, so the reference never covered it.
+        "Auto Workbench",
       ].map(normalizeMachineName),
     );
     // Every entry must trace back to a reference definition or a direct source

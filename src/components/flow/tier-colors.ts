@@ -2,23 +2,32 @@ import type { MachineTier } from "@/lib/model/types";
 
 type VoltageTier = Exclude<MachineTier, "DEMO">;
 
+/**
+ * The game's own tier colours, transcribed from GTValues.TIER_COLORS (each an
+ * EnumChatFormatting code): ULV red, LV dark green, MV gold, HV yellow, EV
+ * dark gray, IV blue, LuV light purple, ZPM aqua - then the underlined ranks,
+ * which REUSE earlier colours and are told apart by the underline exactly as
+ * the game does (UV is LV's green underlined, UMV is ULV's red, UXV is UHV's
+ * dark red). Borders and shadows are the colour at 55%, text flips black on
+ * the light backgrounds.
+ */
 export const GT_TIER_COLORS: Record<
   VoltageTier,
-  { background: string; border: string; text: string; shadow: string }
+  { background: string; border: string; text: string; shadow: string; underline?: boolean }
 > = {
-  ULV: { background: "#565656", border: "#222222", text: "#f7f7f7", shadow: "#111111" },
-  LV: { background: "#8b8b8b", border: "#3f3f3f", text: "#ffffff", shadow: "#4a4a4a" },
-  MV: { background: "#c9862e", border: "#744613", text: "#ffffff", shadow: "#7a4b1e" },
-  HV: { background: "#d6bd2b", border: "#867314", text: "#111111", shadow: "#8f7d16" },
-  EV: { background: "#8f72c9", border: "#4f347f", text: "#ffffff", shadow: "#4d3a76" },
-  IV: { background: "#5776c9", border: "#273f89", text: "#ffffff", shadow: "#2c4078" },
-  LuV: { background: "#d28bd0", border: "#854682", text: "#111111", shadow: "#8a4f87" },
-  ZPM: { background: "#d044b8", border: "#7a246b", text: "#ffffff", shadow: "#7c2b70" },
-  UV: { background: "#35b7b2", border: "#176d69", text: "#071b1a", shadow: "#1d726f" },
-  UHV: { background: "#cf2f2f", border: "#751919", text: "#ffffff", shadow: "#7d2020" },
-  UEV: { background: "#2f2f2f", border: "#090909", text: "#ffffff", shadow: "#111111" },
-  UIV: { background: "#f1f1f1", border: "#969696", text: "#111111", shadow: "#aaaaaa" },
-  UMV: { background: "#55dfe6", border: "#16868b", text: "#071b1a", shadow: "#1a9197" },
-  UXV: { background: "#2dd36f", border: "#146b38", text: "#06180c", shadow: "#18743d" },
-  MAX: { background: "#ff5bd6", border: "#8c2172", text: "#111111", shadow: "#9a2b7f" },
+  ULV: { background: "#FF5555", border: "#8C2F2F", text: "#ffffff", shadow: "#8C2F2F" },
+  LV: { background: "#00AA00", border: "#005E00", text: "#ffffff", shadow: "#005E00" },
+  MV: { background: "#FFAA00", border: "#8C5E00", text: "#111111", shadow: "#8C5E00" },
+  HV: { background: "#FFFF55", border: "#8C8C2F", text: "#111111", shadow: "#8C8C2F" },
+  EV: { background: "#555555", border: "#2F2F2F", text: "#ffffff", shadow: "#2F2F2F" },
+  IV: { background: "#5555FF", border: "#2F2F8C", text: "#ffffff", shadow: "#2F2F8C" },
+  LuV: { background: "#FF55FF", border: "#8C2F8C", text: "#ffffff", shadow: "#8C2F8C" },
+  ZPM: { background: "#55FFFF", border: "#2F8C8C", text: "#111111", shadow: "#2F8C8C" },
+  UV: { background: "#00AA00", border: "#005E00", text: "#ffffff", shadow: "#005E00", underline: true },
+  UHV: { background: "#AA0000", border: "#5E0000", text: "#ffffff", shadow: "#5E0000", underline: true },
+  UEV: { background: "#AA00AA", border: "#5E005E", text: "#ffffff", shadow: "#5E005E", underline: true },
+  UIV: { background: "#0000AA", border: "#00005E", text: "#ffffff", shadow: "#00005E", underline: true },
+  UMV: { background: "#FF5555", border: "#8C2F2F", text: "#ffffff", shadow: "#8C2F2F", underline: true },
+  UXV: { background: "#AA0000", border: "#5E0000", text: "#ffffff", shadow: "#5E0000", underline: true },
+  MAX: { background: "#FFFFFF", border: "#8C8C8C", text: "#111111", shadow: "#8C8C8C", underline: true },
 };

@@ -169,6 +169,22 @@ describe("recipe machine handlers", () => {
     }
   });
 
+  it("offers the Auto Workbench first on crafting-grid recipes", () => {
+    // The crafting maps export no handlers; the two choices are synthesized:
+    // the machine a plan places, then the crafting table's instant hand-craft.
+    for (const machineType of ["Shaped Crafting", "Shapeless Crafting"]) {
+      const handlers = getRecipeMachineHandlers(testRecipe(machineType, "NONE"));
+
+      expect(handlers.map((handler) => handler.label)).toEqual(["Auto Workbench", machineType]);
+      expect(handlers[0]).toMatchObject({
+        minimumTier: "LV",
+        durationTicks: 64,
+        eut: 32,
+        kind: "single",
+      });
+    }
+  });
+
   it("applies the selected handler to the effective recipe", () => {
     const recipe = {
       ...testRecipe("Shaped Crafting", "NONE"),
@@ -386,6 +402,33 @@ describe("multiblock machine config controls", () => {
     expect(
       getRecipeCoilTierControl(testRecipe("Chemical Plant"), { coilTier: "kanthal" }),
     ).toBeUndefined();
+  });
+
+  it("hides the coil knob on machines whose coil is structure only", () => {
+    // The Large Chemical Reactor requires exactly one coil of any tier and
+    // reads nothing off it; older datasets still carry the scraped control.
+    const coilControl = {
+      id: "heatingCoil",
+      label: "Heating Coil",
+      minimumKey: "cupronickel",
+      defaultKey: "cupronickel",
+      tiers: [
+        {
+          key: "cupronickel",
+          label: "Cupronickel",
+          resource: { kind: "item" as const, id: "coil", amount: 1, displayName: "Coil" },
+        },
+      ],
+    };
+    for (const machineType of ["Large Chemical Reactor", "Mega Chemical Reactor"]) {
+      const recipe = { ...testRecipe(machineType), machineConfigControls: [coilControl] };
+      expect(getRecipeCoilTierControl(recipe, { coilTier: "cupronickel" })).toBeUndefined();
+    }
+    // A machine the table does not hide it on still shows the knob.
+    const shown = { ...testRecipe("Imported Machine"), machineConfigControls: [coilControl] };
+    expect(getRecipeCoilTierControl(shown, { coilTier: "cupronickel" })?.current.key).toBe(
+      "cupronickel",
+    );
   });
 });
 

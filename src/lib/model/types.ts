@@ -306,6 +306,13 @@ export interface FactoryNode {
    * hatches.
    */
   energyHatches?: number;
+  /**
+   * Which energy hatch family feeds the machine (`energy-hatches.ts`).
+   * Absent means the regular 2 A hatches above; the exotic families
+   * (multi-amp, laser) carry their whole rating through ONE hatch, so
+   * `energyHatches` is clamped to 1 while one of them is selected.
+   */
+  energyHatchType?: string;
   machineHandlerId?: string;
   coilTier?: string;
   machineConfigTiers?: Record<string, string>;
@@ -332,8 +339,13 @@ export interface FactoryNode {
  * `byproduct` only catches what is left: it asks for nothing at all, so the
  * pace is set by whoever really wants the output (or by the plan's target
  * rate), and the leftover lands here instead of clogging the machine.
+ *
+ * `trash` voids what arrives: it asks for nothing, un-clogs its feeder like a
+ * byproduct, and what it eats is discarded from the books entirely instead of
+ * being counted as surplus. The drawer as a bin - this replaced the separate
+ * trash can node's spawn button (2026-08-23); old trash can nodes still work.
  */
-export type StorageDrainMode = "product" | "byproduct";
+export type StorageDrainMode = "product" | "byproduct" | "trash";
 
 /**
  * How a BUFFER treats a surplus. `overflow` (the default) catches what its
@@ -517,6 +529,18 @@ export interface FactoryEdge {
   resourceId: ResourceId;
   label?: string;
   ratePerSecond?: number;
+  /**
+   * A loose cell wire (SetupRules.looseCellWires): the edge's own resource is
+   * what leaves the source - the filled CELL or the FLUID - and its target
+   * handle names the other form's input it lands on. This carries the
+   * Canner's litres-per-cell ratio, fetched when the wire was drawn. The
+   * solver expands such an edge through a hidden free Tank (see
+   * expandCrossFormEdges in throughput.ts); no wire ever crosses kinds on
+   * its own.
+   */
+  crossForm?: {
+    litresPerCell: number;
+  };
   labelOffset?: {
     x: number;
     y: number;
@@ -583,6 +607,35 @@ export interface PlanViewState {
   favouriteResourceKeys?: string[];
 }
 
+/**
+ * The two things a board cannot do for itself: find stock for an input
+ * nothing feeds, and get rid of output nothing takes.
+ *
+ * Both off is the CLOSED plan, and the default: you declare the boundary by
+ * wiring it, a slot with no wire reads UNWIRED, and a surplus with nowhere to
+ * go clogs. Turning one on is exactly like wiring a source drawer onto every
+ * input, or a product drawer onto every output - including slots that already
+ * have a wire, so a half-fed input tops up and a surplus output spills rather
+ * than holding its machine back.
+ *
+ * The drawers are virtual: they exist inside the solve and never reach the
+ * board, so nothing the player drew is touched or hidden.
+ */
+export interface SetupRules {
+  /** An input short of stock takes the rest from off the board. */
+  freeInputs?: boolean;
+  /** Output with nowhere to go leaves the board instead of clogging. */
+  freeOutputs?: boolean;
+  /**
+   * A filled cell may wire straight onto its fluid's input, converting for
+   * free at the Canner's own ratio (stored on the edge at wire time, see
+   * FactoryEdge.crossForm). Off by default: the honest bridge is a Tank or
+   * Canner card, and this rule is the player choosing convenience over it.
+   * Turning it off later keeps the wires already drawn.
+   */
+  looseCellWires?: boolean;
+}
+
 export interface FactoryProject {
   schemaVersion: typeof PROJECT_SCHEMA_VERSION;
   id: string;
@@ -597,11 +650,11 @@ export interface FactoryProject {
   /** Only shared setups carry this; see PlanViewState. */
   view?: PlanViewState;
   targetRate?: TargetRate;
+  /** How the board treats what it cannot feed or shift. See SetupRules. */
+  setupRules?: SetupRules;
   /**
-   * Sketch mode. When true the solve assumes the plan's boundary: every bare
-   * input is supplied for free and every bare output is exported, via virtual
-   * drawers that never reach the board. Declared boundaries still win - only
-   * slots with no wire are filled in. For quick math before the wiring.
+   * LEGACY sketch mode, read on load and rewritten as both board rules.
+   * Plans saved before the rules existed still carry it; nothing writes it.
    */
   assumeBoundaries?: boolean;
   recipes: Recipe[];

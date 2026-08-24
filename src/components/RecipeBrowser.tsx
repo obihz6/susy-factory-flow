@@ -5,16 +5,13 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
-  Cpu,
   Factory,
-  GitBranchPlus,
   LayoutGrid,
   List,
-  Plus,
   Search,
   X,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { PointerEvent, RefObject, WheelEvent } from "react";
 import { DEFAULT_DATASET_MANIFEST_URL } from "@/lib/datasets";
 import {
@@ -23,17 +20,15 @@ import {
   queryRecipeDatasetRecipes,
   type RecipeDatasetResourceQueryResult,
   type RecipeDatasetQueryResult,
+  type RecipeMapSelection,
 } from "@/lib/datasets/browser-loader";
+import type {
+  RecipeQueryClause,
+  RecipeQuerySideOp,
+} from "@/lib/datasets/recipe-query";
 import type { DatasetResourceIndexEntry, RecipeSummary } from "@/lib/datasets/types";
-import {
-  GT_VOLTAGE_TIERS,
-  formatRate,
-  getRecipeMachineHandlers,
-  resourceLabel,
-  resourceMatchesInput,
-} from "@/lib/model";
+import { resourceLabel, resourceMatchesInput } from "@/lib/model";
 import { applyRecipeInputOverrides } from "@/lib/model/recipe-input-overrides";
-import { getRecipeProgrammedCircuit } from "@/lib/model/programmed-circuit";
 import {
   buildSearchVocabulary,
   matchSearchEntry,
@@ -45,12 +40,7 @@ import {
 } from "@/lib/search";
 import { useFactoryStore } from "@/store/factory-store";
 import type { RecipeInputPicks, TierFilter } from "@/store/factory-store";
-import {
-  AlternativeCycleScope,
-  useAlternativeCycleFacesRef,
-} from "@/components/nei/AlternativeCycleScope";
 import type { Recipe, ResourceAmount } from "@/lib/model/types";
-import { usesNativeNeiChrome } from "@/lib/nei/layout";
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value";
 import { OPEN_SETUPS_EVENT } from "@/lib/setups-tab";
 import { OPEN_SIDEBAR_TAB_EVENT, takePendingSidebarTab } from "@/lib/sidebar-tab";
@@ -62,136 +52,24 @@ import { ControlsCard } from "./ControlsCard";
 import { ChevronIcon } from "./PanelDrawer";
 import { BlueprintPanel } from "./BlueprintPanel";
 import { SetupsPanel } from "./SetupsPanel";
-import { machineArtPixels } from "./flow/MachinePicker";
-import { useMachineHandlerIcons } from "./flow/machine-icons";
-import { NEI_PALETTE } from "@/lib/nei-renderer/theme/palette";
 import { MinecraftTooltip } from "./nei/MinecraftTooltip";
-import { NeiRecipeWindow } from "./nei/NeiRecipeWindow";
 import { ResourceIcon } from "./nei/ResourceIcon";
+import {
+  RecipeSearchOverlay,
+  type RecipeMapChip,
+  type StencilClause,
+} from "./RecipeSearchOverlay";
+
+// The preview helpers used to live here; they moved out with the overlay and
+// keep their old import path for everyone already using it.
+export {
+  contextualizePreviewRecipe,
+  summaryToPreviewRecipe,
+  type PreviewContextResource,
+} from "./recipe-preview";
 
 const RECIPE_QUERY_LIMIT = 120;
 
-/**
- * The recipe book's size rules.
- *
- * A recipe is drawn on a fixed NEI canvas, so a card cannot be squeezed: it is
- * either given the width it needs or it gets cut off, which is what used to
- * happen. Every number below is therefore derived from what one card needs.
- */
-// The NEI canvas most recipes are drawn on. Wider ones exist, and like the row
-// height, one decision is made for the whole grid rather than per card.
-const NEI_CANVAS_WIDTH = 170;
-// The add button sits in the panel's own top corner, so a card is no wider
-// than the recipe it draws.
-const CARD_ADD_GUTTER = 0;
-const CARD_GAP = 12;
-// The time and circuit strip along the foot of the panel.
-const CARD_CHROME_HEIGHT = 38;
-const NEI_CANVAS_HEIGHT_DEFAULT = 82;
-const NEI_CANVAS_HEIGHT_NATIVE = 120;
-const RECIPE_CARD_MAX_COLUMNS = 3;
-
-const BOARD_SIDEBAR_LEFT = 306;
-const BOARD_SIDEBAR_RIGHT = 330;
-const CATEGORY_RAIL_WIDTH = 290;
-// One column of cards next to the category rail.
-const RECIPE_BOOK_MIN_WIDTH = 640;
-const RECIPE_BOOK_MAX_WIDTH = 1400;
-const RECIPE_BOOK_MAX_HEIGHT = 860;
-// Two columns of cards next to the rail: the size worth stepping around the
-// board's sidebars for.
-const RECIPE_BOOK_COMFORTABLE_WIDTH = 1080;
-// The rail keeps its column only while the recipes still get two of theirs.
-// Held any lower it would win the argument for space and leave a single card
-// stranded in a wide empty column.
-const RECIPE_BOOK_RAIL_NEEDS =
-  CATEGORY_RAIL_WIDTH + (NEI_CANVAS_WIDTH * 2 + CARD_ADD_GUTTER) * 2 + CARD_GAP + 24;
-const RECIPE_BOOK_SHEET_BELOW = 700;
-const ZERO_OFFSET = { x: 0, y: 0 };
-
-interface MeasuredCard {
-  /** Which list this was measured from, so a new list starts over. */
-  key: string;
-  /** One recipe's drawn width, unscaled. */
-  unit: number;
-  /** The tallest card drawn so far, in px at the scale it was drawn. */
-  row: number;
-}
-
-/** Everything between the book's edge and the cards: rail, padding, borders. */
-function recipeBookChrome(showRail: boolean) {
-  return (showRail ? CATEGORY_RAIL_WIDTH : 0) + 24 + 4;
-}
-
-/**
- * The width the book actually needs, which is not the width it can have.
- *
- * Taking every spare pixel made the window wider without fitting another card
- * in it, and the difference went to margins either side of the cards. So the
- * columns are chosen from the room available, and then the book is pulled back
- * in to exactly hold them.
- */
-function fitRecipeBookWidth(available: number, showRail: boolean, unitWidth: number) {
-  const chrome = recipeBookChrome(showRail);
-  const { columns, scale } = chooseRecipeGrid(available - chrome, unitWidth);
-  const cards = columns * unitWidth * scale + CARD_GAP * (columns - 1);
-  return Math.min(available, chrome + cards);
-}
-
-interface RecipeBookViewport {
-  /** Filling the screen rather than floating over the board. */
-  sheet: boolean;
-  /** The category rail is a column of its own, not a dropdown. */
-  showRail: boolean;
-  dodgesSidebars: boolean;
-  width: number;
-  height: number;
-  /** Measured, not assumed: these columns can be collapsed. */
-  sidebars: { left: number; right: number };
-}
-
-/**
- * How many cards fit across, and how big to draw each one.
- *
- * Readability wins over density: the scale never drops below 2 while a single
- * column can still hold it, so a narrow book shows one large readable recipe
- * rather than two clipped ones.
- */
-function chooseRecipeGrid(
-  width: number,
-  unitWidth: number = NEI_CANVAS_WIDTH,
-): { columns: number; scale: number } {
-  const cardAtScaleTwo = unitWidth * 2 + CARD_ADD_GUTTER;
-  const columnWidth = (columns: number) => (width - CARD_GAP * (columns - 1)) / columns;
-
-  let columns = 1;
-  for (let candidate = RECIPE_CARD_MAX_COLUMNS; candidate >= 2; candidate -= 1) {
-    if (columnWidth(candidate) >= cardAtScaleTwo) {
-      columns = candidate;
-      break;
-    }
-  }
-
-  const column = columnWidth(columns);
-  if (column < cardAtScaleTwo) {
-    // A phone. One recipe, drawn to fill the width it has rather than sitting
-    // small in the middle of it: a recipe is a grid of 18px slots, and at scale 1
-    // on a 390px screen it was a postage stamp with two thirds of the drawer
-    // empty beside it. Quantised to quarter steps, because the art is pixels and
-    // a whole-pixel-ish scale keeps slot borders from smearing.
-    const filling = Math.floor(((width - CARD_ADD_GUTTER) / unitWidth) * 4) / 4;
-    return { columns: 1, scale: Math.max(1, Math.min(3, filling)) };
-  }
-
-  // A column with room to spare draws the recipe larger rather than leaving it
-  // small in the middle of an empty card.
-  return { columns, scale: Math.min(3, Math.floor(column / unitWidth)) };
-}
-
-function recipeRowHeight(scale: number, native: boolean) {
-  const canvas = native ? NEI_CANVAS_HEIGHT_NATIVE : NEI_CANVAS_HEIGHT_DEFAULT;
-  return canvas * scale + CARD_CHROME_HEIGHT;
-}
 const RESOURCE_DEFAULT_PAGE_SIZE = 6;
 const RESOURCE_ROW_HEIGHT = 40;
 const RESOURCE_ROW_GAP = 2;
@@ -217,8 +95,10 @@ const RESOURCE_WHEEL_PAGE_DELTA = 80;
 const RESOURCE_VIEW_STORAGE_KEY = "susy-factory-flow.resource-view.v1";
 /** Whether the filter block under the search box is folded away. */
 const RESOURCE_FILTERS_STORAGE_KEY = "susy-factory-flow.resource-filters.v1";
+/** The machine chips' multi-select: which maps' recipes the search shows. */
+const MAP_SELECTION_STORAGE_KEY = "susy-factory-flow.machine-map-selection.v1";
 
-type ResourceSortMode = "relevance" | "name" | "mod" | "recipes";
+type ResourceSortMode = "relevance" | "name" | "mod" | "made" | "uses";
 type ResourceViewMode = "list" | "grid";
 
 /**
@@ -307,6 +187,8 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   const maxTier = useFactoryStore((state) => state.maxTierFilter);
   const browserResource = useFactoryStore((state) => state.recipeBrowserResource);
   const browserMode = useFactoryStore((state) => state.recipeBrowserMode);
+  const browserSeed = useFactoryStore((state) => state.recipeBrowserSeed);
+  const refactorNodeId = useFactoryStore((state) => state.recipeBrowserRefactorNodeId);
   const selectedRecipeId = useFactoryStore((state) => state.selectedRecipeId);
   const setRecipeSearch = useFactoryStore((state) => state.setRecipeSearch);
   const setHighlightSearch = useFactoryStore((state) => state.setHighlightSearch);
@@ -315,10 +197,13 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   const clearResourceBrowser = useFactoryStore((state) => state.clearResourceBrowser);
   const selectRecipe = useFactoryStore((state) => state.selectRecipe);
   const addNodeForRecipe = useFactoryStore((state) => state.addNodeForRecipeObject);
+  const addConnectedNodeForRecipe = useFactoryStore(
+    (state) => state.addConnectedNodeForRecipeObject,
+  );
+  const refactorNodeWithRecipe = useFactoryStore((state) => state.refactorNodeWithRecipe);
   const beginRecipeAdd = useFactoryStore((state) => state.beginRecipeAdd);
   const resolveRecipeAdd = useFactoryStore((state) => state.resolveRecipeAdd);
   const failRecipeAdd = useFactoryStore((state) => state.failRecipeAdd);
-  const [selectedRecipeMap, setSelectedRecipeMap] = useState("");
   const [recipePage, setRecipePage] = useState(0);
   const [recipeBookSearch, setRecipeBookSearch] = useState("");
   const [filteredRecipes, setFilteredRecipes] = useState<RecipeSummary[]>([]);
@@ -334,6 +219,11 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   const [resourceView, setResourceView] = useState<ResourceViewMode>("list");
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [resourceFilter, setResourceFilter] = useState<ResourceFilterMode>("all");
+  // The machine chips' selection. Absent means everything is selected (the
+  // default); "exclude" carries the unselected chips, "include" the selected
+  // ones. Stored rather than derived so a map unselected on one search stays
+  // unselected on the next, even across searches where it never appears.
+  const [mapSelection, setMapSelection] = useState<RecipeMapSelection | undefined>(undefined);
   // The master switch: what the whole left panel is FOR right now — finding
   // items to build with, stamping saved blueprints, or browsing the network's
   // shared setups. One at a time, full column each; the old bottom-strip
@@ -351,6 +241,21 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   const [recipeMapIcons, setRecipeMapIcons] = useState<Record<string, DatasetResourceIndexEntry>>(
     {},
   );
+  const [recipeMapCounts, setRecipeMapCounts] = useState<Record<string, number>>({});
+  // The stencil's edits, keyed by the browse that seeded them: a NEW browse
+  // (different item or direction) starts the stencil over, while edits made on
+  // the open search survive its own refetches. Held as edits-plus-key rather
+  // than plain state so a fresh browse can never fire a query against the
+  // previous item's conditions.
+  const [stencilEdits, setStencilEdits] = useState<
+    | {
+        key: string;
+        clauses: StencilClause[];
+        takesOp: RecipeQuerySideOp;
+        makesOp: RecipeQuerySideOp;
+      }
+    | undefined
+  >(undefined);
   const [recipeQueryLoading, setRecipeQueryLoading] = useState(false);
   const [recipeQueryError, setRecipeQueryError] = useState<string | undefined>();
   const recipeQueryCacheRef = useRef<Map<string, RecipeQueryCacheEntry>>(new Map());
@@ -458,7 +363,103 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
     [recipeMapIcons, recipeMaps],
   );
 
-  const activeRecipeMap = recipeMaps.includes(selectedRecipeMap) ? selectedRecipeMap : "";
+  const recipeMapChips = useMemo<RecipeMapChip[]>(
+    () =>
+      recipeMapTabs.map((tab) => ({
+        ...tab,
+        count: recipeMapCounts[tab.id],
+        selected: isMapSelectedIn(mapSelection, tab.id),
+      })),
+    [mapSelection, recipeMapCounts, recipeMapTabs],
+  );
+
+  // The All chip reads from what is on screen: lit when every listed chip is
+  // selected, whatever out-of-view maps the stored selection also carries.
+  const allRecipeMapsSelected = useMemo(
+    () => recipeMaps.every((recipeMap) => isMapSelectedIn(mapSelection, recipeMap)),
+    [mapSelection, recipeMaps],
+  );
+
+  // Opening the search seeds the stencil with exactly the question the click
+  // asked: left click = one output condition, right click = one input - or,
+  // for a refactor, every input and output of the card being replaced. Edits
+  // made after that carry the browse's key and win while it stays open.
+  const browseKey = browserResource
+    ? [
+        refactorNodeId ? `refactor:${refactorNodeId}` : "",
+        browserResource.kind,
+        browserResource.id,
+        browserMode,
+      ].join("|")
+    : "";
+  const seededStencil = useMemo<StencilClause[]>(() => {
+    if (!browserResource) {
+      return [];
+    }
+    if (browserSeed?.length) {
+      return browserSeed.map((clause) => ({ ...clause }));
+    }
+    return [
+      {
+        role: browserMode === "uses" ? "takes" : "makes",
+        kind: browserResource.kind,
+        id: browserResource.id,
+        displayName: browserResource.displayName,
+        iconPath: browserResource.iconPath,
+        iconAtlas: browserResource.iconAtlas,
+        dominantColor: browserResource.dominantColor ?? browserResource.iconAtlas?.dominantColor,
+      },
+    ];
+  }, [browserMode, browserResource, browserSeed]);
+  const editsApply = stencilEdits?.key === browseKey;
+  const stencilClauses = editsApply ? stencilEdits.clauses : seededStencil;
+  // ALL is the default reading: a fresh stencil holds one condition, where
+  // all and any agree, and every added condition is usually meant as "and".
+  const takesOp = editsApply ? stencilEdits.takesOp : "all";
+  const makesOp = editsApply ? stencilEdits.makesOp : "all";
+  const queryClauses = useMemo<RecipeQueryClause[]>(
+    () => stencilClauses.map(({ role, kind, id }) => ({ role, kind, id })),
+    [stencilClauses],
+  );
+
+  const changeStencilClauses = useCallback(
+    (clauses: StencilClause[]) => {
+      setStencilEdits({ key: browseKey, clauses, takesOp, makesOp });
+      setRecipePage(0);
+    },
+    [browseKey, makesOp, takesOp],
+  );
+  const changeTakesOp = useCallback(
+    (op: RecipeQuerySideOp) => {
+      setStencilEdits({ key: browseKey, clauses: stencilClauses, takesOp: op, makesOp });
+      setRecipePage(0);
+    },
+    [browseKey, makesOp, stencilClauses],
+  );
+  const changeMakesOp = useCallback(
+    (op: RecipeQuerySideOp) => {
+      setStencilEdits({ key: browseKey, clauses: stencilClauses, takesOp, makesOp: op });
+      setRecipePage(0);
+    },
+    [browseKey, stencilClauses, takesOp],
+  );
+  const swapStencilSides = useCallback(() => {
+    setStencilEdits({
+      key: browseKey,
+      clauses: stencilClauses.map((clause) => ({
+        ...clause,
+        role: clause.role === "takes" ? "makes" : "takes",
+      })),
+      takesOp: makesOp,
+      makesOp: takesOp,
+    });
+    setRecipePage(0);
+  }, [browseKey, makesOp, stencilClauses, takesOp]);
+
+  const recipeTotalAcrossMaps = useMemo(() => {
+    const counted = Object.values(recipeMapCounts).reduce((sum, count) => sum + count, 0);
+    return counted > 0 ? counted : recipeTotal;
+  }, [recipeMapCounts, recipeTotal]);
   const activeRecipeQuery = activeResource
     ? debouncedRecipeBookSearch.trim()
     : debouncedRecipeSearch.trim();
@@ -469,20 +470,32 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   );
 
   const getRecipeQueryKey = useCallback(
-    (recipeMap: string, page: number) =>
+    (selection: RecipeMapSelection | undefined, page: number) =>
       selectedDatasetVersion
         ? getRecipeQueryCacheKey({
             versionId: getDatasetVersionCacheKey(selectedDatasetVersion),
             query: activeRecipeQuery,
             resource: activeResource,
             mode: browserMode,
-            recipeMap,
+            clauses: queryClauses,
+            takesOp,
+            makesOp,
+            mapSelection: selection,
             maxTier,
             offset: page * RECIPE_QUERY_LIMIT,
             limit: RECIPE_QUERY_LIMIT,
           })
         : "",
-    [activeRecipeQuery, activeResource, browserMode, maxTier, selectedDatasetVersion],
+    [
+      activeRecipeQuery,
+      activeResource,
+      browserMode,
+      makesOp,
+      maxTier,
+      queryClauses,
+      selectedDatasetVersion,
+      takesOp,
+    ],
   );
 
   const getResourceQueryKey = useCallback(
@@ -537,19 +550,56 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
     window.localStorage.setItem(RESOURCE_FILTERS_STORAGE_KEY, open ? "open" : "folded");
   }, []);
 
-  const prefetchRecipeMap = useCallback(
+  // Everything selected is the default; a trimmed selection is a saved
+  // preference, applied deferred for the same SSR-agreement reason as the
+  // view above.
+  useEffect(() => {
+    const stored = readStoredMapSelection();
+    if (stored) {
+      return deferStateUpdate(() => setMapSelection(stored));
+    }
+    return undefined;
+  }, []);
+
+  const changeMapSelection = useCallback((selection: RecipeMapSelection | undefined) => {
+    setMapSelection(selection);
+    setRecipePage(0);
+    if (selection) {
+      window.localStorage.setItem(MAP_SELECTION_STORAGE_KEY, JSON.stringify(selection));
+    } else {
+      window.localStorage.removeItem(MAP_SELECTION_STORAGE_KEY);
+    }
+  }, []);
+
+  const toggleRecipeMap = useCallback(
+    (recipeMap: string) => {
+      changeMapSelection(toggledMapSelection(mapSelection, recipeMap, recipeMaps));
+    },
+    [changeMapSelection, mapSelection, recipeMaps],
+  );
+
+  // The All chip is select-all / select-none: lit, a click clears the board;
+  // unlit, a click selects everything (and forgets stored exclusions).
+  const toggleAllRecipeMaps = useCallback(() => {
+    changeMapSelection(allRecipeMapsSelected ? { mode: "include", maps: [] } : undefined);
+  }, [allRecipeMapsSelected, changeMapSelection]);
+
+  // A pointer over a chip is probably about to toggle it, so the answer that
+  // toggle would show starts travelling now.
+  const prefetchRecipeMapToggle = useCallback(
     (recipeMap: string) => {
       if (!selectedDatasetVersion) {
         return;
       }
 
       const query = activeRecipeQuery;
-      // Map tabs only exist inside the book, which only opens on a resource.
+      // Map chips only exist inside the book, which only opens on a resource.
       if (!activeResource) {
         return;
       }
 
-      const cacheKey = getRecipeQueryKey(recipeMap, 0);
+      const nextSelection = toggledMapSelection(mapSelection, recipeMap, recipeMaps);
+      const cacheKey = getRecipeQueryKey(nextSelection, 0);
       if (
         !cacheKey ||
         getCachedRecipeQuery(recipeQueryCacheRef.current, cacheKey) ||
@@ -571,7 +621,11 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
               }
             : undefined,
           mode: browserMode,
-          recipeMap: recipeMap || undefined,
+          clauses: queryClauses.length > 0 ? queryClauses : undefined,
+          takesOp,
+          makesOp,
+          allMaps: true,
+          mapSelection: nextSelection,
           maxTier,
           offset: 0,
           limit: RECIPE_QUERY_LIMIT,
@@ -582,7 +636,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           trimRecipeQueryCache(recipeQueryCacheRef.current);
         })
         .catch(() => {
-          // Prefetch is opportunistic; normal tab selection will surface real errors.
+          // Prefetch is opportunistic; the real toggle will surface real errors.
         })
         .finally(() => {
           pendingRecipePrefetchesRef.current.delete(cacheKey);
@@ -594,9 +648,30 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       browserMode,
       datasetManifestUrl,
       getRecipeQueryKey,
+      makesOp,
+      mapSelection,
       maxTier,
+      queryClauses,
+      recipeMaps,
       selectedDatasetVersion,
+      takesOp,
     ],
+  );
+
+  const searchPickerResources = useCallback(
+    async (pickerQuery: string, signal: AbortSignal) => {
+      if (!selectedDatasetVersion) {
+        return [];
+      }
+      const result = await queryRecipeDatasetResources(
+        datasetManifestUrl ?? DEFAULT_DATASET_MANIFEST_URL,
+        selectedDatasetVersion,
+        { query: pickerQuery, offset: 0, limit: 48 },
+        { signal },
+      );
+      return result.resources;
+    },
+    [datasetManifestUrl, selectedDatasetVersion],
   );
 
   const getFullRecipe = useCallback(
@@ -635,6 +710,8 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       const currentMode = currentState.recipeBrowserResource
         ? currentState.recipeBrowserMode
         : browserMode;
+      const currentRefactorNodeId = currentState.recipeBrowserRefactorNodeId;
+      const anchorNodeId = currentResource?.anchorNodeId;
       const contextResource = getRecipeAddContextResource(
         currentResource,
         currentMode,
@@ -647,7 +724,23 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       const pendingId = beginRecipeAdd(recipeSummary.name);
       try {
         const recipe = await getFullRecipe(recipeSummary.id, Boolean(currentResource));
-        addNodeForRecipe(recipe, contextResource, { machineHandlerId, inputPicks });
+        if (currentRefactorNodeId) {
+          // The refactor's landing: the pick replaces the card it came from.
+          refactorNodeWithRecipe(currentRefactorNodeId, recipe, { machineHandlerId });
+        } else if (anchorNodeId && contextResource) {
+          // Opened from a card's port: the pick lands beside that card and
+          // wires itself to the clicked resource.
+          addConnectedNodeForRecipe(recipe, anchorNodeId, contextResource, {
+            machineHandlerId,
+            inputPicks,
+          });
+        } else {
+          addNodeForRecipe(recipe, contextResource, {
+            machineHandlerId,
+            inputPicks,
+            focusCamera: true,
+          });
+        }
         resolveRecipeAdd(pendingId);
       } catch (error) {
         failRecipeAdd(
@@ -658,12 +751,14 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
     },
     [
       activeResource,
+      addConnectedNodeForRecipe,
       addNodeForRecipe,
       beginRecipeAdd,
       browserMode,
       clearResourceBrowser,
       failRecipeAdd,
       getFullRecipe,
+      refactorNodeWithRecipe,
       resolveRecipeAdd,
     ],
   );
@@ -799,8 +894,10 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
     browserMode,
     maxTier,
     activeRecipeQuery,
+    queryClauses,
+    takesOp,
+    makesOp,
     selectedDatasetVersion?.id,
-    selectedRecipeMap,
   ]);
 
   useEffect(() => {
@@ -815,14 +912,15 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
         setRecipeHasMore(false);
         setAvailableRecipeMaps([]);
         setRecipeMapIcons({});
+        setRecipeMapCounts({});
       });
     }
 
     const query = activeRecipeQuery;
-    // Nothing on screen reads these until a resource is being browsed - the book
-    // IS the resource view, and it opens with its own search box. Running the
-    // query anyway meant every keystroke in the item box searched 270,000
-    // recipes for a list no one ever saw.
+    // Nothing on screen reads these until a resource is being browsed - the
+    // search IS the resource view, and it opens with its own filter box.
+    // Running the query anyway meant every keystroke in the item box searched
+    // 270,000 recipes for a list no one ever saw.
     if (!activeResource) {
       return deferStateUpdate(() => {
         setFilteredRecipes([]);
@@ -830,12 +928,13 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
         setRecipeHasMore(false);
         setAvailableRecipeMaps([]);
         setRecipeMapIcons({});
+        setRecipeMapCounts({});
         setRecipeQueryLoading(false);
         setRecipeQueryError(undefined);
       });
     }
 
-    const cacheKey = getRecipeQueryKey(activeRecipeMap, recipePage);
+    const cacheKey = getRecipeQueryKey(mapSelection, recipePage);
     const cached = getCachedRecipeQuery(recipeQueryCacheRef.current, cacheKey);
     if (cached) {
       return scheduleAfterPaint(() => {
@@ -846,6 +945,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
         setRecipeHasMore(cached.hasMore);
         setAvailableRecipeMaps(cached.recipeMaps);
         setRecipeMapIcons(cached.recipeMapIcons ?? {});
+        setRecipeMapCounts(cached.recipeMapCounts ?? {});
         setRecipeQueryLoading(false);
         setRecipeQueryError(undefined);
       });
@@ -878,7 +978,11 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
               }
             : undefined,
           mode: browserMode,
-          recipeMap: activeRecipeMap || undefined,
+          clauses: queryClauses.length > 0 ? queryClauses : undefined,
+          takesOp,
+          makesOp,
+          allMaps: true,
+          mapSelection,
           maxTier,
           offset: recipePage * RECIPE_QUERY_LIMIT,
           limit: RECIPE_QUERY_LIMIT,
@@ -898,9 +1002,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           setRecipeHasMore(result.hasMore);
           setAvailableRecipeMaps(result.recipeMaps);
           setRecipeMapIcons(result.recipeMapIcons ?? {});
-          if (activeResource && !activeRecipeMap && result.recipeMaps[0]) {
-            setSelectedRecipeMap(result.recipeMaps[0]);
-          }
+          setRecipeMapCounts(result.recipeMapCounts ?? {});
           setRecipeQueryLoading(false);
         })
         .catch((error) => {
@@ -912,6 +1014,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           setRecipeHasMore(false);
           setAvailableRecipeMaps([]);
           setRecipeMapIcons({});
+          setRecipeMapCounts({});
           setRecipeQueryError(error instanceof Error ? error.message : "Recipe query failed.");
           setRecipeQueryLoading(false);
         });
@@ -923,15 +1026,18 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       cancelAfterPaint();
     };
   }, [
-    activeRecipeMap,
     activeRecipeQuery,
     activeResource,
     browserMode,
     datasetManifestUrl,
     getRecipeQueryKey,
+    makesOp,
+    mapSelection,
     maxTier,
+    queryClauses,
     recipePage,
     selectedDatasetVersion,
+    takesOp,
   ]);
   return (
     <>
@@ -1173,7 +1279,8 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
               <option value="relevance">Best match</option>
               <option value="name">Name A–Z</option>
               <option value="mod">By mod</option>
-              <option value="recipes">Most recipes</option>
+              <option value="made">Most ways to make</option>
+              <option value="uses">Most used</option>
             </select>
           </div>
         </ControlsCard>
@@ -1218,22 +1325,34 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       </aside>
 
       {activeResource ? (
-        <RecipeBookOverlay
-          activeRecipeMap={activeRecipeMap}
-          activeResource={activeResource}
-          mode={browserMode}
-          filteredRecipes={filteredRecipes}
-          isLoading={recipeQueryLoading}
-          query={recipeBookSearch}
-          queryError={recipeQueryError}
-          queryTotal={recipeTotal}
-          recipeMapTabs={recipeMapTabs}
+        <RecipeSearchOverlay
+          clauses={stencilClauses}
+          takesOp={takesOp}
+          makesOp={makesOp}
+          onClausesChange={changeStencilClauses}
+          onTakesOpChange={changeTakesOp}
+          onMakesOpChange={changeMakesOp}
+          onSwapSides={swapStencilSides}
+          recipeMapChips={recipeMapChips}
+          allRecipeMapsSelected={allRecipeMapsSelected}
+          onToggleRecipeMap={toggleRecipeMap}
+          onToggleAllRecipeMaps={toggleAllRecipeMaps}
+          onRecipeMapHover={prefetchRecipeMapToggle}
+          recipes={filteredRecipes}
+          totalAcrossMaps={recipeTotalAcrossMaps}
           hasMore={recipeHasMore}
-          selectedRecipeId={selectedRecipeId}
+          isLoading={recipeQueryLoading}
+          queryError={recipeQueryError}
+          query={recipeBookSearch}
+          onQueryChange={(query) => {
+            setRecipeBookSearch(query);
+            setRecipePage(0);
+          }}
           maxTier={maxTier}
           onMaxTierChange={setMaxTier}
+          selectedRecipeId={selectedRecipeId}
+          onSelectRecipe={selectRecipe}
           onAdd={handleAddRecipe}
-          onAddConnected={undefined}
           onPrefetch={prefetchRecipeAdd}
           onBrowseResource={(resource, mode) =>
             browseResource(
@@ -1249,22 +1368,14 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
               mode,
             )
           }
-          onRecipeMapChange={(recipeMap) => {
-            setSelectedRecipeMap(recipeMap);
-            setRecipePage(0);
-          }}
-          onQueryChange={(query) => {
-            setRecipeBookSearch(query);
-            setRecipePage(0);
-          }}
           onLoadMore={() => {
             if (!recipeQueryLoading && recipeHasMore) {
               setRecipePage((page) => page + 1);
             }
           }}
-          onRecipeMapHover={prefetchRecipeMap}
-          onSelectRecipe={selectRecipe}
           onClose={clearResourceBrowser}
+          contextResource={activeResource}
+          searchPickerResources={searchPickerResources}
         />
       ) : null}
     </>
@@ -1500,11 +1611,6 @@ function useBoardResourceResults(
     resources,
   ]);
 }
-
-export type PreviewContextResource = Pick<
-  ResourceAmount,
-  "kind" | "id" | "displayName" | "iconPath" | "iconAtlas" | "dominantColor"
->;
 
 interface RecipeMapTab {
   id: string;
@@ -2022,1130 +2128,6 @@ function ResourceResultPage({
   );
 }
 
-function RecipeBookOverlay({
-  activeRecipeMap,
-  activeResource,
-  filteredRecipes,
-  hasMore,
-  isLoading,
-  query,
-  queryError,
-  queryTotal,
-  recipeMapTabs,
-  selectedRecipeId,
-  maxTier,
-  onMaxTierChange,
-  onAdd,
-  onAddConnected,
-  onPrefetch,
-  onBrowseResource,
-  onRecipeMapChange,
-  onRecipeMapHover,
-  onQueryChange,
-  onLoadMore,
-  onSelectRecipe,
-  onClose,
-  mode,
-}: {
-  activeRecipeMap: string;
-  activeResource: IndexedResource & { anchorNodeId?: string };
-  mode: "recipes" | "uses";
-  filteredRecipes: RecipeSummary[];
-  hasMore: boolean;
-  isLoading: boolean;
-  query: string;
-  queryError?: string;
-  queryTotal: number;
-  recipeMapTabs: RecipeMapTab[];
-  selectedRecipeId?: string;
-  maxTier: TierFilter;
-  onMaxTierChange: (tier: TierFilter) => void;
-  onAdd: (
-    recipe: RecipeSummary,
-    machineHandlerId?: string,
-    inputPicks?: RecipeInputPicks,
-  ) => void | Promise<void>;
-  onAddConnected?: (recipeId: string) => void | Promise<void>;
-  onPrefetch?: (recipeId: string) => void;
-  onBrowseResource: (resource: ResourceAmount, mode: "recipes" | "uses") => void;
-  onRecipeMapChange: (recipeMap: string) => void;
-  onRecipeMapHover: (recipeMap: string) => void;
-  onQueryChange: (query: string) => void;
-  onLoadMore: () => void;
-  onSelectRecipe: (recipeId: string) => void;
-  onClose: () => void;
-}) {
-  const panelRef = useRef<HTMLElement>(null);
-  const layout = useRecipeBookViewport();
-  // Flipping between what makes this and what uses it is the same act as opening
-  // the book on it, just with the other answer asked for — so it goes through the
-  // same door rather than inventing a second one.
-  const switchMode = (next: "recipes" | "uses") => {
-    if (next !== mode) {
-      onBrowseResource({ ...activeResource, amount: 1 }, next);
-    }
-  };
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [measured, setMeasured] = useState<MeasuredCard>({
-    key: "",
-    unit: NEI_CANVAS_WIDTH,
-    row: 0,
-  });
-  // A book that fills the screen keeps its width; there is nowhere for a margin
-  // to go and shrinking it would only leave a gap at the edge.
-  const panelWidth = layout.sheet
-    ? layout.width
-    : fitRecipeBookWidth(layout.width, layout.showRail, measured.unit);
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
-  const displayedRecipes = filteredRecipes;
-
-  // A book that fills the screen has nowhere to be dragged to, so it ignores
-  // any offset rather than forgetting it: shrink the window and drag it, and
-  // widening the window again puts it back where it was left.
-  const appliedOffset = layout.sheet ? ZERO_OFFSET : dragOffset;
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  const handlePointerDown = (event: PointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || layout.sheet) {
-      return;
-    }
-
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: dragOffset.x,
-      originY: dragOffset.y,
-    };
-  };
-
-  const handlePointerMove = (event: PointerEvent<HTMLElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-
-    setDragOffset(
-      clampDragOffset(
-        {
-          x: drag.originX + event.clientX - drag.startX,
-          y: drag.originY + event.clientY - drag.startY,
-        },
-        panelRef.current,
-      ),
-    );
-  };
-
-  const handlePointerUp = (event: PointerEvent<HTMLElement>) => {
-    if (dragRef.current?.pointerId === event.pointerId) {
-      dragRef.current = null;
-    }
-  };
-
-  return (
-    <div
-      className={[
-        "pointer-events-auto fixed inset-0 flex items-center justify-center",
-        // While the book steps around the board's sidebars it sits under them,
-        // so they stay usable. Once it stops stepping around them it has to
-        // sit over them, or they clip the book instead.
-        layout.dodgesSidebars ? "z-30" : "z-50",
-        layout.sheet ? "" : "px-3 py-4",
-      ].join(" ")}
-      onPointerDown={onClose}
-      style={
-        layout.dodgesSidebars
-          ? { paddingLeft: layout.sidebars.left, paddingRight: layout.sidebars.right }
-          : undefined
-      }
-    >
-      <section
-        ref={panelRef}
-        className="pointer-events-auto relative flex flex-col font-mono"
-        aria-label="Recipe book"
-        onPointerDown={(event) => event.stopPropagation()}
-        style={{
-          transform: `translate(${appliedOffset.x}px, ${appliedOffset.y}px)`,
-          width: layout.sheet ? "100%" : `min(${panelWidth}px, 100%)`,
-          height: layout.sheet ? "100%" : `min(${layout.height}px, 100%)`,
-        }}
-      >
-        <div className="relative flex min-h-0 flex-1 overflow-hidden border-2 border-[var(--mc-96)] bg-[var(--mc-78)] text-[var(--mc-ink)] shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-33)]">
-          {layout.showRail ? (
-            <CategoryRail
-              activeResource={activeResource}
-              mode={mode}
-              tabs={recipeMapTabs}
-              activeRecipeMap={activeRecipeMap}
-              onRecipeMapChange={onRecipeMapChange}
-              onRecipeMapHover={onRecipeMapHover}
-              onModeChange={switchMode}
-            />
-          ) : null}
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {layout.sheet ? (
-            <SheetBookHeader
-              activeResource={activeResource}
-              mode={mode}
-              tabs={recipeMapTabs}
-              activeRecipeMap={activeRecipeMap}
-              machineRecipe={filteredRecipes[0]}
-              onRecipeMapChange={onRecipeMapChange}
-              onModeChange={switchMode}
-              onClose={onClose}
-            />
-          ) : (
-            <>
-              {layout.showRail ? null : (
-                <CategoryPicker
-                  activeResource={activeResource}
-                  mode={mode}
-                  tabs={recipeMapTabs}
-                  activeRecipeMap={activeRecipeMap}
-                  onRecipeMapChange={onRecipeMapChange}
-                  onModeChange={switchMode}
-                  showModeSwitch
-                />
-              )}
-              <div className="px-2 pt-2">
-                <div
-                  onPointerDown={handlePointerDown}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerCancel={handlePointerUp}
-                  className="flex h-11 cursor-move select-none items-center gap-3 border-2 border-[var(--mc-33)] bg-[var(--mc-61)] px-2 shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-29)]"
-                >
-                  {/* The title takes the slack so the machines and the close
-                      button stay pinned to the right rather than floating in the
-                      middle of a wide bar. */}
-                  <span className="min-w-0 flex-1 leading-[1.1]">
-                    <span className="block text-[8px] font-bold uppercase tracking-[0.14em] text-[#ececec] [text-shadow:1px_1px_0_#4a4a4a]">
-                      Category · recipe map
-                    </span>
-                    <span className="minecraft-title block truncate text-[17px] leading-[20px] text-white [text-shadow:2px_2px_0_var(--mc-24)]">
-                      {activeRecipeMap ||
-                        filteredRecipes[0]?.machineType ||
-                        resourceLabel(activeResource)}
-                    </span>
-                  </span>
-                  <CategoryMachineStrip recipe={filteredRecipes[0]} />
-                  {/*
-                    The book used to be closed only by clicking the board around
-                    it. Now that it can cover the whole screen there may be no
-                    board left to click, so it says how to leave.
-                  */}
-                  <button
-                    type="button"
-                    title="Close recipe book (Esc)"
-                    aria-label="Close recipe book"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={onClose}
-                    className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center border-2 border-[var(--mc-33)] bg-[var(--mc-71)] text-[var(--mc-ink)] hover:bg-[var(--mc-85)]"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-
-          <div className="flex gap-2 px-3 pt-2">
-            <label className="flex h-9 min-w-0 flex-1 items-center gap-2 border-2 border-[var(--mc-33)] bg-[#17191d] px-2 text-sm text-neutral-100 shadow-[inset_2px_2px_0_#30343b,inset_-2px_-2px_0_#050607]">
-              <Search className="h-4 w-4 text-neutral-500" />
-              <input
-                value={query}
-                onChange={(event) => onQueryChange(event.target.value)}
-                placeholder="Search ingredient..."
-                className="min-w-0 flex-1 bg-transparent text-neutral-100 outline-none placeholder:text-neutral-500"
-              />
-              {query ? (
-                <button
-                  type="button"
-                  onClick={() => onQueryChange("")}
-                  className="text-neutral-400 hover:text-white"
-                  aria-label="Clear recipe book search"
-                  title="Clear recipe book search"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              ) : null}
-            </label>
-            <select
-              value={maxTier}
-              onChange={(event) => onMaxTierChange(event.target.value as TierFilter)}
-              title="Highest tier"
-              aria-label="Maximum machine tier"
-              className="h-9 w-28 shrink-0 border-2 border-[var(--mc-33)] bg-[#17191d] px-1.5 text-sm text-neutral-100 outline-none shadow-[inset_2px_2px_0_#30343b,inset_-2px_-2px_0_#050607]"
-            >
-              <option value="all">All tiers</option>
-              {GT_VOLTAGE_TIERS.map((entry) => (
-                <option key={entry.tier} value={entry.tier}>
-                  ≤ {entry.tier}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div
-            // On a phone the padding is the difference between a recipe drawn
-            // at readable size and one drawn at half of it, because a card
-            // only steps in whole sizes.
-            className={["min-h-0 flex-1 overflow-y-auto", layout.sheet ? "p-1" : "p-3"].join(" ")}
-            id="recipe-book-scroll"
-          >
-            {queryError ? (
-              <div className="border-2 border-[var(--mc-47)] bg-[var(--mc-71)] p-3 text-sm shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]">
-                {queryError}
-              </div>
-            ) : isLoading && filteredRecipes.length === 0 ? (
-              <div className="border-2 border-[var(--mc-47)] bg-[var(--mc-71)] p-3 text-sm shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]">
-                Loading recipes...
-              </div>
-            ) : displayedRecipes.length === 0 ? (
-              <div className="grid min-h-[260px] place-items-center border-2 border-[var(--mc-47)] bg-[var(--mc-71)] p-3 text-sm shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]">
-                No matching recipes.
-              </div>
-            ) : (
-              <VirtualRecipeResultList
-                recipes={displayedRecipes}
-                queryTotal={queryTotal}
-                currentPage={0}
-                pageSize={RECIPE_QUERY_LIMIT}
-                selectedRecipeId={selectedRecipeId}
-                onSelectRecipe={onSelectRecipe}
-                onAdd={onAdd}
-                onAddConnected={onAddConnected}
-                onPrefetch={onPrefetch}
-                onSlotBrowse={onBrowseResource}
-                contextResource={activeResource}
-                hasMore={hasMore}
-                isLoadingMore={isLoading && displayedRecipes.length > 0}
-                onLoadMore={onLoadMore}
-                measured={measured}
-                onMeasured={setMeasured}
-              />
-            )}
-          </div>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/**
- * The category rail folded into one row, for a book too narrow to spare 290px
- * for a column. Same job as {@link CategoryRail}: say what is being looked at,
- * and switch recipe map.
- */
-function CategoryPicker({
-  activeResource,
-  mode,
-  tabs,
-  activeRecipeMap,
-  onRecipeMapChange,
-  onModeChange,
-  showModeSwitch,
-}: {
-  activeResource: IndexedResource;
-  mode: "recipes" | "uses";
-  tabs: RecipeMapTab[];
-  activeRecipeMap: string;
-  onRecipeMapChange: (recipeMap: string) => void;
-  onModeChange: (mode: "recipes" | "uses") => void;
-  showModeSwitch: boolean;
-}) {
-  return (
-    <div className="flex min-w-0 shrink-0 items-center gap-2 border-b-2 border-[var(--mc-55)] bg-[var(--mc-71)] p-2">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--mc-55)] shadow-[inset_2px_2px_0_var(--mc-25),inset_-2px_-2px_0_var(--mc-100)]">
-        <ResourceIcon
-          resource={{ ...activeResource, amount: 1 }}
-          size="sm"
-          bare
-          showAmount={false}
-          tooltip={false}
-          className="!h-full !w-full"
-          iconPixelSize={machineArtPixels(40)}
-        />
-      </span>
-      <span className="min-w-0 flex-1 leading-[1.15]">
-        {/* On a full-screen sheet the switch sits on the bar below instead, where
-            the category title used to be: here it would be fighting the category
-            dropdown for the same 340px. */}
-        {showModeSwitch ? (
-          <RecipeModeSwitch mode={mode} onModeChange={onModeChange} />
-        ) : (
-          <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--mc-ink-muted)]">
-            {mode === "uses" ? "Uses of" : "Recipes for"}
-          </span>
-        )}
-        <span className="mt-0.5 block truncate text-[14px] font-bold text-[var(--mc-ink)]">
-          {resourceLabel(activeResource)}
-        </span>
-      </span>
-      <label className="flex min-w-0 shrink items-center">
-        <span className="sr-only">Category</span>
-        <select
-          value={activeRecipeMap}
-          onChange={(event) => onRecipeMapChange(event.target.value)}
-          className="h-9 w-[150px] max-w-full border-2 border-[var(--mc-33)] bg-[#17191d] px-1.5 text-sm text-neutral-100 outline-none shadow-[inset_2px_2px_0_#30343b,inset_-2px_-2px_0_#050607]"
-        >
-          {tabs.map((tab) => (
-            <option key={tab.id} value={tab.id}>
-              {tab.label}
-            </option>
-          ))}
-        </select>
-      </label>
-    </div>
-  );
-}
-
-/**
- * The book's head on a phone, in the order the questions are actually asked.
- *
- * It used to read bottom-up: an item, a caption saying which mode you were in, the
- * category to look in — and then, on the line BELOW that, the switch between the
- * two modes. But the mode decides which categories exist at all, so changing it
- * changed the dropdown above it, which is the wrong way round for a person to read.
- * And the way out sat on that lower bar, where it looked like it belonged to the
- * category rather than to the window.
- *
- * So: what you are looking at, which question you are asking, and how to leave, all
- * on the first line; the category and the machines that run it on the second. The
- * "Recipes for" caption is gone — the two buttons say it, and say it better for
- * being pressable.
- */
-function SheetBookHeader({
-  activeResource,
-  mode,
-  tabs,
-  activeRecipeMap,
-  machineRecipe,
-  onRecipeMapChange,
-  onModeChange,
-  onClose,
-}: {
-  activeResource: IndexedResource;
-  mode: "recipes" | "uses";
-  tabs: RecipeMapTab[];
-  activeRecipeMap: string;
-  machineRecipe?: RecipeSummary;
-  onRecipeMapChange: (recipeMap: string) => void;
-  onModeChange: (mode: "recipes" | "uses") => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="shrink-0 border-b-2 border-[var(--mc-55)] bg-[var(--mc-71)] p-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center bg-[var(--mc-55)] shadow-[inset_2px_2px_0_var(--mc-25),inset_-2px_-2px_0_var(--mc-100)]">
-          <ResourceIcon
-            resource={{ ...activeResource, amount: 1 }}
-            size="sm"
-            bare
-            showAmount={false}
-            tooltip={false}
-            className="!h-full !w-full"
-            iconPixelSize={machineArtPixels(36)}
-          />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[15px] font-bold leading-tight text-[var(--mc-ink)]">
-          {resourceLabel(activeResource)}
-        </span>
-        <RecipeModeSwitch mode={mode} onModeChange={onModeChange} dense />
-        {/* On the title's line, where a window's close button lives, rather than
-            down beside the category where it read as closing the category. */}
-        <button
-          type="button"
-          title="Close recipe book (Esc)"
-          aria-label="Close recipe book"
-          onClick={onClose}
-          className="flex h-8 w-8 shrink-0 items-center justify-center border-2 border-[var(--mc-33)] bg-[var(--mc-61)] text-[var(--mc-ink)] shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)]"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="mt-2 flex min-w-0 items-center gap-2">
-        <label className="flex min-w-0 flex-1 items-center">
-          <span className="sr-only">Category</span>
-          <select
-            value={activeRecipeMap}
-            onChange={(event) => onRecipeMapChange(event.target.value)}
-            className="h-9 w-full min-w-0 border-2 border-[var(--mc-33)] bg-[#17191d] px-1.5 text-sm text-neutral-100 outline-none shadow-[inset_2px_2px_0_#30343b,inset_-2px_-2px_0_#050607]"
-          >
-            {tabs.map((tab) => (
-              <option key={tab.id} value={tab.id}>
-                {tab.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <CategoryMachineStrip recipe={machineRecipe} compact />
-      </div>
-    </div>
-  );
-}
-
-/**
- * Which question the book is answering, as two pills.
- *
- * It used to be a caption — "Recipes for" or "Uses of" — which stated the mode and
- * gave no way to change it: the only way to the other half was to go back to the
- * list and use the other mouse button, and on a phone there was no other button.
- * The label was already there, in the right place, saying the right thing; making
- * it the control costs no room at all.
- */
-function RecipeModeSwitch({
-  mode,
-  onModeChange,
-  dense = false,
-}: {
-  mode: "recipes" | "uses";
-  onModeChange: (mode: "recipes" | "uses") => void;
-  /** On a phone's bar it shares 340px with the machine strip and the way out. */
-  dense?: boolean;
-}) {
-  const pill = (value: "recipes" | "uses", label: string, title: string) => (
-    <button
-      key={value}
-      type="button"
-      onClick={() => onModeChange(value)}
-      title={title}
-      aria-pressed={mode === value}
-      className={[
-        "h-5 shrink-0 whitespace-nowrap font-bold uppercase",
-        dense ? "px-1 text-[9px]" : "px-1.5 text-[10px] tracking-[0.1em]",
-        mode === value
-          ? "bg-[var(--mc-85)] text-white shadow-[inset_1px_1px_0_var(--mc-100)]"
-          : "text-[var(--mc-ink-muted)] hover:text-[var(--mc-ink)]",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-
-  return (
-    // `max-w-full`: in a flex row that has shrunk, a `w-fit` child otherwise
-    // overflows its share rather than shrinking, and lands under its neighbour.
-    <span className="flex w-fit max-w-full items-center overflow-hidden border-2 border-[var(--mc-33)] bg-[var(--mc-61)]">
-      {pill("recipes", "Makes", "Recipes that make this")}
-      {pill("uses", "Uses", "Recipes that use this")}
-    </span>
-  );
-}
-
-/** Vertical category (recipe map) rail: the master picker's first level. */
-function CategoryRail({
-  activeResource,
-  mode,
-  tabs,
-  activeRecipeMap,
-  onRecipeMapChange,
-  onRecipeMapHover,
-  onModeChange,
-}: {
-  activeResource: IndexedResource;
-  mode: "recipes" | "uses";
-  tabs: RecipeMapTab[];
-  activeRecipeMap: string;
-  onRecipeMapChange: (recipeMap: string) => void;
-  onRecipeMapHover: (recipeMap: string) => void;
-  onModeChange: (mode: "recipes" | "uses") => void;
-}) {
-  return (
-    <div className="flex w-[290px] shrink-0 flex-col border-r-2 border-[var(--mc-47)] bg-[var(--mc-71)]">
-      <div className="flex items-center gap-2.5 border-b-2 border-[var(--mc-55)] p-2.5">
-        <span className="flex h-12 w-12 shrink-0 items-center justify-center bg-[var(--mc-55)] shadow-[inset_2px_2px_0_var(--mc-25),inset_-2px_-2px_0_var(--mc-100)]">
-          <ResourceIcon
-            resource={{ ...activeResource, amount: 1 }}
-            size="sm"
-            bare
-            showAmount={false}
-            tooltip={false}
-            className="!h-full !w-full"
-            iconPixelSize={machineArtPixels(48)}
-          />
-        </span>
-        <span className="min-w-0 leading-[1.15]">
-          <RecipeModeSwitch mode={mode} onModeChange={onModeChange} />
-          <span className="mt-0.5 block truncate text-[16px] font-bold text-[var(--mc-ink)]">
-            {resourceLabel(activeResource)}
-          </span>
-        </span>
-      </div>
-      <div className="px-2.5 pb-1 pt-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--mc-ink-muted)]">
-        Categories
-      </div>
-      <div className="nowheel min-h-0 flex-1 overflow-y-auto p-2">
-        {tabs.map((tab) => {
-          const active = tab.id === activeRecipeMap;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onRecipeMapChange(tab.id)}
-              onMouseEnter={() => onRecipeMapHover(tab.id)}
-              className={[
-                "mb-1 grid w-full grid-cols-[42px_minmax(0,1fr)] items-center gap-2.5 border-2 px-1.5 py-1.5 text-left",
-                active
-                  ? "border-[var(--mc-15)] bg-[var(--mc-85)] shadow-[inset_2px_2px_0_var(--mc-100),0_0_0_2px_#22d3ee_inset]"
-                  : "border-[var(--mc-47)] bg-[var(--mc-78)] shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-47)] hover:bg-[var(--mc-85)]",
-              ].join(" ")}
-            >
-              <span className="flex h-[42px] w-[42px] items-center justify-center bg-[var(--mc-55)] shadow-[inset_2px_2px_0_var(--mc-25),inset_-2px_-2px_0_var(--mc-100)]">
-                {tab.icon ? (
-                  <ResourceIcon
-                    resource={{ ...tab.icon, amount: 1 }}
-                    size="sm"
-                    bare
-                    showAmount={false}
-                    tooltip={false}
-                    className="!h-full !w-full"
-                    iconPixelSize={machineArtPixels(42)}
-                  />
-                ) : null}
-              </span>
-              <span className="min-w-0 truncate text-[15px] font-bold leading-5 text-[var(--mc-ink)]">
-                {tab.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** Mini strip of the machines that can run the open category. */
-function CategoryMachineStrip({
-  recipe,
-  compact = false,
-}: {
-  recipe?: RecipeSummary;
-  /** A phone's bar shares its width with the mode switch: icons only, and fewer. */
-  compact?: boolean;
-}) {
-  const machineIcons = useMachineHandlerIcons();
-  const handlers = useMemo(
-    () => (recipe ? getRecipeMachineHandlers(summaryToPreviewRecipe(recipe)) : []),
-    [recipe],
-  );
-  if (handlers.length <= 1) {
-    return null;
-  }
-  return (
-    <span className="ml-auto flex shrink-0 items-center gap-1">
-      {compact ? null : (
-        <span className="pr-1 text-[8px] font-bold uppercase tracking-[0.1em] text-[#ececec] [text-shadow:1px_1px_0_#4a4a4a]">
-          {handlers.length} machines
-        </span>
-      )}
-      {handlers.slice(0, compact ? 4 : 8).map((handler) => {
-        const icon = machineIcons.get(handler.id);
-        return (
-          <span
-            key={handler.id}
-            title={handler.label}
-            className="flex h-7 w-7 items-center justify-center bg-[var(--mc-55)] shadow-[inset_2px_2px_0_#373737,inset_-2px_-2px_0_#ffffff]"
-          >
-            {icon ? (
-              <ResourceIcon
-                resource={{ ...icon, amount: 1 }}
-                size="sm"
-                bare
-                showAmount={false}
-                tooltip={false}
-                className="!h-full !w-full"
-                iconPixelSize={machineArtPixels(28)}
-              />
-            ) : null}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-function VirtualRecipeResultList({
-  recipes,
-  queryTotal,
-  currentPage,
-  pageSize,
-  selectedRecipeId,
-  onSelectRecipe,
-  onAdd,
-  onAddConnected,
-  onPrefetch,
-  onSlotBrowse,
-  contextResource,
-  hasMore,
-  isLoadingMore,
-  onLoadMore,
-  measured,
-  onMeasured,
-}: {
-  recipes: RecipeSummary[];
-  queryTotal: number;
-  currentPage: number;
-  pageSize: number;
-  selectedRecipeId?: string;
-  onSelectRecipe: (recipeId: string) => void;
-  onAdd: (
-    recipe: RecipeSummary,
-    machineHandlerId?: string,
-    inputPicks?: RecipeInputPicks,
-  ) => void | Promise<void>;
-  onAddConnected?: (recipeId: string) => void | Promise<void>;
-  onPrefetch?: (recipeId: string) => void;
-  onSlotBrowse: (resource: ResourceAmount, mode: "recipes" | "uses") => void;
-  contextResource?: PreviewContextResource;
-  hasMore: boolean;
-  isLoadingMore: boolean;
-  onLoadMore: () => void;
-  /**
-   * How wide one recipe draws, unscaled. Held by the book rather than here so
-   * the book can shrink to fit whole cards instead of handing the difference
-   * to the margins.
-   */
-  measured: MeasuredCard;
-  onMeasured: (measured: MeasuredCard) => void;
-}) {
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState({ scrollTop: 0, height: 360, width: 640 });
-  // `usesNativeNeiChrome` resolves a layout per call, and infinite scroll keeps
-  // growing this array (120, 240, 360...), so it must not run on every scroll
-  // frame.
-  const native = useMemo(() => recipes.some(usesNativeNeiChrome), [recipes]);
-  // How wide a recipe actually draws cannot be worked out ahead of time: the
-  // panel grows to fit whatever slots the recipe has, and nothing in the
-  // dataset records the result. Assuming the common width laid out columns
-  // narrower than the cards in them, so cards overlapped their neighbours and
-  // the corner of one disappeared under the next. So the cards are measured,
-  // and the answer is thrown away whenever the list changes rather than
-  // letting one wide category narrow every later one.
-  const listKey = recipes.length > 0 ? `${recipes[0].id}:${recipes.length}` : "";
-  const unitWidth = measured.key === listKey ? measured.unit : NEI_CANVAS_WIDTH;
-  const { columns: columnCount, scale } = chooseRecipeGrid(viewport.width, unitWidth);
-  // Every row is assumed to be exactly this tall, so the layout is made to
-  // match rather than the other way round: recipes with a long list of outputs
-  // draw much taller cards than the estimate, and a row that ran over its
-  // share left the list reporting less height than it had. Scrolling down then
-  // ran past the end, the browser pulled the scroll position back, and the
-  // list could never reach its own bottom.
-  const cardHeight = Math.max(
-    recipeRowHeight(scale, native),
-    measured.key === listKey ? measured.row : 0,
-  );
-  const rowHeight = cardHeight + CARD_GAP;
-  const gridRef = useRef<HTMLDivElement>(null);
-  // Read inside the observer, which must not be torn down and rebuilt every
-  // time a measurement lands.
-  const measuredRef = useRef(measured);
-  useEffect(() => {
-    measuredRef.current = measured;
-  }, [measured]);
-
-  useEffect(() => {
-    const grid = gridRef.current;
-    if (!grid) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      setViewport((current) =>
-        current.width === grid.clientWidth ? current : { ...current, width: grid.clientWidth },
-      );
-
-      let unit = 0;
-      let tallest = 0;
-      for (const card of grid.children) {
-        const box = card.getBoundingClientRect();
-        const drawnAt = Number(card.getAttribute("data-card-scale")) || 1;
-        // The unscaled width is what the next scale choice has to be made
-        // from. The height is kept as drawn, since that is what a row holds.
-        unit = Math.max(unit, box.width / drawnAt);
-        tallest = Math.max(tallest, box.height);
-      }
-      if (unit <= 0) {
-        return;
-      }
-      unit = Math.ceil(unit);
-      const row = Math.ceil(tallest);
-      const current = measuredRef.current;
-      if (current.key !== listKey || unit > current.unit || row > current.row) {
-        onMeasured({
-          key: listKey,
-          unit: current.key === listKey ? Math.max(current.unit, unit) : unit,
-          row: current.key === listKey ? Math.max(current.row, row) : row,
-        });
-      }
-    });
-    observer.observe(grid);
-    return () => observer.disconnect();
-  }, [listKey, onMeasured, scale]);
-  const overscan = 1;
-  const rowCount = Math.ceil(recipes.length / columnCount);
-  const startRow = Math.max(0, Math.floor(viewport.scrollTop / rowHeight) - overscan);
-  const visibleRowCount = Math.ceil(viewport.height / rowHeight) + overscan * 2;
-  const visibleStartIndex = startRow * columnCount;
-  const visibleRecipes = recipes.slice(
-    visibleStartIndex,
-    visibleStartIndex + visibleRowCount * columnCount,
-  );
-  const topPadding = startRow * rowHeight;
-  const bottomPadding = Math.max(
-    0,
-    (rowCount - startRow - Math.ceil(visibleRecipes.length / columnCount)) * rowHeight,
-  );
-
-  useEffect(() => {
-    const scrollParent = anchorRef.current?.parentElement;
-    if (!scrollParent) {
-      return;
-    }
-
-    const updateViewport = () => {
-      setViewport({
-        scrollTop: scrollParent.scrollTop,
-        height: scrollParent.clientHeight,
-        // The grid's own width, not the scroller's: the scroller's includes its
-        // padding, and counting that as room for cards made the columns come
-        // out a padding wider than the cards could ever fill.
-        width: gridRef.current?.clientWidth ?? scrollParent.clientWidth,
-      });
-    };
-
-    updateViewport();
-    scrollParent.addEventListener("scroll", updateViewport, { passive: true });
-    const resizeObserver = new ResizeObserver(updateViewport);
-    resizeObserver.observe(scrollParent);
-
-    return () => {
-      scrollParent.removeEventListener("scroll", updateViewport);
-      resizeObserver.disconnect();
-    };
-  }, [recipes.length]);
-
-  useEffect(() => {
-    const scrollParent = anchorRef.current?.parentElement;
-    if (!scrollParent || !hasMore || isLoadingMore) {
-      return;
-    }
-
-    const threshold = 360;
-    const remaining =
-      scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight;
-    if (remaining <= threshold) {
-      onLoadMore();
-    }
-  }, [hasMore, isLoadingMore, onLoadMore, viewport.scrollTop, viewport.height, recipes.length]);
-
-  return (
-    <div
-      ref={anchorRef}
-      title={
-        queryTotal > recipes.length
-          ? `${queryTotal} recipes matched, showing ${currentPage * pageSize + 1}-${Math.min(
-              queryTotal,
-              currentPage * pageSize + recipes.length,
-            )}`
-          : undefined
-      }
-    >
-      <div style={{ height: topPadding }} />
-      <div
-        ref={gridRef}
-        className="grid items-start justify-items-center gap-3"
-        style={{
-          gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
-          // Pinned, so a row can never take more room than the list set aside
-          // for it. With the gap, each row occupies exactly one rowHeight.
-          gridAutoRows: `${cardHeight}px`,
-        }}
-      >
-        {visibleRecipes.map((recipe) => (
-          <RecipeResultCard
-            key={recipe.id}
-            recipe={recipe}
-            selected={selectedRecipeId === recipe.id}
-            onSelectRecipe={onSelectRecipe}
-            onAdd={onAdd}
-            onAddConnected={onAddConnected}
-            onPrefetch={onPrefetch}
-            onSlotBrowse={onSlotBrowse}
-            contextResource={contextResource}
-            scale={scale}
-          />
-        ))}
-      </div>
-      {isLoadingMore ? (
-        <div className="mt-3 border-2 border-[var(--mc-47)] bg-[var(--mc-71)] p-3 text-center text-sm shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]">
-          Loading recipes...
-        </div>
-      ) : null}
-      <div style={{ height: bottomPadding }} />
-    </div>
-  );
-}
-
-const RecipeResultCard = memo(function RecipeResultCard({
-  recipe,
-  selected,
-  onSelectRecipe,
-  onAdd,
-  onAddConnected,
-  onPrefetch,
-  onSlotBrowse,
-  contextResource,
-  scale = 2,
-}: {
-  recipe: RecipeSummary;
-  selected: boolean;
-  onSelectRecipe: (recipeId: string) => void;
-  onAdd: (
-    recipe: RecipeSummary,
-    machineHandlerId?: string,
-    inputPicks?: RecipeInputPicks,
-  ) => void | Promise<void>;
-  onAddConnected?: (recipeId: string) => void | Promise<void>;
-  onPrefetch?: (recipeId: string) => void;
-  onSlotBrowse?: (resource: ResourceAmount, mode: "recipes" | "uses") => void;
-  contextResource?: PreviewContextResource;
-  /** How large to draw the recipe. Set by the grid from the width it has. */
-  scale?: number;
-}) {
-  const previewRecipe = useMemo(
-    () => contextualizePreviewRecipe(summaryToPreviewRecipe(recipe), contextResource),
-    [contextResource, recipe],
-  );
-  // Written by the cycling slots on every face change and read only here, on
-  // click, so a rotating card never re-renders on the clock.
-  const facesRef = useAlternativeCycleFacesRef();
-  const currentPicks = useCallback(
-    () => Object.fromEntries(facesRef.current) as RecipeInputPicks,
-    [facesRef],
-  );
-  const seconds = recipe.durationTicks / 20;
-  // A pointer that settles on a card is probably about to press its plus, so
-  // the full recipe starts travelling now. The short fuse keeps a pointer
-  // sweeping across the grid from requesting every card it crosses.
-  const prefetchTimerRef = useRef<number | undefined>(undefined);
-  const cancelPrefetch = useCallback(() => {
-    if (prefetchTimerRef.current !== undefined) {
-      window.clearTimeout(prefetchTimerRef.current);
-      prefetchTimerRef.current = undefined;
-    }
-  }, []);
-  const armPrefetch = useCallback(() => {
-    if (!onPrefetch) {
-      return;
-    }
-    cancelPrefetch();
-    prefetchTimerRef.current = window.setTimeout(() => {
-      prefetchTimerRef.current = undefined;
-      onPrefetch(recipe.id);
-    }, 150);
-  }, [cancelPrefetch, onPrefetch, recipe.id]);
-  useEffect(() => cancelPrefetch, [cancelPrefetch]);
-
-  return (
-    <AlternativeCycleScope facesRef={facesRef}>
-    <article
-      // The scale this card was actually drawn at. The measurer reads it from
-      // here rather than from React state, which can be a render ahead of the
-      // DOM: pairing a new scale with a width drawn at the old one inflates
-      // the measurement, and since it only ever grows, the error would stick.
-      data-card-scale={scale}
-      onClick={() => onSelectRecipe(recipe.id)}
-      onDoubleClick={() => void onAdd(recipe, undefined, currentPicks())}
-      onPointerEnter={armPrefetch}
-      onPointerLeave={cancelPrefetch}
-      className={[
-        "relative cursor-pointer transition",
-        selected ? "ring-1 ring-cyan-400" : "",
-      ].join(" ")}
-    >
-      {/*
-        Everything the card offers now sits on the recipe's own panel: the add
-        button in its top corner and the time along its foot. The card is then
-        exactly as wide as the panel, so a small recipe takes a small card
-        instead of being padded out to a fixed width.
-      */}
-      <div
-        className="relative w-fit overflow-hidden pb-[3px]"
-        style={{ backgroundColor: NEI_PALETTE.panel }}
-      >
-        <NeiRecipeWindow
-          recipe={previewRecipe}
-          scale={scale}
-          // A compact recipe takes its size from the slot, not from `scale`,
-          // so the chosen scale has to be expressed as one. 20 keeps scale 2
-          // drawing exactly the size these cards have always been.
-          compactSlotPixelSize={20 * scale}
-          compact
-          hideStats
-          contextResource={contextResource}
-          onSlotClick={onSlotBrowse ? (slot, mode) => onSlotBrowse(slot.resource, mode) : undefined}
-        />
-        <div
-          className="flex h-8 items-center gap-2 px-1.5 text-[11px] leading-none"
-          style={{ color: NEI_PALETTE.borderDark }}
-        >
-          <span className="min-w-0 flex-1 truncate">
-            Time: {formatRate(seconds, seconds >= 10 ? 0 : 1)} s
-          </span>
-          <CircuitSetting recipe={previewRecipe} />
-        </div>
-        <button
-          type="button"
-          title={onAddConnected ? "Add and connect recipe node" : "Add recipe node"}
-          aria-label={onAddConnected ? "Add and connect recipe node" : "Add recipe node"}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (onAddConnected) {
-              onAddConnected(recipe.id);
-            } else {
-              onAdd(recipe, undefined, currentPicks());
-            }
-          }}
-          className="absolute right-[3px] top-[3px] z-10 inline-flex h-6 w-6 items-center justify-center border border-[#5a5a5a] bg-[#3b3b3b] text-neutral-100 hover:border-cyan-400 hover:text-cyan-200"
-        >
-          {onAddConnected ? <GitBranchPlus className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-        </button>
-      </div>
-    </article>
-    </AlternativeCycleScope>
-  );
-});
-
-/**
- * The number a machine's circuit slot has to be dialled to, or the empty slot
- * saying it does not care.
- *
- * Every GregTech machine has this slot, so the card always says where it
- * stands: a recipe that needs circuit 11 will not run on circuit 2, and a
- * recipe showing the empty slot runs whatever the circuit is set to. Leaving
- * it off entirely is what made the two cases impossible to tell apart.
- */
-function CircuitSetting({ recipe }: { recipe: Recipe }) {
-  const circuit = getRecipeProgrammedCircuit(recipe);
-  if (!circuit) {
-    return null;
-  }
-
-  const setting = circuit.setting;
-
-  return (
-    <span
-      title={
-        setting
-          ? `Programmed circuit: set to ${setting}`
-          : "No circuit setting: runs whatever the circuit is set to"
-      }
-      className="flex h-7 shrink-0 items-center gap-1"
-    >
-      {/*
-        Always the drawn slot, never the circuit's own art. A recipe that dials
-        a circuit already shows the item in its slots, so putting it here too
-        would say the same thing twice in the space of one card.
-      */}
-      <Cpu className="h-5 w-5" style={{ color: NEI_PALETTE.borderDark }} />
-      <span
-        className="text-[13px] font-bold leading-none tabular-nums"
-        style={{ color: NEI_PALETTE.borderDarker }}
-      >
-        {setting ?? "-"}
-      </span>
-    </span>
-  );
-}
-
-function summaryToPreviewRecipe(summary: RecipeSummary): Recipe {
-  return {
-    id: summary.id,
-    name: summary.name,
-    kind: summary.kind,
-    category: summary.category,
-    machineType: summary.machineType,
-    minimumTier: summary.minimumTier,
-    durationTicks: summary.durationTicks,
-    eut: summary.eut,
-    inputs: summary.inputs,
-    outputs: summary.outputs,
-    programmedCircuit: summary.programmedCircuit,
-    specialValue: summary.specialValue,
-    machineHandlers: summary.machineHandlers,
-    machineConfigControls: summary.machineConfigControls,
-    source: summary.source ?? (summary.recipeMap ? { recipeMap: summary.recipeMap } : undefined),
-    metadata: summary.metadata,
-    nei: summary.nei,
-  };
-}
-
-export function contextualizePreviewRecipe(
-  recipe: Recipe,
-  resource: PreviewContextResource | undefined,
-): Recipe {
-  if (!resource) {
-    return recipe;
-  }
-
-  let changed = false;
-  const inputs = recipe.inputs.map((input) => {
-    if (!resourceMatchesInput(resource, input)) {
-      return input;
-    }
-
-    if (input.kind !== resource.kind) {
-      return input;
-    }
-
-    changed = true;
-    return {
-      ...input,
-      kind: resource.kind,
-      id: resource.id,
-      displayName: resource.displayName ?? input.displayName,
-      iconPath: resource.iconPath ?? input.iconPath,
-      iconAtlas: resource.iconAtlas ?? input.iconAtlas,
-      dominantColor: resource.dominantColor ?? input.dominantColor,
-      alternatives: undefined,
-    };
-  });
-  const outputs = recipe.outputs.map((output) => {
-    if (output.kind !== resource.kind || output.id !== resource.id) {
-      return output;
-    }
-
-    changed = true;
-    return {
-      ...output,
-      displayName: resource.displayName ?? output.displayName,
-      iconPath: resource.iconPath ?? output.iconPath,
-      iconAtlas: resource.iconAtlas ?? output.iconAtlas,
-      dominantColor: resource.dominantColor ?? output.dominantColor,
-    };
-  });
-
-  return changed ? { ...recipe, inputs, outputs } : recipe;
-}
-
 function getRecipeAddContextResource(
   activeResource: (IndexedResource & { anchorNodeId?: string }) | undefined,
   mode: "recipes" | "uses",
@@ -3226,21 +2208,6 @@ function recipeHasRenderableIcons(recipe: Recipe) {
     .every((resource) => Boolean(resource.iconPath || resource.iconAtlas));
 }
 
-function clampDragOffset(offset: { x: number; y: number }, panel: HTMLElement | null) {
-  if (!panel || typeof window === "undefined") {
-    return offset;
-  }
-
-  const rect = panel.getBoundingClientRect();
-  const margin = 12;
-  const maxX = Math.max(0, (window.innerWidth - rect.width) / 2 - margin);
-  const maxY = Math.max(0, (window.innerHeight - rect.height) / 2 - margin);
-
-  return {
-    x: clamp(offset.x, -maxX, maxX),
-    y: clamp(offset.y, -maxY, maxY),
-  };
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -3284,111 +2251,6 @@ function scheduleAfterPaint(callback: () => void) {
   };
 }
 
-/**
- * How much room the recipe book has, and what shape it should take.
- *
- * Read on every resize. It used to be measured once when the book opened and
- * never again, so widening the window, or turning a phone, left the book at
- * whatever size it happened to open at.
- */
-/**
- * How much room the board's own columns take, asked of the columns themselves.
- *
- * Guessing at these was wrong by 38px, which put the left edge of the book
- * underneath the column beside it. The column paints over the book, so the book
- * appeared to tuck under it for part of the way through a resize. They can also
- * be collapsed, which no fixed number would follow.
- */
-function measureBoardSidebars(): { left: number; right: number } {
-  if (typeof document === "undefined") {
-    return { left: BOARD_SIDEBAR_LEFT, right: BOARD_SIDEBAR_RIGHT };
-  }
-
-  const width = (selector: string, fallback: number) => {
-    const element = document.querySelector(selector);
-    return element ? Math.round(element.getBoundingClientRect().width) : fallback;
-  };
-
-  return {
-    left: width('aside[data-help-anchor="browser"]', BOARD_SIDEBAR_LEFT),
-    right: width('aside[data-help-anchor="inspector"]', BOARD_SIDEBAR_RIGHT),
-  };
-}
-
-function readRecipeBookViewport(): RecipeBookViewport {
-  if (typeof window === "undefined") {
-    return {
-      sheet: false,
-      showRail: true,
-      dodgesSidebars: true,
-      width: 960,
-      height: 760,
-      sidebars: { left: BOARD_SIDEBAR_LEFT, right: BOARD_SIDEBAR_RIGHT },
-    };
-  }
-
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const sidebars = measureBoardSidebars();
-
-  // Too narrow to be a window at all: fill the screen instead of leaving a
-  // book that is mostly margin.
-  if (viewportWidth < RECIPE_BOOK_SHEET_BELOW) {
-    return {
-      sheet: true,
-      showRail: false,
-      dodgesSidebars: false,
-      width: viewportWidth,
-      height: viewportHeight,
-      sidebars,
-    };
-  }
-
-  // The board's own sidebars are worth keeping in view, but only while
-  // stepping around them still leaves the book a comfortable size. Below that
-  // the book covers them, which is the lesser loss.
-  const besideSidebars = viewportWidth - sidebars.left - sidebars.right - 24;
-  const dodgesSidebars = besideSidebars >= RECIPE_BOOK_COMFORTABLE_WIDTH;
-  const available = dodgesSidebars ? besideSidebars : viewportWidth - 24;
-
-  return {
-    sheet: false,
-    showRail: available >= RECIPE_BOOK_RAIL_NEEDS,
-    dodgesSidebars,
-    width: Math.min(RECIPE_BOOK_MAX_WIDTH, Math.max(RECIPE_BOOK_MIN_WIDTH, available)),
-    height: Math.min(RECIPE_BOOK_MAX_HEIGHT, Math.max(360, viewportHeight - 32)),
-    sidebars,
-  };
-}
-
-function useRecipeBookViewport(): RecipeBookViewport {
-  const [viewport, setViewport] = useState(readRecipeBookViewport);
-
-  useEffect(() => {
-    const update = () => setViewport(readRecipeBookViewport());
-
-    window.addEventListener("resize", update);
-    // Hiding a column is not a window resize, and the book has to give back
-    // the room either way.
-    const observer = new ResizeObserver(update);
-    for (const selector of [
-      'aside[data-help-anchor="browser"]',
-      'aside[data-help-anchor="inspector"]',
-    ]) {
-      const element = document.querySelector(selector);
-      if (element) {
-        observer.observe(element);
-      }
-    }
-
-    return () => {
-      window.removeEventListener("resize", update);
-      observer.disconnect();
-    };
-  }, []);
-
-  return viewport;
-}
 
 function getDatasetVersionCacheKey(version: {
   id: string;
@@ -3416,7 +2278,10 @@ function getRecipeQueryCacheKey({
   query,
   resource,
   mode,
-  recipeMap,
+  clauses,
+  takesOp,
+  makesOp,
+  mapSelection,
   maxTier,
   offset,
   limit,
@@ -3425,7 +2290,10 @@ function getRecipeQueryCacheKey({
   query: string;
   resource?: Pick<ResourceAmount, "kind" | "id">;
   mode: "recipes" | "uses";
-  recipeMap: string;
+  clauses: RecipeQueryClause[];
+  takesOp: RecipeQuerySideOp;
+  makesOp: RecipeQuerySideOp;
+  mapSelection: RecipeMapSelection | undefined;
   maxTier: TierFilter;
   offset: number;
   limit: number;
@@ -3435,11 +2303,78 @@ function getRecipeQueryCacheKey({
     query.trim().toLowerCase(),
     resource ? `${resource.kind}:${resource.id}` : "",
     mode,
-    recipeMap,
+    clauses.map((clause) => `${clause.role}:${clause.kind}:${clause.id}`).join(","),
+    takesOp,
+    makesOp,
+    mapSelection ? `${mapSelection.mode}:${[...mapSelection.maps].sort().join(",")}` : "all",
     maxTier,
     offset,
     limit,
   ].join("|");
+}
+
+/** Whether the chips' selection shows this map's recipes. Absent means all. */
+function isMapSelectedIn(selection: RecipeMapSelection | undefined, recipeMap: string): boolean {
+  if (!selection) {
+    return true;
+  }
+  const listed = selection.maps.includes(recipeMap);
+  return selection.mode === "exclude" ? !listed : listed;
+}
+
+/**
+ * One chip's toggle. Exclusions and inclusions are edited in place so a map
+ * unselected on an earlier search survives this one; the only normalisations
+ * are back to "all" - an emptied exclusion list, or an include list that has
+ * grown to cover every chip on screen.
+ */
+function toggledMapSelection(
+  selection: RecipeMapSelection | undefined,
+  recipeMap: string,
+  visibleMaps: string[],
+): RecipeMapSelection | undefined {
+  if (!selection) {
+    return { mode: "exclude", maps: [recipeMap] };
+  }
+  const listed = selection.maps.includes(recipeMap);
+  const maps = listed
+    ? selection.maps.filter((map) => map !== recipeMap)
+    : [...selection.maps, recipeMap];
+  if (selection.mode === "exclude") {
+    return maps.length > 0 ? { mode: "exclude", maps } : undefined;
+  }
+  if (visibleMaps.every((map) => maps.includes(map))) {
+    return undefined;
+  }
+  return { mode: "include", maps };
+}
+
+function readStoredMapSelection(): RecipeMapSelection | undefined {
+  try {
+    const stored = window.localStorage.getItem(MAP_SELECTION_STORAGE_KEY);
+    if (!stored) {
+      return undefined;
+    }
+    const parsed: unknown = JSON.parse(stored);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "mode" in parsed &&
+      (parsed.mode === "exclude" || parsed.mode === "include") &&
+      "maps" in parsed &&
+      Array.isArray(parsed.maps)
+    ) {
+      const maps = parsed.maps.filter((map): map is string => typeof map === "string");
+      // An empty exclusion list is just "all"; keep the state canonical.
+      if (parsed.mode === "exclude" && maps.length === 0) {
+        return undefined;
+      }
+      return { mode: parsed.mode, maps };
+    }
+  } catch {
+    // A stale or foreign value reads as the default.
+  }
+  return undefined;
 }
 
 function getResourceQueryCacheKey({

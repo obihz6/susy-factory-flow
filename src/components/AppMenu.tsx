@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, X } from "lucide-react";
+import { Menu, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AccountMenu } from "./community/AccountMenu";
 import { AppIdentity } from "./AppIdentity";
@@ -13,6 +13,8 @@ interface AppMenuProps {
   onShare: () => void;
   /** Opens the export-image dialog, also owned by the header. */
   onExportImage: () => void;
+  /** Opens the settings dialog, also owned by the header. */
+  onOpenSettings: () => void;
 }
 
 /**
@@ -27,7 +29,12 @@ interface AppMenuProps {
  * A sheet under the header rather than a full-screen overlay: it is a handful of
  * rows, the board stays visible behind it, and a tap anywhere else puts it away.
  */
-export function AppMenu({ onLoadDatasetVersion, onShare, onExportImage }: AppMenuProps) {
+export function AppMenu({
+  onLoadDatasetVersion,
+  onShare,
+  onExportImage,
+  onOpenSettings,
+}: AppMenuProps) {
   const [isOpen, setOpen] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -93,6 +100,19 @@ export function AppMenu({ onLoadDatasetVersion, onShare, onExportImage }: AppMen
             />
           </MenuSection>
           <MenuSection label="Planner">
+            <button
+              type="button"
+              onClick={() => {
+                onOpenSettings();
+                setOpen(false);
+              }}
+              className="flex h-10 w-full items-center gap-2.5 rounded px-2 text-left text-sm text-fg-subtle hover:bg-surface-sunken"
+            >
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                <Settings className="h-3.5 w-3.5" aria-hidden />
+              </span>
+              <span className="truncate">Settings</span>
+            </button>
             <MenuLinks onAction={() => setOpen(false)} />
             <div className="flex px-2 py-1">
               <AccountMenu />

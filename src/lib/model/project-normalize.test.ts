@@ -165,17 +165,131 @@ describe("wires into a trash can survive a reload", () => {
     } as unknown as FactoryProject;
   }
 
-  // A can has no slots at all, so the "does this end have a slot of that kind"
-  // test answered no for every wire into one and quietly deleted it on load.
-  // Emptiness is what a can IS, not evidence of a broken wire.
-  it("keeps an item wire into a can", () => {
+  // The can node retired into the drawer pill's trash position (2026-08-23):
+  // a loaded plan's cans become trash-mode drawers, and the wire survives by
+  // pointing at the drawer instead.
+  it("converts an item wire's can into a trash drawer", () => {
     const normalized = normalizeLoadedProject(createTrashProject("item"));
-    expect(normalized.edges.map((edge) => edge.id)).toEqual(["to-can"]);
+
+    expect(normalized.nodes.map((node) => node.id)).toEqual(["maker"]);
+    expect(normalized.recipes.some((recipe) => recipe.machineType === "Trash Can")).toBe(false);
+    const drawer = normalized.storages?.[0];
+    expect(drawer?.drainMode).toBe("trash");
+    expect(drawer?.kind).toBe("item");
+    expect(drawer?.resourceId).toBe("waste");
+    expect(normalized.edges).toHaveLength(1);
+    expect(normalized.edges[0]?.target).toBe(drawer?.id);
   });
 
-  it("keeps a fluid wire into a can", () => {
+  it("converts a fluid wire's can into a trash tank", () => {
     const normalized = normalizeLoadedProject(createTrashProject("fluid"));
-    expect(normalized.edges.map((edge) => edge.id)).toEqual(["to-can"]);
+
+    const drawer = normalized.storages?.[0];
+    expect(drawer?.drainMode).toBe("trash");
+    expect(drawer?.kind).toBe("fluid");
+    expect(normalized.edges[0]?.target).toBe(drawer?.id);
+    expect(normalized.edges[0]?.targetHandle).toBe("input:fluid:waste");
+  });
+
+  it("splits a can drinking two resources into two trash drawers", () => {
+    const base = createTrashProject("item");
+    base.recipes.push({
+      id: "maker2",
+      name: "Maker 2",
+      machineType: "Chemical Reactor",
+      minimumTier: "LV",
+      durationTicks: 20,
+      eut: 30,
+      inputs: [],
+      outputs: [{ kind: "fluid", id: "sludge", amount: 1 }],
+    } as (typeof base.recipes)[number]);
+    base.nodes.push({
+      id: "maker2",
+      recipeId: "maker2",
+      machineCount: 1,
+      parallel: 1,
+      position: { x: 0, y: 200 },
+    } as (typeof base.nodes)[number]);
+    base.edges.push({
+      id: "to-can-2",
+      source: "maker2",
+      target: "can",
+      resourceKind: "fluid",
+      resourceId: "sludge",
+    } as (typeof base.edges)[number]);
+
+    const normalized = normalizeLoadedProject(base);
+
+    expect(normalized.storages).toHaveLength(2);
+    const targets = new Set(normalized.edges.map((edge) => edge.target));
+    expect(targets.size).toBe(2);
+    expect(normalized.storages?.every((storage) => storage.drainMode === "trash")).toBe(true);
+    // The second drawer steps down a tile so the pair never stack.
+    expect(normalized.storages?.[1]?.position.y).not.toBe(normalized.storages?.[0]?.position.y);
+  });
+
+  it("drops an unwired can outright", () => {
+    const base = createTrashProject("item");
+    base.edges = [];
+
+    const normalized = normalizeLoadedProject(base);
+
+    expect(normalized.nodes.map((node) => node.id)).toEqual(["maker"]);
+    expect(normalized.storages ?? []).toHaveLength(0);
+  });
+});
+
+describe("loose cell wires survive a reload", () => {
+  it("keeps a cross-form edge that carries its Canner ratio", () => {
+    const project = {
+      schemaVersion: PROJECT_SCHEMA_VERSION,
+      id: "loose",
+      name: "Loose",
+      recipes: [
+        {
+          id: "fill",
+          name: "Fill",
+          machineType: "Bender",
+          minimumTier: "LV",
+          durationTicks: 20,
+          eut: 30,
+          inputs: [],
+          outputs: [{ kind: "item", id: "water_cell", amount: 1 }],
+        },
+        {
+          id: "drink",
+          name: "Drink",
+          machineType: "Bender",
+          minimumTier: "LV",
+          durationTicks: 20,
+          eut: 30,
+          inputs: [{ kind: "fluid", id: "water", amount: 1000 }],
+          outputs: [{ kind: "item", id: "sponge", amount: 1 }],
+        },
+      ],
+      nodes: [
+        { id: "maker", recipeId: "fill", machineCount: 1, parallel: 1, position: { x: 0, y: 0 } },
+        { id: "taker", recipeId: "drink", machineCount: 1, parallel: 1, position: { x: 400, y: 0 } },
+      ],
+      storages: [],
+      edges: [
+        {
+          id: "w",
+          source: "maker",
+          target: "taker",
+          sourceHandle: "output:item:water_cell",
+          targetHandle: "input:fluid:water",
+          resourceKind: "item",
+          resourceId: "water_cell",
+          crossForm: { litresPerCell: 1000 },
+        },
+      ],
+      fuelProfiles: [],
+    } as unknown as FactoryProject;
+
+    const normalized = normalizeLoadedProject(project);
+    expect(normalized.edges.map((edge) => edge.id)).toEqual(["w"]);
+    expect(normalized.edges[0]?.crossForm?.litresPerCell).toBe(1000);
   });
 });
 

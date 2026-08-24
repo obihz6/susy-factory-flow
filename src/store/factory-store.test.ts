@@ -1443,6 +1443,217 @@ describe("project recipe refresh", () => {
   });
 });
 
+describe("recipe search wiring and refactor", () => {
+  const REFACTOR_PROJECT = (): FactoryProject => ({
+    schemaVersion: PROJECT_SCHEMA_VERSION,
+    id: "refactor-test",
+    name: "Refactor test",
+    fuelProfiles: [],
+    recipes: [
+      {
+        id: "ore-source",
+        name: "Ore drawer",
+        machineType: "Drawer",
+        minimumTier: "NONE" as const,
+        durationTicks: 20,
+        eut: 0,
+        inputs: [],
+        outputs: [{ kind: "item" as const, id: "ore", amount: 1 }],
+      },
+      {
+        id: "macerator",
+        name: "Macerate",
+        machineType: "Macerator",
+        minimumTier: "LV" as const,
+        durationTicks: 40,
+        eut: 8,
+        inputs: [
+          { kind: "item" as const, id: "ore", amount: 1 },
+          { kind: "item" as const, id: "lube", amount: 1 },
+        ],
+        outputs: [{ kind: "item" as const, id: "dust", amount: 2 }],
+      },
+      {
+        id: "dust-eater",
+        name: "Press",
+        machineType: "Press",
+        minimumTier: "LV" as const,
+        durationTicks: 40,
+        eut: 8,
+        inputs: [{ kind: "item" as const, id: "dust", amount: 1 }],
+        outputs: [{ kind: "item" as const, id: "plate", amount: 1 }],
+      },
+    ],
+    nodes: [
+      {
+        id: "src",
+        recipeId: "ore-source",
+        machineCount: 1,
+        parallel: 1,
+        overclockTier: "NONE" as const,
+        enabled: true,
+        position: { x: 0, y: 0 },
+      },
+      {
+        id: "mid",
+        recipeId: "macerator",
+        machineCount: 1,
+        parallel: 1,
+        overclockTier: "LV" as const,
+        enabled: true,
+        position: { x: 440, y: 0 },
+      },
+      {
+        id: "sink",
+        recipeId: "dust-eater",
+        machineCount: 1,
+        parallel: 1,
+        overclockTier: "LV" as const,
+        enabled: true,
+        position: { x: 880, y: 0 },
+      },
+    ],
+    edges: [
+      {
+        id: "e-ore",
+        source: "src",
+        target: "mid",
+        resourceKind: "item" as const,
+        resourceId: "ore",
+      },
+      {
+        id: "e-dust",
+        source: "mid",
+        target: "sink",
+        resourceKind: "item" as const,
+        resourceId: "dust",
+      },
+    ],
+  });
+
+  it("wires a consumer added from a port browse to its anchor", () => {
+    useFactoryStore.getState().setProject(REFACTOR_PROJECT());
+
+    useFactoryStore.getState().addConnectedNodeForRecipeObject(
+      {
+        id: "washer",
+        name: "Wash ore",
+        machineType: "Ore Washer",
+        minimumTier: "LV",
+        durationTicks: 40,
+        eut: 16,
+        inputs: [{ kind: "item", id: "ore", amount: 1 }],
+        outputs: [{ kind: "item", id: "clean-ore", amount: 1 }],
+      },
+      "src",
+      { kind: "item", id: "ore", mode: "uses" },
+    );
+
+    const state = useFactoryStore.getState();
+    const washer = state.project.nodes.find((entry) => entry.recipeId === "washer");
+    expect(washer).toBeDefined();
+    const wire = state.project.edges.find(
+      (edge) => edge.source === "src" && edge.target === washer?.id,
+    );
+    expect(wire?.resourceId).toBe("ore");
+    // A consumer stands downstream of its anchor.
+    expect(washer!.position.x).toBeGreaterThan(0);
+  });
+
+  it("replaces a refactored card in place and carries the wires that still fit", () => {
+    useFactoryStore.getState().setProject(REFACTOR_PROJECT());
+
+    useFactoryStore.getState().refactorNodeWithRecipe("mid", {
+      id: "wet-macerator",
+      name: "Wet macerate",
+      machineType: "Wet Macerator",
+      minimumTier: "MV",
+      durationTicks: 30,
+      eut: 32,
+      inputs: [
+        { kind: "item", id: "ore", amount: 1 },
+        { kind: "fluid", id: "water", amount: 100 },
+      ],
+      outputs: [{ kind: "item", id: "dust", amount: 3 }],
+    });
+
+    const state = useFactoryStore.getState();
+    const mid = state.project.nodes.find((entry) => entry.id === "mid");
+    expect(mid?.recipeId).toBe("wet-macerator");
+    // Both wires still have ports on the new recipe, so both survive, and the
+    // card itself never moved.
+    expect(state.project.edges.map((edge) => edge.id).sort()).toEqual(["e-dust", "e-ore"]);
+    expect(mid?.position).toEqual({ x: 440, y: 0 });
+  });
+
+  it("drops only the wires the new recipe cannot serve", () => {
+    const project = REFACTOR_PROJECT();
+    project.edges.push({
+      id: "e-lube",
+      source: "src",
+      target: "mid",
+      resourceKind: "item",
+      resourceId: "lube",
+    });
+    useFactoryStore.getState().setProject(project);
+
+    useFactoryStore.getState().refactorNodeWithRecipe("mid", {
+      id: "dry-macerator",
+      name: "Dry macerate",
+      machineType: "Dry Macerator",
+      minimumTier: "LV",
+      durationTicks: 60,
+      eut: 4,
+      inputs: [{ kind: "item", id: "ore", amount: 1 }],
+      outputs: [{ kind: "item", id: "dust", amount: 2 }],
+    });
+
+    const state = useFactoryStore.getState();
+    expect(state.project.edges.map((edge) => edge.id).sort()).toEqual(["e-dust", "e-ore"]);
+  });
+
+  it("keeps the old card and lands beside it when no wire survives", () => {
+    useFactoryStore.getState().setProject(REFACTOR_PROJECT());
+
+    useFactoryStore.getState().refactorNodeWithRecipe("mid", {
+      id: "unrelated",
+      name: "Unrelated",
+      machineType: "Assembler",
+      minimumTier: "LV",
+      durationTicks: 40,
+      eut: 8,
+      inputs: [{ kind: "item", id: "bolt", amount: 8 }],
+      outputs: [{ kind: "item", id: "frame", amount: 1 }],
+    });
+
+    const state = useFactoryStore.getState();
+    const mid = state.project.nodes.find((entry) => entry.id === "mid");
+    expect(mid?.recipeId).toBe("macerator");
+    expect(state.project.edges.map((edge) => edge.id).sort()).toEqual(["e-dust", "e-ore"]);
+    expect(state.project.nodes.some((entry) => entry.recipeId === "unrelated")).toBe(true);
+  });
+
+  it("seeds the refactor stencil from the card's own slots", () => {
+    useFactoryStore.getState().setProject(REFACTOR_PROJECT());
+
+    useFactoryStore.getState().beginRecipeRefactor("mid");
+
+    const state = useFactoryStore.getState();
+    expect(state.recipeBrowserRefactorNodeId).toBe("mid");
+    expect(state.recipeBrowserResource?.anchorNodeId).toBe("mid");
+    expect(state.recipeBrowserSeed).toEqual([
+      expect.objectContaining({ role: "takes", kind: "item", id: "ore" }),
+      expect.objectContaining({ role: "takes", kind: "item", id: "lube" }),
+      expect.objectContaining({ role: "makes", kind: "item", id: "dust" }),
+    ]);
+
+    // A plain browse afterwards is not a refactor any more.
+    useFactoryStore.getState().browseResource({ kind: "item", id: "ore" }, "recipes");
+    expect(useFactoryStore.getState().recipeBrowserRefactorNodeId).toBeUndefined();
+    expect(useFactoryStore.getState().recipeBrowserSeed).toBeUndefined();
+  });
+});
+
 describe("factory machine count optimization", () => {
   it("propagates suggested machine counts through connected recipe chains", () => {
     useFactoryStore.getState().setProject(createRatioOptimizationProject());
