@@ -95,6 +95,8 @@ interface LoadedRecipeIndex {
   hydratedRecipeSummaries?: Map<number, RecipeSummary>;
   /** Resources a crop or a bee can produce; see getPassiveSourceResourceKeys. */
   passiveSourceKeys?: Partial<Record<ResourceSourceFilter, Set<string>>>;
+  /** Dataset-declared growable resources ("kind:id"), merged into the Plants filter. */
+  plantSourceKeys?: string[];
 }
 
 export interface DatasetRecipeRef {
@@ -197,7 +199,7 @@ const BEE_RECIPE_MAPS = new Set(["Bee Produce"]);
 
 export type ResourceSourceFilter = "plants" | "bees";
 
-const datasetRoot = path.join(process.cwd(), "public", "datasets", "gtnh");
+const datasetRoot = path.join(process.cwd(), "public", "datasets", "susy");
 const loadedCatalogs = new Map<string, LoadedRecipeIndex>();
 const pendingCatalogLoads = new Map<string, Promise<LoadedRecipeIndex>>();
 const pendingRecipeIndexLoads = new Map<string, Promise<LoadedRecipeIndex>>();
@@ -1782,6 +1784,14 @@ async function getPassiveSourceResourceKeys(
 
   const recipeMaps = source === "plants" ? PLANT_RECIPE_MAPS : BEE_RECIPE_MAPS;
   const keys = new Set<string>();
+
+  // Packs without dedicated crop maps (Supersymmetry's greenhouses) declare
+  // their growable resources directly on the dataset.
+  if (source === "plants") {
+    for (const key of catalog.plantSourceKeys ?? []) {
+      keys.add(key);
+    }
+  }
 
   if (catalog.version.recipeLookupIndexPath) {
     const lookup = await loadRecipeLookupIndex(catalog.version);

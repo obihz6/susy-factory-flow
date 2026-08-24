@@ -378,12 +378,15 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
               input.id.startsWith("factoryflow:ic2_crop_seed:"),
           )
         : undefined;
-    const cropTitle =
-      cropSeedResource && recipe.name.includes(": ")
-        ? recipe.name.slice(recipe.name.indexOf(": ") + 2)
-        : undefined;
     const isCropFarmNode = isCropFarmRecipe(effectiveRecipe);
     const isCropFarmPlaceholder = isCropFarmNode && effectiveRecipe.outputs.length === 0;
+    // The title bar names the crop, not the machine behind it. GTNH cards read
+    // it off their factoryflow seed slot; packs without one (SUSY's derived
+    // farms) carry the crop in the recipe name's suffix instead.
+    const cropTitle =
+      (cropSeedResource || isCropFarmNode) && recipe.name.includes(": ")
+        ? recipe.name.slice(recipe.name.indexOf(": ") + 2)
+        : undefined;
     // Custom rate nodes: the dialed rate lives on the raw recipe (the panel
     // writes it there), so the slot is read from `recipe`, not the effective
     // pipeline output.

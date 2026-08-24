@@ -162,7 +162,7 @@ export function SupportButton() {
       target="_blank"
       rel="noreferrer noopener"
       title="Support on Ko-fi"
-      aria-label="Support GTNH Planner on Ko-fi"
+      aria-label="Support SuSy Planner on Ko-fi"
       data-umami-event="support-kofi"
       data-umami-event-source="header"
       className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded border border-pink-800 bg-pink-950 px-2 text-xs font-semibold text-pink-300 hover:border-pink-600 hover:bg-pink-900 hover:text-pink-200 snug:w-7 snug:justify-center snug:px-0"
@@ -202,7 +202,7 @@ export function MenuLinks({ onAction }: { onAction?: () => void }) {
       </MenuLink>
       <MenuLink
         href={KOFI_URL}
-        label="Support GTNH Planner"
+        label="Support SuSy Planner"
         tone="support"
         umamiEvent="support-kofi"
       >

@@ -365,7 +365,9 @@ function normalizeMachineHandler(handler: MachineHandler): MachineHandler {
 }
 
 function machineHandlerFamilyLabel(label: string): string {
-  const tierlessLabel = label
+  // Datasets from other exporters can carry handler entries with missing
+  // labels; degrade to an empty family label instead of crashing the board.
+  const tierlessLabel = String(label ?? "")
     .replace(/\s+\((?:ULV|LV|MV|HV|EV|IV|LuV|ZPM|UV|UHV|UEV|UIV|UMV|UXV|OpV|MAX)\)$/i, "")
     .replace(/\s+(?:I|II|III|IV|V|VI|VII|VIII|IX|X)$/i, "")
     .trim();

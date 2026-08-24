@@ -4,14 +4,14 @@
  * click happens, so the requested scope waits in module state until either
  * the mounted panel's listener or the next mount collects it.
  */
-export const OPEN_SETUPS_EVENT = "gtnh:open-setups";
+export const OPEN_SETUPS_EVENT = "susy:open-setups";
 
 /**
  * Fired when a share lands on the network, wherever it was posted from (the
  * shelf's own button or the top bar). A mounted Setups panel refetches so the
  * new post is already on the shelf when the dialog closes.
  */
-export const SETUPS_CHANGED_EVENT = "gtnh:setups-changed";
+export const SETUPS_CHANGED_EVENT = "susy:setups-changed";
 
 export function notifySetupsChanged(): void {
   window.dispatchEvent(new Event(SETUPS_CHANGED_EVENT));

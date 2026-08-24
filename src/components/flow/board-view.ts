@@ -97,7 +97,7 @@ export interface BoardView {
   glanceMode: GlanceMode;
 }
 
-const BOARD_VIEW_STORAGE_KEY = "gtnh-factory-flow-board-view";
+const BOARD_VIEW_STORAGE_KEY = "susy-factory-flow-board-view";
 
 export const DEFAULT_BOARD_VIEW: BoardView = {
   canvasPattern: "dots",

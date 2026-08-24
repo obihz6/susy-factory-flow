@@ -23,7 +23,7 @@ export interface TourState {
   completedLessonIds: string[];
 }
 
-const COMPLETED_STORAGE_KEY = "gtnh-factory-flow-tours-done";
+const COMPLETED_STORAGE_KEY = "susy-factory-flow-tours-done";
 
 const IDLE: TourState = { stepIndex: 0, completedLessonIds: [] };
 

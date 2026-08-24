@@ -102,10 +102,10 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gtnhplanner.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  applicationName: "GTNH Planner",
-  title: "GTNH Planner | GregTech New Horizons Factory Calculator",
+  applicationName: "SUSY Planner",
+  title: "SUSY Planner | Supersymmetry Factory Calculator",
   description:
-    "Plan and optimize GregTech: New Horizons factories on an interactive flowchart. Full recipe data for GTNH 2.8.4 and 2.9, throughput and power calculation, machine ratios, and community-shared plans.",
+    "Plan and optimize Supersymmetry factories on an interactive flowchart. Full recipe data exported from the game itself, throughput and power calculation, machine ratios, and community-shared plans.",
   alternates: {
     canonical: "/",
   },
@@ -121,18 +121,18 @@ export const metadata: Metadata = {
     },
   },
   keywords: [
-    "GTNH Planner",
-    "GregTech New Horizons planner",
-    "GTNH factory planner",
-    "GTNH recipe calculator",
-    "GTNH throughput calculator",
+    "SUSY Planner",
+    "Supersymmetry planner",
+    "Supersymmetry factory planner",
+    "Supersymmetry recipe calculator",
+    "Supersymmetry throughput calculator",
     "GregTech factory calculator",
   ],
   openGraph: {
-    title: "GTNH Planner | GregTech New Horizons Factory Calculator",
+    title: "SUSY Planner | Supersymmetry Factory Calculator",
     description:
-      "Free factory planner for GregTech: New Horizons with full recipe data for GTNH 2.8.4 and 2.9. Draw production chains, balance machine ratios, find bottlenecks, and share plans with the community.",
-    siteName: "GTNH Planner",
+      "Free factory planner for Supersymmetry with full recipe data exported from the game. Draw production chains, balance machine ratios, find bottlenecks, and share plans with the community.",
+    siteName: "SUSY Planner",
     type: "website",
     url: "/",
   },

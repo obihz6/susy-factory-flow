@@ -92,11 +92,11 @@ const RESOURCE_GRID_ART = "!h-full !w-full scale-[1.4]";
 const RESOURCE_PAGER_HEIGHT = 40;
 /** One mouse notch is 100 on most platforms, so one notch is one page. */
 const RESOURCE_WHEEL_PAGE_DELTA = 80;
-const RESOURCE_VIEW_STORAGE_KEY = "gtnh-factory-flow.resource-view.v1";
+const RESOURCE_VIEW_STORAGE_KEY = "susy-factory-flow.resource-view.v1";
 /** Whether the filter block under the search box is folded away. */
-const RESOURCE_FILTERS_STORAGE_KEY = "gtnh-factory-flow.resource-filters.v1";
+const RESOURCE_FILTERS_STORAGE_KEY = "susy-factory-flow.resource-filters.v1";
 /** The machine chips' multi-select: which maps' recipes the search shows. */
-const MAP_SELECTION_STORAGE_KEY = "gtnh-factory-flow.machine-map-selection.v1";
+const MAP_SELECTION_STORAGE_KEY = "susy-factory-flow.machine-map-selection.v1";
 
 type ResourceSortMode = "relevance" | "name" | "mod" | "made" | "uses";
 type ResourceViewMode = "list" | "grid";
