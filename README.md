@@ -95,9 +95,12 @@ the tracking script in the production build.
 ## Load Real Recipes
 
 ```bash
+./build-jar.sh
 bash tools/dataset-pipeline/scripts/susy/run-susy-export.sh
+```
 
-
+```bash
+powershell -ExecutionPolicy Bypass -File tools\dataset-pipeline\susy-hei-oracle\build-jar.ps1 
 powershell -ExecutionPolicy Bypass -File tools\dataset-pipeline\scripts\susy\run-susy-export.ps1
 ```
 
