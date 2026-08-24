@@ -132,40 +132,68 @@ describe("RecipeBrowser", () => {
     );
   });
 
-  it("keeps the concrete Spruce Log context when adding a recipe from the recipe book", async () => {
-    render(<RecipeBrowser onLoadDatasetVersion={() => {}} />);
+  // Generous budgets: during full-suite startup this worker can be starved
+  // for seconds at a stretch by the other forks' imports, and any pending
+  // await dies with the test's own timeout, whatever the waits allow.
+  it(
+    "keeps the concrete Spruce Log context when adding a recipe from the recipe book",
+    { timeout: 30000 },
+    async () => {
+      render(<RecipeBrowser onLoadDatasetVersion={() => {}} />);
 
-    // The map name now shows twice: category rail row + category header.
-    await screen.findAllByText("Coke Oven");
-    await waitFor(() => {
-      expect(queryRecipeDatasetRecipes).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Object),
-        expect.objectContaining({ mode: "uses" }),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      // The map name now shows twice: category rail row + category header.
+      await screen.findAllByText("Coke Oven", {}, { timeout: 10000 });
+      await waitFor(
+        () => {
+          expect(queryRecipeDatasetRecipes).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.any(Object),
+            expect.objectContaining({ mode: "uses" }),
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+          );
+        },
+        { timeout: 10000 },
       );
-    });
 
-    fireEvent.click(await screen.findByLabelText("Add recipe node"));
+      // Two races to beat. First, the virtual result grid rebuilds its cards
+      // around the post-mount measure pass, so a click aimed across an await
+      // boundary can land on a detached node and never fire - query and
+      // dispatch in the same synchronous step, and press again per poll.
+      // Second, a landing press CLOSES the book, so later polls find no
+      // button at all: read the store either way.
+      await waitFor(
+        () => {
+          const button = screen.queryByLabelText("Add recipe node");
+          if (button) {
+            fireEvent.click(button);
+          }
+          expect(useFactoryStore.getState().project.nodes.length).toBeGreaterThan(0);
+        },
+        { timeout: 10000 },
+      );
 
-    await waitFor(() => {
-      const node = useFactoryStore.getState().project.nodes[0];
-      expect(node?.recipeInputOverrides?.["1"]).toEqual(
+      await waitFor(
+        () => {
+          const node = useFactoryStore.getState().project.nodes[0];
+          expect(node?.recipeInputOverrides?.["1"]).toEqual(
+            expect.objectContaining({
+              id: "minecraft:log@1",
+              displayName: "Spruce Log",
+              iconPath: "/items/spruce-log.png",
+              tooltip: ["Spruce Log"],
+              alternatives: undefined,
+            }),
+          );
+        },
+        { timeout: 10000 },
+      );
+      expect(useFactoryStore.getState().project.recipes[0]?.inputs[1]).toEqual(
         expect.objectContaining({
-          id: "minecraft:log@1",
-          displayName: "Spruce Log",
-          iconPath: "/items/spruce-log.png",
-          tooltip: ["Spruce Log"],
-          alternatives: undefined,
+          id: "oredict:logWood",
         }),
       );
-    });
-    expect(useFactoryStore.getState().project.recipes[0]?.inputs[1]).toEqual(
-      expect.objectContaining({
-        id: "oredict:logWood",
-      }),
-    );
-  });
+    },
+  );
 
   it("keeps filled-cell recipe slots renderable when browsing by equivalent fluid", () => {
     const recipe: Recipe = {

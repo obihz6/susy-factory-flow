@@ -237,7 +237,12 @@ console.error(
 const bootstrap = path.join(scriptDir, "bootstrap-susy-instance.mjs");
 const bootstrapArgs = [bootstrap, bootstrapDir];
 if (bootstrapRef) bootstrapArgs.push("--ref", String(bootstrapRef));
-const ran = spawnSync(process.execPath, bootstrapArgs, { stdio: "inherit" });
+// Our stdout is the KEY=VALUE contract the caller captures; the bootstrap's
+// inherited grandchildren (packwiz, the Forge installer) must not leak into
+// that pipe, so their output rides our stderr instead.
+const ran = spawnSync(process.execPath, bootstrapArgs, {
+  stdio: ["ignore", 2, "inherit"],
+});
 if (ran.status !== 0) {
   console.error("resolve-susy-instance: bootstrap failed.");
   process.exit(ran.status ?? 1);

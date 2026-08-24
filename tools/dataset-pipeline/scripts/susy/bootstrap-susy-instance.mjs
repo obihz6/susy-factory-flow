@@ -58,7 +58,9 @@ async function downloadFile(url, outputPath) {
 function run(binary, args, options = {}) {
   log(`${path.basename(String(binary))} ${args.join(" ").slice(0, 120)}`);
   const result = spawnSync(binary, args, {
-    stdio: ["ignore", options.capture ? "pipe" : "inherit", options.capture ? "pipe" : "inherit"],
+    // Uncaptured child stdout rides fd 2: this script's own stdout is its
+    // JSON result contract, and inherited grandchildren must not leak into it.
+    stdio: ["ignore", options.capture ? "pipe" : 2, options.capture ? "pipe" : "inherit"],
     cwd: options.cwd ?? target,
     env: { ...process.env, ...options.env },
     maxBuffer: 64 * 1024 * 1024,
