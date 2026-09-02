@@ -18,7 +18,7 @@ import { APP_VERSION } from "@/lib/version";
  * The stamp is written when the popup is DISMISSED, not when it is shown, so
  * closing the tab mid-read does not lose the notes.
  */
-const LAST_SEEN_KEY = "gtnh-factory-flow.last-seen-version.v1";
+const LAST_SEEN_KEY = "susy-factory-flow.last-seen-version.v1";
 
 /**
  * Which `showToEveryone` releases this browser has already been shown.
@@ -29,7 +29,7 @@ const LAST_SEEN_KEY = "gtnh-factory-flow.last-seen-version.v1";
  * showing had to lie about the stamp to work, and then a browser that had
  * genuinely read the notes would be told about them again.
  */
-const FORCED_SHOWN_KEY = "gtnh-factory-flow.forced-notes.v1";
+const FORCED_SHOWN_KEY = "susy-factory-flow.forced-notes.v1";
 
 /**
  * The settings dialog's mute for the update popup. "off" means the notes

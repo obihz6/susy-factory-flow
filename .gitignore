@@ -16,7 +16,9 @@
 /.tmp
 /.gh-artifacts-*/
 *.tar
-/public/datasets/gtnh/
+/public/datasets/susy/
+/temp
+/.opencode
 
 # next.js
 /.next/
@@ -49,3 +51,7 @@ dev-server*.log
 next-env.d.ts
 public/highs.wasm
 public/highs.js
+
+# susy-factory-flow working area (never committed)
+/temp/
+/temp

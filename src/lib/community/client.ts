@@ -15,7 +15,7 @@ import type {
   EntryIcon,
 } from "./types";
 
-const DEVICE_ID_STORAGE_KEY = "gtnh-factory-flow.device-id.v1";
+const DEVICE_ID_STORAGE_KEY = "susy-factory-flow.device-id.v1";
 
 /** Stable anonymous id for this browser; pairs with the IP hash server-side. */
 export function getDeviceId(): string {

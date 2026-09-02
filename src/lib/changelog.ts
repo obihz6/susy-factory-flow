@@ -533,6 +533,17 @@ export const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
+    version: "2.23.0",
+    date: "2026-08-23",
+    headline: "Crop farms know SUSY's crops",
+    notes: [
+      "The sprout button now offers every field crop the pack grows: wheat, soybeans, grapes and friends.",
+      "Only crops that plant in tilled soil are listed, so cane and cactus stay out.",
+      "One crop farm card is one planted crop, at the pack's own greenhouse growth pace.",
+      "The item browser's Plants filter lists everything growable, saplings included.",
+    ],
+  },
+  {
     version: "2.22.1",
     date: "2026-08-21",
     headline: "Plainer buttons",

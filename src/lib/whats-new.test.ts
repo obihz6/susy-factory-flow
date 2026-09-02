@@ -29,8 +29,8 @@ const {
   unseenEntries,
 } = await import("@/lib/whats-new");
 
-const KEY = "gtnh-factory-flow.last-seen-version.v1";
-const FORCED_KEY = "gtnh-factory-flow.forced-notes.v1";
+const KEY = "susy-factory-flow.last-seen-version.v1";
+const FORCED_KEY = "susy-factory-flow.forced-notes.v1";
 
 describe("compareVersions", () => {
   it("orders by number, not by string", () => {

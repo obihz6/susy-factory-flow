@@ -80,6 +80,8 @@ export const recipeDatasetSchema = z.object({
   recipeMaps: z.array(z.string()),
   recipeMapIcons: z.array(recipeMapIconEntrySchema).optional(),
   machineHandlerIcons: z.array(machineHandlerIconEntrySchema).optional(),
+  /** Resource keys ("kind:id") the pack grows: crops, saplings, their produce. */
+  plantSourceKeys: z.array(z.string()).optional(),
   generatedAt: z.string(),
 });
 

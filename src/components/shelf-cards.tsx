@@ -237,7 +237,7 @@ export function renderEntryHoverCard(entry: {
         <span>{entry.machineCount} machines</span>
         {entry.tier ? <TierBadge tier={entry.tier} /> : null}
         {entry.gameVersion ? (
-          <span className="ml-auto shrink-0 truncate">GTNH {entry.gameVersion}</span>
+          <span className="ml-auto shrink-0 truncate">SUSY {entry.gameVersion}</span>
         ) : null}
       </div>
       {entry.description ? (

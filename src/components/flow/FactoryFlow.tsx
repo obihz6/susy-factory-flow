@@ -702,7 +702,7 @@ const EDGE_ROUTE_SNAP_GRID = 4;
 const EXPORT_IMAGE_PADDING = 80;
 const EXPORT_PNG_PIXEL_RATIO = 2;
 const EXPORT_PNG_MAX_PIXEL_SIDE = 8192;
-const FLOW_EDGE_LABEL_SELECT_EVENT = "gtnh-flow.edge-label-select";
+const FLOW_EDGE_LABEL_SELECT_EVENT = "susy-flow.edge-label-select";
 type ResourceEdgeData = {
   resource: Pick<
     ResourceAmount,

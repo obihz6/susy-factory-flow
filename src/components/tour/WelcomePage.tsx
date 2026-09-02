@@ -219,7 +219,7 @@ export function WelcomePage() {
       <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-7 px-6 py-8 compact:gap-5 compact:px-4 compact:py-5">
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <h2 className="text-2xl font-bold tracking-tight text-fg compact:text-xl">
-            GTNH <span className="text-cyan-500">Planner</span>
+            SUSY <span className="text-cyan-500">Planner</span>
           </h2>
           <span className="rounded border border-line px-1.5 py-px text-[11px] font-semibold leading-none text-fg-muted tabular-nums">
             v{APP_VERSION}

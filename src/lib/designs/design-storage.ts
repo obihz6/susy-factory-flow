@@ -9,7 +9,7 @@ import { toDesignSummary, type DesignRecord, type DesignSummary } from "./design
  * version, and a version change blocks while any other connection is open — so
  * the two would race on startup, when both are opened at once.
  */
-const DB_NAME = "gtnh-factory-flow-designs";
+const DB_NAME = "susy-factory-flow-designs";
 const DB_VERSION = 1;
 
 /*
@@ -22,7 +22,7 @@ const META_STORE = "design-meta";
 const PLAN_STORE = "design-plans";
 
 /** Small enough, and read early enough, to be worth keeping synchronous. */
-export const ACTIVE_DESIGN_STORAGE_KEY = "gtnh-factory-flow.active-design.v1";
+export const ACTIVE_DESIGN_STORAGE_KEY = "susy-factory-flow.active-design.v1";
 
 interface StoredPlan {
   id: string;

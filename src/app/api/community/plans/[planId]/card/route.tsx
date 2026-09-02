@@ -99,13 +99,13 @@ function cropToArt(data: Buffer): Buffer {
 }
 
 /**
- * A dataset icon path (`/datasets/gtnh/<version>/textures/rendered/x.png`)
+ * A dataset icon path (`/datasets/<pack>/<version>/textures/rendered/x.png`)
  * as a data URI, read from disk the same way the texture route serves it.
  * Anything that fails to validate, read or decode becomes undefined, never
  * a throw: a card with no icon must still render.
  */
 async function loadIconDataUri(iconPath: string | undefined): Promise<string | undefined> {
-  if (!iconPath?.startsWith("/datasets/gtnh/")) {
+  if (!iconPath?.startsWith("/datasets/")) {
     return undefined;
   }
   const segments = iconPath.slice(1).split("/");
@@ -241,11 +241,11 @@ export async function GET(
             }}
           >
             <div style={{ display: "flex", fontSize: 28, fontWeight: 700, color: BRAND }}>
-              gtnhplanner.com
+              susyplanner.local
             </div>
             {row.game_version ? (
               <div style={{ display: "flex", fontSize: 21, color: MUTED }}>
-                GTNH {row.game_version}
+                SUSY {row.game_version}
               </div>
             ) : null}
           </div>

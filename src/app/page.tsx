@@ -29,17 +29,17 @@ export async function generateMetadata({
     url: `/api/community/plans/${encodeURIComponent(row.id)}/card`,
     width: 1200,
     height: 630,
-    alt: `${row.name} on GTNH Planner`,
+    alt: `${row.name} on SUSY Planner`,
   };
 
   return {
-    title: `${row.name} | GTNH Planner`,
+    title: `${row.name} | SUSY Planner`,
     description,
     alternates: { canonical: planUrl },
     openGraph: {
       title: row.name,
       description,
-      siteName: "GTNH Planner",
+      siteName: "SUSY Planner",
       type: "website",
       url: planUrl,
       images: [image],
@@ -60,11 +60,11 @@ export default function Home() {
       {/* The one paragraph a JS-less visitor (or crawler) gets. Renders
           nothing at all when the app itself is going to. */}
       <noscript>
-        <h1>GTNH Planner</h1>
+        <h1>SUSY Planner</h1>
         <p>
-          A free factory planner and recipe calculator for GregTech: New
-          Horizons. Draw production chains on an interactive flowchart with
-          full recipe data for GTNH 2.8.4 and 2.9, balance machine ratios,
+          A free factory planner and recipe calculator for Supersymmetry.
+          Draw production chains on an interactive flowchart with
+          full recipe data exported from the game itself, balance machine ratios,
           compute power and throughput, and share plans with the community.
           The planner needs JavaScript to run.
         </p>

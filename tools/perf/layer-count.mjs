@@ -11,16 +11,16 @@ await page.goto("http://localhost:3000/", { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".react-flow", { timeout: 60000 });
 await page.waitForTimeout(6000);
 await page.evaluate(async ({ plan, view }) => {
-  const db = await new Promise((res, rej) => { const r = indexedDB.open("gtnh-factory-flow-designs", 1);
+  const db = await new Promise((res, rej) => { const r = indexedDB.open("susy-factory-flow-designs", 1);
     r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains("design-meta")) d.createObjectStore("design-meta", {keyPath:"id"}); if (!d.objectStoreNames.contains("design-plans")) d.createObjectStore("design-plans", {keyPath:"id"}); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const now = new Date().toISOString();
   await new Promise((res) => { const t = db.transaction(["design-meta","design-plans"],"readwrite");
     t.objectStore("design-meta").put({ id: plan.id, name: plan.name, createdAt: now, updatedAt: now });
     t.objectStore("design-plans").put({ id: plan.id, project: plan }); t.oncomplete = () => res(); });
-  db.close(); localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
-  if (view) { const raw = localStorage.getItem("gtnh-factory-flow-board-view");
-    localStorage.setItem("gtnh-factory-flow-board-view", JSON.stringify({ ...(raw ? JSON.parse(raw) : {}), ...view })); }
+  db.close(); localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
+  if (view) { const raw = localStorage.getItem("susy-factory-flow-board-view");
+    localStorage.setItem("susy-factory-flow-board-view", JSON.stringify({ ...(raw ? JSON.parse(raw) : {}), ...view })); }
 }, { plan: project, view });
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForSelector(".react-flow__node", { timeout: 120000 });
