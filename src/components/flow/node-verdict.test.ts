@@ -289,6 +289,48 @@ describe("deriveNodeVerdict", () => {
     expect(verdict.deficit?.machinesToAdd).toBe(3);
   });
 
+  it("stays quiet when the hungry-looking consumer is output-throttled (the crop farm)", () => {
+    // The real-world regression: a pyrolyse oven pinned by its charcoal
+    // disposal never eats more logs however many arrive, but its damped log
+    // ask never collapsed to shipped, so the 18% crop farm feeding it wore
+    // BOTTLENECK. A consumer whose disposal is its binding limit contributes
+    // no hunger upstream.
+    const proj = project({
+      recipes: [
+        { id: "r", name: "Crop", machineType: "Crop Farm", minimumTier: "ULV", durationTicks: 20, eut: 0, inputs: [], outputs: [] },
+        { id: "pyro", name: "Pyro", machineType: "Pyrolyse Oven", minimumTier: "MV", durationTicks: 20, eut: 1, inputs: [], outputs: [] },
+      ] as unknown as FactoryProject["recipes"],
+      nodes: [machineNode("Crop"), machineNode("Pyro", "pyro")],
+      edges: [edge("eLog", "Crop", "Pyro", "log")],
+    });
+    const result = throughput(
+      {
+        Crop: nodeResult({
+          nodeId: "Crop",
+          utilization: 0.18,
+          capableUtilization: 1,
+          demandUtilization: 0.075,
+          outputs: { "item:log": flow("item", "log", 25.5) },
+        }),
+        Pyro: nodeResult({
+          nodeId: "Pyro",
+          utilization: 0.76,
+          capableUtilization: 1,
+          demandUtilization: 0.32,
+          disposalUtilization: 0.32,
+          inputs: { "item:log": flow("item", "log", 6) },
+        }),
+      },
+      {
+        eLog: edgeResult({ transferredPerSecond: 4.57, demandPerSecond: 5.54 }),
+      },
+    );
+
+    const verdict = deriveNodeVerdict(proj, result, "Crop");
+    expect(verdict.kind).toBe("demand-set");
+    expect(verdict.deficit).toBeUndefined();
+  });
+
   it("un-greens a maxed producer whose consumer's ask converged away (the green tower)", () => {
     // The real-world regression: the solver's demandPerSecond converges down
     // to what was shipped, so the only honest hunger signal on a
@@ -609,13 +651,28 @@ describe("deriveNodeVerdict", () => {
   it("reads balanced, unwired, and off", () => {
     const proj = project({
       recipes: [
-        { id: "r", name: "M", machineType: "M", minimumTier: "ULV", durationTicks: 20, eut: 1, inputs: [], outputs: [] },
+        // A slot on the recipe: a card with wireable ports and no wires is
+        // what "unwired" means. Slotless machines get their own case below.
+        {
+          id: "r",
+          name: "M",
+          machineType: "M",
+          minimumTier: "ULV",
+          durationTicks: 20,
+          eut: 1,
+          inputs: [],
+          outputs: [{ kind: "item", id: "pe", amount: 1 }],
+        },
+        // A solar panel's shape: nothing in, nothing out, only power. There
+        // is no wire it could take, so it must never read unwired.
+        { id: "rSolar", name: "Panel", machineType: "Panel", minimumTier: "ULV", durationTicks: 20, eut: 0, inputs: [], outputs: [] },
       ] as unknown as FactoryProject["recipes"],
       nodes: [
         machineNode("N"),
         machineNode("Lonely"),
         machineNode("Dead", "r", { enabled: false }),
         machineNode("C"),
+        machineNode("Panel", "rSolar"),
       ],
       edges: [edge("eOut", "N", "C", "pe")],
     });
@@ -624,6 +681,7 @@ describe("deriveNodeVerdict", () => {
         N: nodeResult({ utilization: 1 }),
         Lonely: nodeResult({ nodeId: "Lonely", utilization: 1 }),
         Dead: nodeResult({ nodeId: "Dead", utilization: 0 }),
+        Panel: nodeResult({ nodeId: "Panel", utilization: 1 }),
       },
       { eOut: edgeResult({ transferredPerSecond: 10, demandPerSecond: 10 }) },
     );
@@ -631,6 +689,7 @@ describe("deriveNodeVerdict", () => {
     expect(deriveNodeVerdict(proj, result, "N").kind).toBe("balanced");
     expect(deriveNodeVerdict(proj, result, "Lonely").kind).toBe("unwired");
     expect(deriveNodeVerdict(proj, result, "Dead").kind).toBe("off");
+    expect(deriveNodeVerdict(proj, result, "Panel").kind).toBe("balanced");
   });
 });
 

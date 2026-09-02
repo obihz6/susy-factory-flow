@@ -43,6 +43,7 @@ import {
   extractProjectJsonFromSvg,
 } from "@/lib/import-export/plan-image";
 import { useWelcomeTab } from "@/lib/tour/welcome-tab";
+import { isPowerRecipe } from "@/lib/power/power-recipe";
 import { useFactoryStore } from "@/store/factory-store";
 
 interface BoardActionsProps {
@@ -523,7 +524,9 @@ async function hydrateImportedProjectRecipes(
     await getRecipeDatasetRecipeIds(DEFAULT_DATASET_MANIFEST_URL, version),
   );
   const importRecipesToResolve = project.recipes.filter(
-    (recipe) => !availableRecipeIds.has(recipe.id),
+    // Power cards own locally synthesized recipes (src/lib/power) that the
+    // dataset can never answer for - and must never replace by name-match.
+    (recipe) => !availableRecipeIds.has(recipe.id) && !isPowerRecipe(recipe),
   );
   const resolvedRecipeIds = new Map(
     importRecipesToResolve.length
@@ -552,6 +555,11 @@ async function hydrateImportedProjectRecipes(
 
   const hydratedRecipes = await Promise.all(
     project.recipes.map(async (recipe) => {
+      if (isPowerRecipe(recipe)) {
+        // Survives verbatim; normalizeLoadedProject resynthesizes it from
+        // the node's settings on the way in.
+        return recipe;
+      }
       if (!availableRecipeIds.has(recipe.id)) {
         const rawRecipeIdMatch = resolvedRecipeIds.get(recipe.id);
         const migratedRecipe = rawRecipeIdMatch

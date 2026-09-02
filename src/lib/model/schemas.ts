@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PROJECT_SCHEMA_VERSION } from "./types";
 
-export const resourceKindSchema = z.enum(["item", "fluid", "aspect"]);
+export const resourceKindSchema = z.enum(["item", "fluid", "aspect", "power"]);
 export const resourceIconAtlasRefSchema = z.object({
   imagePath: z.string().min(1),
   atlasWidth: z.number().int().positive(),
@@ -218,6 +218,15 @@ export const recipeSchema = z.object({
   machineProfile: machineProfileSchema.optional(),
   machineHandlers: z.array(machineHandlerSchema).optional(),
   machineConfigControls: z.array(machineConfigControlSchema).optional(),
+  // Power cards (src/lib/power): the generator behind a synthesized recipe.
+  power: z
+    .object({
+      sourceId: z.string().min(1),
+      euPerTick: z.number(),
+      stats: z.array(z.object({ label: z.string(), value: z.string() })),
+      warnings: z.array(z.string()).optional(),
+    })
+    .optional(),
   runtimeCalculation: runtimeCalculationSchema.optional(),
   isDemo: z.boolean().optional(),
   source: z
@@ -315,6 +324,8 @@ export const factoryNodeSchema = z.object({
   machineConfigTiers: z.record(z.string().min(1), z.string().min(1)).optional(),
   settingsCollapsed: z.boolean().optional(),
   recipeInputOverrides: z.record(z.string().min(1), recipeInputSchema).optional(),
+  // Solve mode's pin: run exactly this many machines; absent = solver's choice.
+  solvePin: z.number().nonnegative().optional(),
   targetOutput: targetRateSchema.optional(),
   enabled: z.boolean(),
   pocketId: z.string().min(1).optional(),
@@ -340,6 +351,8 @@ export const factoryStorageSchema = z.object({
   // Absent means `overflow`: every buffer catches surplus unless the player
   // deliberately sets it strict.
   bufferMode: z.enum(["overflow", "strict"]).optional(),
+  // Solve mode's requirement on a product drawer; absent = unconstrained.
+  targetPerSecond: z.number().nonnegative().optional(),
   pocketId: z.string().min(1).optional(),
   position: z.object({
     x: z.number(),
@@ -463,7 +476,7 @@ export const planViewStateSchema = z.object({
   linePulseMode: z.boolean().optional(),
   calmMode: z.boolean().optional(),
   glanceMode: z.string().optional(),
-  rateUnit: z.enum(["tick", "second", "minute", "hour"]).optional(),
+  rateUnit: z.enum(["tick", "second", "minute", "hour", "eu"]).optional(),
   leftPanelOpen: z.boolean().optional(),
   rightPanelOpen: z.boolean().optional(),
   showHiddenResources: z.boolean().optional(),
@@ -493,6 +506,8 @@ export const factoryProjectSchema = z.object({
     .optional(),
   // Legacy sketch mode, rewritten as both rules on load.
   assumeBoundaries: z.boolean().optional(),
+  // Solve mode: product amounts are the question, machine counts the answer.
+  solveMode: z.boolean().optional(),
   recipes: z.array(recipeSchema),
   nodes: z.array(factoryNodeSchema),
   storages: z.array(factoryStorageSchema).optional().default([]),

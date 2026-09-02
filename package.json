@@ -13,12 +13,15 @@
     "datasets:detect": "node tools/dataset-pipeline/scripts/detect-gtnh-versions.mjs",
     "datasets:manifest": "node tools/dataset-pipeline/scripts/rebuild-manifest.mjs",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "predev": "node tools/copy-highs-wasm.mjs",
+    "prebuild": "node tools/copy-highs-wasm.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",
     "@xyflow/react": "^12.10.2",
     "gifenc": "^1.0.3",
+    "highs": "^1.15.2",
     "html-to-image": "^1.11.13",
     "lucide-react": "^1.16.0",
     "next": "16.2.6",

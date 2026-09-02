@@ -1,6 +1,7 @@
 "use client";
 
 import type { MachineTier, Recipe, RecipeOutput, ResourceAmount } from "@/lib/model/types";
+import { APP_VERSION } from "@/lib/version";
 import {
   serializeRecipeQueryClause,
   type RecipeQueryClause,
@@ -61,7 +62,7 @@ export interface RecipeDatasetResourceQuery {
   limit: number;
   kind?: "item" | "fluid";
   mod?: string;
-  sort?: "relevance" | "name" | "mod" | "recipes" | "made" | "uses";
+  sort?: "relevance" | "name" | "mod" | "recipes" | "made" | "uses" | "popular";
   /** Narrow to what a crop can grow or a bee can make. */
   source?: "plants" | "bees";
 }
@@ -106,6 +107,13 @@ export async function initRecipeDatasetVersion(
     window.location.origin,
   );
   addDatasetCacheKey(url, version);
+  // The catalog is the one dataset response the SERVER adds to (it mints
+  // icons for synthesized handler families in dataset-query.ts), so the
+  // dataset hash alone does not pin its bytes: a release that changes the
+  // minting would sit behind year-long browser caches until the next dataset
+  // republish. The app version joins the cache key so every release misses
+  // cleanly; recipe and shard responses stay dataset-pure and keep hash-only.
+  url.searchParams.set("appVersion", APP_VERSION);
   return fetchJson<RecipeDataset>(url.toString(), { signal: options.signal });
 }
 

@@ -90,6 +90,13 @@ function build(project: FactoryProject, result: ThroughputResult | undefined): C
   if (!result) {
     return EMPTY_INDEX;
   }
+  // SOLVE MODE has no clog locks: machines at zero there are "not needed by
+  // any typed amount", never "frozen by their own surplus" - and the vent
+  // solve would burn a real LP diagnosing a build that is not on screen.
+  // Silenced at the detector so notices, wire tints and verdicts all agree.
+  if (project.solveMode) {
+    return EMPTY_INDEX;
+  }
 
   // The vent solve costs a real LP, so it only runs when the board shows the
   // symptom: an enabled machine at a dead stop. Healthy boards skip it.
@@ -347,8 +354,8 @@ export function describeClogLock(lock: ClogLock): {
     title: count === 1 ? "This machine is choking on its own surplus" : "These machines are choking on a surplus",
     short:
       count === 1
-        ? `A machine stopped because its ${spares} has nowhere to go. Wire it to a drawer and it runs.`
-        : `${count} machines stopped because ${spares} has nowhere to go. Give it a drawer and they all run.`,
+        ? `A machine stopped because its ${spares} has nowhere to go.`
+        : `${count} machines stopped because ${spares} has nowhere to go.`,
     what: `${count === 1 ? "One machine" : `${count} machines`} sit at 0% with everything they need. The line makes more ${vent.resourceName} than it uses, and the spare has no drawer, no trash can and no consumer with room.`,
     why: "In game the spare piles up until every chest and slot on the line is full, and then nothing can run because nothing has room. Full inputs, full outputs, no progress: the opposite of starving. Taking a stack out by hand restarts it for a few seconds before it jams the same way again.",
     fix: `Give ${list} somewhere to go: a drawer or a trash can on each blue wire. That is the whole list for this jam; any other clogged card just paces down once these can leave.`,

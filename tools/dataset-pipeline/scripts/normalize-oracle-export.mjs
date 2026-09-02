@@ -806,6 +806,7 @@ function normalizeForestryBees(domain) {
             id: "base-apiary",
             label: "Forestry species base cycle",
             machineConfigTiers: {
+              beeSpeedGene: "normal",
               beeEnvironment: "preferred",
               beeFrameSlot1: "none",
               beeFrameSlot2: "none",

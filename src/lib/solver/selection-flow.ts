@@ -19,6 +19,8 @@ export interface SelectionFlow {
   machineCount: number;
   /** Drawers and tanks caught by the selection, counted the same way. */
   storageCount: number;
+  /** The selection's own power draw, for the panel's EU-per-unit reading. */
+  totalEuT: number;
 }
 
 /**
@@ -95,5 +97,6 @@ export function calculateSelectionFlow(
     internal: selectInternalBalances(Object.values(result.resources)),
     machineCount: nodes.length,
     storageCount: storages.length,
+    totalEuT: result.totalEuT,
   };
 }

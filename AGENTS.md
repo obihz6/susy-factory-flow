@@ -57,6 +57,10 @@ Working notes for future agents on GTNH Factory Flow.
     build-recipe-index.mjs (recipe index + lookup index + shards), then gzip,
     into `~/gtnh-export/datasets/gtnh/<id>` (2.9) and
     `~/gtnh-export/datasets-284/gtnh/<id>` (2.8.4).
+  - 2.8.4 support is DROPPED (Jack, 2026-08-26): only 2.9 is supported. Its
+    dataset was retired from the droplet to
+    `/opt/shared/gtnh-datasets-retired/` and removed from the manifest and
+    the systemd prewarm. Do not rebuild, republish, or re-prewarm it.
   - `~/copy-datasets.sh` copies the results into the Windows repo's
     `public/datasets/gtnh`.
   - Publish: scp the changed files (gzips, shards, oracle-report) to the
@@ -248,8 +252,13 @@ Working notes for future agents on GTNH Factory Flow.
   - Still on scraped data, deliberately: the 11 fusion reactors (need
     `fixedVoltageTier` and their own overclock), and the machines whose
     coefficients read recipe metadata or the recipe type (Nano Forge, PCB
-    Factory, Naquadah Fuel Refinery, Component Assembly Line, Dangote
-    Distillus, Precise Auto-Assembler, QFT, Eye of Harmony).
+    Factory, Component Assembly Line, Dangote Distillus, Precise
+    Auto-Assembler, QFT, Eye of Harmony). The Naquadah Fuel Refinery
+    graduated off that list: its recipe metadata is the special value (the
+    minimum field restriction coil tier), which `ctx.recipeSpecialValue`
+    now carries into the table, and a control may declare
+    `minimumFromSpecialValue` to make the recipe's special value its
+    per-recipe minimum tier.
   - Steam machines are handled in code, not scraped. The 8 steam multiblocks
     (Steam Grinder/Squasher/Separator/Purifier/Presser/Blender/Fuser/Hearth)
     are table entries: `1.6 / tierMachine` duration, 8 parallels, no
@@ -431,35 +440,48 @@ Working notes for future agents on GTNH Factory Flow.
 - Opening a legacy pocket (`size` absent - the "coordinates are their own
   old space" signal) rebases members to fit the frame and drops waypoints
   on wires touching them; minimize mirrors the waypoint rule.
-- Auto-arrange DUMPS EVERY BOARD FIRST and builds zones from scratch, and
-  it draws no ink (`computeAutoArrangement`). Phase 0 spills every frame's
-  cards onto the canvas at their absolute positions (`removeBoards` on
-  `applyBoardArrangement`), then scouts with a throwaway arrange: each
-  natural island becomes a fresh open board ("Zone N", `addBoards` /
-  `setOwners`, all one undo entry). A rebuilt zone holding exactly the same
-  cards as a dumped board inherits its NAME and paper — the layout is
-  decided from scratch either way, and renaming somebody's zone on every
-  arrange is its own small betrayal. Hand-drawn frames therefore never
-  fence the layout in, and the button gives the same answer for the same
-  factory. Shelf strays and interchange buffers (the arranger's
-  `backdrop: false` islands) stay loose between zones. Then the
-  layout passes: every open board arranges its own members inside its
-  frame (deepest first, in frame space, origin one cell under the title
-  bar) and the frame REFITS around the result (`setBoardSizes`); the root
-  then arranges with every board as one meta card at its fresh size, wire
-  length between blocks doing the placing. Interior passes pin no
-  waypoints (stored waypoints are flow-space); ink on every arranged level
-  is cleared and nothing replaces it - the zones are the grouping.
-- The interior passes are BOUNDARY-AWARE: every wire crossing a frame gets
-  a phantom partner card (one per outer neighbour and direction, weight
-  x3), so members that talk across the border land against the edge their
-  wires leave through; phantoms are discarded and the members re-normalise
-  to the frame corner. Each interior pass records where every crossing
-  wire's member landed (`boundaryPortY`, "edgeId:boardId" from frame top),
-  and outer passes use those as the board card's PORT heights - which is
-  what lines frames up so wires between boards run straight instead of
-  crossing. The arrange also paints every unpainted board from
-  `ZONE_PAINTS`, skipping coats other boards already wear.
+- Auto-arrange LOCKS EVERY EXISTING BOARD (Jack, 2026-08-29, from player
+  feedback: the dump-first arrange read as destructive). A board someone
+  drew is the player's: its contents are never rearranged, its frame keeps
+  its size, name, paper and ink, and the arrange only PLACES the board -
+  one solid meta card in the root pass, wire length between blocks doing
+  the placing. Waypoints pinned on wires wholly inside one locked board
+  ride the board's move (translated, not wiped); every other re-laid wire
+  still loses its stops and dragged label, and only ROOT-level ink is
+  cleared. Do not resurrect the dump (`removeBoards` on
+  `applyBoardArrangement` survives as API only).
+- The arrange button opens a small SHEET (same pattern as Setup Rules
+  beside it): one setting, "Rearrange inside boards", and the Arrange
+  button under it. The setting is a browser preference
+  (`gtnh-factory-flow.arrange-tidy-boards.v1`, off by default), never part
+  of the plan. ON, every OPEN board takes the full interior pass in place:
+  members re-laid, frame refit, that level's ink and pinned waypoints
+  reset - but membership, name and paper still stand, and minimized
+  boards stay sealed either way. This is what makes the button repeatable
+  once everything lives in boards.
+- What the arrange still builds is ZONES for the strays
+  (`computeAutoArrangement`, all one undo entry): loose root cards are
+  scouted with a throwaway arrange and each natural island of two or more
+  becomes a fresh open board ("Zone N", numbered past any existing
+  "Zone N", `addBoards` / `setOwners`). Existing boards stand in the scout
+  so islands form around them but are never swallowed into a zone. Shelf
+  strays and interchange buffers (the arranger's `backdrop: false`
+  islands) stay loose between zones. Each fresh zone arranges its own
+  members in frame space (origin one cell under the title bar) and the
+  frame FITS around the result (`setBoardSizes`); zone interiors pin no
+  waypoints (stored waypoints are flow-space).
+- The zone interior passes are BOUNDARY-AWARE: every wire crossing a frame
+  gets a phantom partner card (one per outer neighbour and direction,
+  weight x3), so members that talk across the border land against the edge
+  their wires leave through; phantoms are discarded and the members
+  re-normalise to the frame corner. Each interior pass records where every
+  crossing wire's member landed (`boundaryPortY`, "edgeId:boardId" from
+  frame top) - and locked top-level boards record the same from where
+  their members already STAND - and the root pass uses those as the board
+  card's PORT heights, which is what lines frames up so wires between
+  boards run straight instead of crossing. The arrange also papers every
+  fresh zone from `ZONE_PAPERS`, skipping coats other boards already wear;
+  locked boards are never re-dressed.
 - The board title bar has a paint button (palette in a NodeToolbar portal,
   because the frame's own layer sits under the cards); the paint TOOL works
   on boards too. Both go through `paintPocket`.
@@ -591,6 +613,16 @@ Working notes for future agents on GTNH Factory Flow.
   it closes, which is what there is to animate.
 - Do not put minimum heights in the way of a short window; pair them with
   `compact:min-h-0` as the shell, the board and both panels do.
+- The two TOP TOOLBARS fold by the BOARD's width, not the window's
+  (`src/components/flow/toolbar-fold.ts`, `useToolbarFold` on `boardRef`):
+  both side columns open leave a 1400px window a 722px board, and the two
+  rows want 833px, so the paint tray sat buried under POWER. The paint row
+  folds first (under 881px), the build row next (under 721px), and under
+  452px the WHOLE paint row (bin, rules, arrange, view) folds into the brush
+  so both rows stay on one line - a second line read as a blank band. State holds only the fold, never the width; the width rides
+  the element as `--board-width`, which caps the unfolded rows. Compact
+  still folds both regardless. Re-measure the row widths in that file if a
+  key is added to either toolbar.
 
 ## Board Gestures
 
@@ -649,6 +681,12 @@ Working notes for future agents on GTNH Factory Flow.
   numbers live.
 - Routing must stay deterministic for the same graph state, independent of
   zoom and render order (edges are solved in routeIndex order).
+- Boards past `ASYNC_ROUTE_EDGE_LIMIT` wires solve in a Web Worker
+  (`grid-route-solve.ts`); the render serves the installed routes until
+  the answer lands. Same pure function, same routes; only the thread differs.
+  Small boards stay synchronous. Do not put a flat pop cap back in the A*:
+  the cap scales with the window, and a wire that fails is walled in
+  (`SEALED`), not out of budget. See the routing section of ARCHITECTURE.md.
 - Edge rate labels are a VIEW mode, off by default: the tag button in the
   board toolbar shows lean rate pills on the lines. No dragging, no popover.
 

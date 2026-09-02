@@ -51,6 +51,7 @@ import {
 import { closeBoundaries } from "./close-boundaries";
 import { getSetupRules } from "../model/setup-rules";
 import { solveEquationsCore } from "./equations-core";
+import { solveSolveMode } from "./solve-mode";
 
 const EPSILON = 0.000001;
 
@@ -215,6 +216,32 @@ export function calculateThroughput(
         runtimeCalculationWarning(effectiveRecipe, node),
       ].filter((warning): warning is string => Boolean(warning)),
     };
+  }
+
+  // SOLVE MODE: the product drawers' typed amounts are the question and the
+  // machine counts are the answer. The nameplate reports above (built at the
+  // player's counts) supply the per-card rates; solve-mode.ts scales them.
+  // None of the plan-mode storytelling below runs - usage, verdicts, clogs
+  // and fairness all describe a FIXED build, and the build is what is being
+  // solved for here.
+  //
+  // With no number typed anywhere the honest answer IS zero machines
+  // everywhere: nothing asks, nothing runs. This used to fall back to the
+  // plan books instead - but that showed the other mode's figures inside
+  // this one, and machines "running for no reason" read as a lie. The
+  // board can afford the honesty now: a zero card keeps its ports and its
+  // wires, the verdicts stay quiet, and the needs-a-number notice says
+  // what is missing.
+  if (project.solveMode) {
+    return finalizeSolveModeResult(
+      project,
+      nodes,
+      storages,
+      projectStorages,
+      bottlenecks,
+      crossForm,
+      options,
+    );
   }
 
   // The equilibrium engine owns the iteration: every node starts at full
@@ -433,6 +460,170 @@ function expandCrossFormEdges(project: FactoryProject): {
   }
 
   return { project: { ...project, recipes, nodes, edges }, hiddenNodeIds, hiddenEdgeIds };
+}
+
+/**
+ * The cheap UI-side question check: any typed amount on any drawer, any pin
+ * on any enabled card, no role walk. The notice and the blinking rate line
+ * use this on every store write, so it must stay O(n) over ids alone.
+ */
+export function hasAnySolveNumbers(project: FactoryProject): boolean {
+  return (
+    (project.storages ?? []).some(
+      (storage) =>
+        (storage.targetPerSecond ?? 0) > 0 &&
+        // A byproduct or trash drawer's number is DORMANT (typed while it
+        // was a product, kept for the flip back): it asks nothing, so it
+        // must not silence the needs-a-number notice.
+        storage.drainMode !== "byproduct" &&
+        storage.drainMode !== "trash",
+    ) || project.nodes.some((node) => node.enabled && (node.solvePin ?? 0) > 0)
+  );
+}
+
+/**
+ * The solve-mode result: run the count solve, then rewrite every machine
+ * report AT THE SOLVED SCALE - rates, flows and EU all multiplied by the
+ * solved act - so every downstream book (balances, storages, power, fuel)
+ * reads true figures without knowing the mode exists. The machine-count
+ * answer itself rides `theoreticalMachinesRequired` (act x built count);
+ * utilization is 1 for anything running (the solved build has no slack by
+ * construction) and 0 for a chain no target needs.
+ */
+function finalizeSolveModeResult(
+  project: FactoryProject,
+  nodes: Record<string, NodeThroughputResult>,
+  storages: Record<string, StorageThroughputResult>,
+  projectStorages: FactoryStorage[],
+  bottlenecks: BottleneckReport[],
+  crossForm: { hiddenNodeIds: string[]; hiddenEdgeIds: string[] },
+  options: SolverOptions,
+): ThroughputResult {
+  const roles = getStorageRoles(project);
+  const targets = projectStorages
+    .filter(
+      (storage) =>
+        roles.get(storage.id) === "product" && (storage.targetPerSecond ?? 0) > 0,
+    )
+    .map((storage) => ({
+      storageId: storage.id,
+      amountPerSecond: storage.targetPerSecond!,
+    }));
+
+  const pins = project.nodes
+    .filter((node) => node.enabled && (node.solvePin ?? 0) > 0)
+    .map((node) => ({ nodeId: node.id, machines: node.solvePin! }));
+
+  const solved = solveSolveMode(project, nodes, targets, pins, new Set(crossForm.hiddenNodeIds));
+  if (solved.pinsInfeasible) {
+    bottlenecks.push({
+      id: "solve-pins",
+      kind: "resource-deficit",
+      severity: "critical",
+      message: "The pinned machine counts cannot run together. Check their outputs have somewhere to go.",
+    });
+  }
+
+  const countByNode = new Map(project.nodes.map((node) => [node.id, node.machineCount]));
+  let totalEuT = 0;
+  for (const nodeResult of Object.values(nodes)) {
+    if (!nodeResult.enabled || nodeResult.status === "missing-recipe") {
+      continue;
+    }
+    const act = solved.scaleByNode.get(nodeResult.nodeId) ?? 0;
+    nodeResult.theoreticalMachinesRequired = act * (countByNode.get(nodeResult.nodeId) ?? 1);
+    nodeResult.disposalUtilization = 1;
+    if (act <= EPSILON) {
+      // ZERO IS NOT SELF-DESTRUCTION. A machine no target needs keeps its
+      // NAMEPLATE rates - the same convention a power-stalled card follows
+      // in plan mode - because the port rows and their React Flow handles
+      // are built from these flows: zero them and the ports vanish, and
+      // with the handles gone every wire on the card silently stops
+      // drawing. Utilization 0 is what says nothing runs; the wires stay,
+      // carrying nothing.
+      nodeResult.utilization = 0;
+      nodeResult.capableUtilization = 0;
+      nodeResult.demandUtilization = 0;
+      nodeResult.requiredRatePerSecond = 0;
+      nodeResult.status = "underutilized";
+      continue;
+    }
+    nodeResult.operationRatePerSecond *= act;
+    for (const flow of Object.values(nodeResult.inputs)) {
+      flow.amountPerSecond *= act;
+    }
+    for (const flow of Object.values(nodeResult.outputs)) {
+      flow.amountPerSecond *= act;
+    }
+    nodeResult.euT *= act;
+    totalEuT += nodeResult.euT;
+    nodeResult.utilization = 1;
+    nodeResult.capableUtilization = 1;
+    nodeResult.demandUtilization = 1;
+    const primary = Object.values(nodeResult.outputs)[0];
+    nodeResult.requiredRatePerSecond = primary?.amountPerSecond ?? 0;
+    nodeResult.maxRatePerSecond = primary?.amountPerSecond ?? 0;
+    nodeResult.status = "balanced";
+  }
+
+  // EVERY edge gets a result. A wire the solve-mode model has no variable
+  // for (a disabled machine's, a trash line's) still exists on the board,
+  // and a missing entry is how wires vanish from the screen: it reads as
+  // zero at 0/s demand, never as absent.
+  const edgeResults: Record<string, EdgeThroughput> = {};
+  for (const edge of project.edges) {
+    const flow = solved.edgeFlowPerSecond.get(edge.id) ?? 0;
+    edgeResults[edge.id] = buildEdgeResult(
+      edge,
+      makeResourceKey(edge.resourceKind, edge.resourceId),
+      flow,
+      flow,
+    );
+  }
+  refreshStorageResultsFromEdges(projectStorages, storages, project.edges, edgeResults);
+
+  for (const storage of projectStorages) {
+    const result = storages[storage.id];
+    if (!result || roles.get(storage.id) !== "product") {
+      continue;
+    }
+    result.targetPerSecond = storage.targetPerSecond;
+    if (solved.unreachableStorageIds.has(storage.id)) {
+      result.targetUnreachable = true;
+      bottlenecks.push({
+        id: `solve-target:${storage.id}`,
+        kind: "resource-deficit",
+        severity: "critical",
+        message: `${storage.displayName ?? storage.resourceId}: no chain can make ${storage.targetPerSecond?.toFixed(2)}/s.`,
+      });
+    }
+  }
+
+  const resourceResults = Object.fromEntries(
+    calculateEffectiveBalances(project, nodes, edgeResults),
+  ) as Record<ResourceKey, ResourceBalance>;
+  const { externalInputs, unconsumedOutputs } = splitBalances(Object.values(resourceResults));
+
+  for (const hiddenId of crossForm.hiddenNodeIds) {
+    delete nodes[hiddenId];
+  }
+  for (const hiddenEdgeId of crossForm.hiddenEdgeIds) {
+    delete edgeResults[hiddenEdgeId];
+  }
+
+  return {
+    nodes,
+    storages,
+    resources: resourceResults,
+    edges: edgeResults,
+    totalEuT,
+    totalEuPerSecond: totalEuT * TICKS_PER_SECOND,
+    fuelEstimate: calculateFuelEstimate(project, totalEuT),
+    bottlenecks,
+    externalInputs,
+    unconsumedOutputs,
+    generatedAt: options.generatedAt ?? project.metadata?.updatedAt ?? "unspecified",
+  };
 }
 
 function buildDisabledNodeResult(nodeId: string, recipe: Recipe): NodeThroughputResult {

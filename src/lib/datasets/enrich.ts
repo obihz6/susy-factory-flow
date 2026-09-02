@@ -53,6 +53,8 @@ export function buildDatasetResourceIndex(recipes: Recipe[]): DatasetResourceInd
         if (!existing.alternatives && resource.alternatives) {
           existing.alternatives = resource.alternatives;
         }
+      } else if (resource.kind === "power") {
+        // Power is app-synthesized, never a dataset resource; nothing to index.
       } else {
         index.set(key, {
           kind: resource.kind,

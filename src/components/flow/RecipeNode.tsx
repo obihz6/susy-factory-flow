@@ -10,7 +10,18 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { ChevronDown, Copy, Cpu, Minus, Plus, RefreshCw, Sprout, Zap } from "lucide-react";
+import {
+  ChevronDown,
+  Copy,
+  Cpu,
+  Image as ImageIcon,
+  Minus,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Sprout,
+  Zap,
+} from "lucide-react";
 import type {
   FactoryNode,
   MachineConfigTierOption,
@@ -35,13 +46,7 @@ import {
   STANDARD_ENERGY_HATCH_ID,
 } from "@/lib/machines/energy-hatches";
 import { energyHatchCatalogKey, useEnergyHatchCatalog } from "./use-energy-hatch-catalog";
-import { areChipClicksInverted } from "@/lib/chip-clicks";
-import {
-  EnergyHatchArt,
-  EnergySupplyMenu,
-  EnergyTierMenu,
-  energySupplyOptionsForTier,
-} from "./EnergyHatchMenu";
+import { EnergyHatchArt, energySupplyOptionsForTier } from "./EnergyHatchMenu";
 import { prefersCuratedMachineMath } from "@/lib/solver/runtime-calculation";
 import {
   applyMachineOutputMultipliers,
@@ -63,6 +68,33 @@ import {
   getVoltageTierIndex,
   BEE_INDUSTRIAL_PRODUCTION_CONTROL_ID,
   BEE_INDUSTRIAL_SPEED_CONTROL_ID,
+  CROP_GAIN_STAT_CONTROL_ID,
+  CROP_GROWTH_STAT_CONTROL_ID,
+  CROP_HARVESTER_INDUSTRIAL_FARM_ID,
+  CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID,
+  CROP_IF_FERTILIZER_UNIT_CONTROL_ID,
+  CROP_IF_GROWTH_UNIT_CONTROL_ID,
+  CROP_IF_HARVEST_UNIT_CONTROL_ID,
+  CROP_IF_OVERCLOCK_CONTROL_ID,
+  CROP_MANAGER_TIER_CONTROL_ID,
+  CROP_SEED_BED_TIER_CONTROL_ID,
+  cropsNhCropsPerMachine,
+  cropsNhEnvironmentFromTiers,
+  cropsNhExpectedDrop,
+  cropsNhFarmEut,
+  cropsNhGrowthRate,
+  cropsNhGrowthSpeedMultiplier,
+  cropsNhHarvestRoundMultiplier,
+  cropsNhHarvestTicks,
+  cropsNhHarvesterMachineCount,
+  cropsNhNutrientScore,
+  type CropsNhStats,
+  cropsNhHarvesterEnvironment,
+  cropsNhHarvesterFromTiers,
+  cropsNhIsHandPicked,
+  cropsNhManagerEuPerHarvest,
+  cropsNhUnitSlotsUsed,
+  cropsNhUpgradeSlots,
   isSteamMachineHandler,
   isBeeFrameSlotControlId,
   isBeeProductionConfigControl,
@@ -83,7 +115,15 @@ import {
   isCustomRateRecipe,
   type CustomRateMode,
 } from "@/lib/model/custom-rate";
-import { rateUnitMultiplier, rateUnitPrecisionScale, rateUnitSuffix } from "@/lib/model/rate-unit";
+import {
+  powerDisplayFromEuT,
+  powerDisplaySuffix,
+  rateMultiplierForKind,
+  rateSuffixForKind,
+  rateUnitMultiplier,
+  rateUnitPrecisionScale,
+  rateUnitSuffix,
+} from "@/lib/model/rate-unit";
 import {
   getRecipeProgrammedCircuit,
   type RecipeProgrammedCircuit,
@@ -109,6 +149,11 @@ import { useMachineHandlerIcons, type MachineHandlerIcon } from "./machine-icons
 import { publishDockTopInset } from "./dock-insets";
 import { useRenderedHandles } from "./use-rendered-handles";
 import { MinecraftSelect } from "./MinecraftSelect";
+import { PowerConfigPanel } from "./PowerConfigPanel";
+import { getPowerSource } from "@/lib/power/registry";
+import { getPowerStructureArt } from "@/lib/power/structure-art";
+import { getPowerMachineIcon, type PowerMachineIcon } from "@/lib/power/planner-data";
+import type { PowerSelectSetting } from "@/lib/power/types";
 import { MinecraftTooltip } from "@/components/nei/MinecraftTooltip";
 import { useWorkspaceView } from "@/lib/workspace-view";
 import { MachineStatsContent } from "./MachineStatsContent";
@@ -136,9 +181,14 @@ import {
   explainPlug,
   explainPort,
   formatPct,
+  formatPortRate,
   formatSlotRate,
   formatSlotRateBare,
   formatSlotRateOrNull,
+  portReadsEnergy,
+  ENERGY_READING_TEXT,
+  formatEnergyPerUnitParts,
+  ENERGY_UNIT_TEXT,
   formatTimes,
   type PortStory,
 } from "./flow-explainers";
@@ -157,6 +207,7 @@ import { useBoardView } from "./board-view";
 import { MotionNumberText, useBoardMotion, useMotionValues } from "./board-motion";
 import { getPaintBrushCursor } from "./paint-cursor";
 import { GT_TIER_COLORS } from "./tier-colors";
+import { playBoardSound, suppressBoardSound } from "@/lib/board-sounds";
 
 // Full width so the crop config panel and stat grid line up with the recipe
 // canvas edge instead of forcing their own wider box.
@@ -179,6 +230,22 @@ const CUSTOM_RATE_UNIVERSAL_HANDLE_IDS: readonly string[] = [
   makeResourceHandleId("output", { kind: "item", id: CUSTOM_RATE_ANY_RESOURCE_ID }),
 ];
 
+/**
+ * The power sector's card face: the window ground warmed toward amber - a
+ * different material, with every element on it keeping its ordinary colours.
+ * The face is the WHOLE mark (a chamfered-corner variant was tried and
+ * dropped: the frame's flash and the selection ring could not be made to
+ * traverse the cuts convincingly).
+ */
+const POWER_CARD_FACE = "color-mix(in srgb, var(--mc-78) 85%, #d99a2b 15%)";
+
+/**
+ * The crop sector's card face: the same trick in green - the crop card is a
+ * different material the way a power card is, and every element on it keeps
+ * its ordinary colours.
+ */
+const CROP_CARD_FACE = "color-mix(in srgb, var(--mc-78) 74%, #4f8c33 26%)";
+
 export interface RecipeNodeData extends Record<string, unknown> {
   projectNode: FactoryNode;
   recipe: Recipe;
@@ -198,16 +265,17 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     key: string;
   }>();
   const [isCropMenuOpen, setCropMenuOpen] = useState(false);
-  // Screen coords of each chip's corner while its dropdown is open; the
-  // menus are fixed body portals, so they need a place, not just a flag.
-  const [supplyMenuAnchor, setSupplyMenuAnchor] = useState<{ x: number; top: number; bottom: number }>();
-  const [tierMenuAnchor, setTierMenuAnchor] = useState<{ x: number; top: number; bottom: number }>();
-  // Hovering a dropdown row shows the card AS IF it were picked, through the
-  // same previewed-node channel the config knobs use.
-  const [hatchMenuPreview, setHatchMenuPreview] = useState<
-    { kind: "tier"; tier: string } | { kind: "supply"; familyId: string; hatches: number }
-  >();
-  const isHatchMenuOpen = supplyMenuAnchor !== undefined || tierMenuAnchor !== undefined;
+  // A power card's picture window, hidden or shown from the header button.
+  // The choice is this browser's, per card, never the plan's.
+  const [powerArtHidden, setPowerArtHidden] = useState(() =>
+    readPowerArtCollapsed(projectNode.id),
+  );
+  // The hatch-count chip mid-edit: the typed digits, or undefined at rest.
+  // The dropdowns the chips used to open are GONE (Jack, 2026-08-31): the
+  // supply chip types and wheels, the tier chip clicks and wheels, and
+  // there is no menu to manage.
+  const [hatchCountDraft, setHatchCountDraft] = useState<string>();
+  const isHatchMenuOpen = hatchCountDraft !== undefined;
   const recipeSearch = useFactoryStore((state) => state.highlightSearch);
   // The right panel's PEAK/AVG switch drives the card's power figures too,
   // so the board and the power list always tell one story.
@@ -237,12 +305,20 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   const isInspectorHighlighted =
     isFlowResourceHighlighted || isNodeBottleneckHighlighted || isUsageHighlighted;
   const { calmMode, glanceMode } = useBoardView();
-  // A custom rate card nobody has painted wears the app's own blue. Painting
-  // one still works and still wins.
-  // Up close a card ALWAYS wears its own paint: the glance views (speed heat,
-  // reason colour, tier colour) exist only at the LOD step, delivered further
-  // down as inert --glance-* variables the stylesheet switches on.
-  const paintTag = projectNode.colorTag ?? (isCustomRateRecipe(recipe) ? "blue" : undefined);
+  // Card colour is IDENTITY, not decoration (2026-08-30): player paint no
+  // longer applies to recipe cards - a stored colorTag is ignored, not
+  // stripped, so plans stay untouched. The tints that remain say what a card
+  // IS: custom rate blue, and the sector FACES below (power amber, crop
+  // green) - a face washes only the card's ground, so every element on it
+  // keeps its exact ordinary colours. The crop cards' green RAMP was
+  // deliberately retired for the face (Jack, 2026-09-01): a ramp greens
+  // every button and dropdown, and the ask was a green card, not green
+  // chrome. Drawers and boards still take paint.
+  const paintTag = isCustomRateRecipe(recipe) ? "blue" : undefined;
+  // A generator wears the power sector's face: the card BACKGROUND warms
+  // toward amber. Everything ON the card keeps its exact ordinary colours -
+  // this is not the paint ramp, just the window's own ground.
+  const isPowerCard = Boolean(recipe.power);
   const paintColor = paintTag ? GT_NODE_COLORS[paintTag] : undefined;
   const nodeColor = paintColor;
   // The card's own --mc-* ramp, which is the WHOLE of how a card takes a
@@ -253,50 +329,30 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   // The ink is never touched: a ramp keeps an unpainted card's lightnesses,
   // so the same light text sits at the same contrast on every colour.
   const nodeRamp = rampFor(paintTag);
-  const paintCursor =
-    nodeColorPaintMode !== undefined
-      ? getPaintBrushCursor(
-          nodeColorPaintMode ? GT_NODE_COLORS[nodeColorPaintMode].swatch : undefined,
-        )
-      : undefined;
+  // Cards no longer take paint, so the brush must not offer itself here -
+  // the armed paint mode still shows its cursor over drawers and boards.
+  const paintCursor = undefined;
   // Recipe derivation is pure in (recipe, projectNode, dataset) but ran on every
   // render, including renders caused by unrelated store writes such as hover or
   // search. It also rebuilt `overclockedRecipe` each time, whose fresh identity
   // defeated NeiRecipeWindow's memo and re-ran the whole NEI pipeline downstream.
   const previewedNode = useMemo(() => {
-    if (!previewConfigTier && !hatchMenuPreview) {
+    if (!previewConfigTier) {
       return projectNode;
     }
     return {
       ...projectNode,
-      ...(previewConfigTier
-        ? {
-            machineConfigTiers: {
-              ...(projectNode.machineConfigTiers ?? {}),
-              [previewConfigTier.controlId]: previewConfigTier.key,
-            },
-            // The coil knob still has its own legacy field; a preview that
-            // only wrote the generic map would show nothing on a heating coil.
-            ...(previewConfigTier.controlId === "heatingCoil"
-              ? { coilTier: previewConfigTier.key }
-              : undefined),
-          }
-        : undefined),
-      // The dropdowns' hover-simulate: the row under the pointer, worn live.
-      ...(hatchMenuPreview?.kind === "tier"
-        ? { overclockTier: hatchMenuPreview.tier }
-        : undefined),
-      ...(hatchMenuPreview?.kind === "supply"
-        ? {
-            energyHatchType:
-              hatchMenuPreview.familyId === STANDARD_ENERGY_HATCH_ID
-                ? undefined
-                : hatchMenuPreview.familyId,
-            energyHatches: hatchMenuPreview.hatches,
-          }
+      machineConfigTiers: {
+        ...(projectNode.machineConfigTiers ?? {}),
+        [previewConfigTier.controlId]: previewConfigTier.key,
+      },
+      // The coil knob still has its own legacy field; a preview that
+      // only wrote the generic map would show nothing on a heating coil.
+      ...(previewConfigTier.controlId === "heatingCoil"
+        ? { coilTier: previewConfigTier.key }
         : undefined),
     };
-  }, [hatchMenuPreview, previewConfigTier, projectNode]);
+  }, [previewConfigTier, projectNode]);
   const derived = useMemo(() => {
     const projectNode = previewedNode;
     const machineHandlers = getRecipeMachineHandlers(recipe);
@@ -342,6 +398,17 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     ).map((control) => ({
       ...control,
       resource: resolveDatasetMachineConfigResource(control.resource, dataset),
+      // Table-declared controls carry bare resource ids (field restriction
+      // coils); look every option's face up too, or only the current slot
+      // gets an icon while the dropdown falls back to lettered squares.
+      current: {
+        ...control.current,
+        resource: resolveDatasetMachineConfigResource(control.current.resource, dataset),
+      },
+      tiers: control.tiers.map((tier) => ({
+        ...tier,
+        resource: resolveDatasetMachineConfigResource(tier.resource, dataset),
+      })),
     }));
     const cropProductionControls = isCropProductionRecipe(effectiveRecipe)
       ? machineConfigControls.filter((control) => isCropProductionConfigControl(control.id))
@@ -397,6 +464,14 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       ? getCustomRateDial(projectNode, recipe)
       : undefined;
 
+    // The harvester's own voltage chip (Crop Manager tier or Seed Bed tier)
+    // wears the card's top-right tier slot, matching every other card: a crop
+    // card draws no EU so the ordinary chip never shows there.
+    const cropTierControl = cropProductionControls.find(
+      (control) =>
+        control.id === CROP_MANAGER_TIER_CONTROL_ID ||
+        control.id === CROP_SEED_BED_TIER_CONTROL_ID,
+    );
     return {
       machineHandlers,
       selectedMachineHandler,
@@ -406,6 +481,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       coilControl,
       coilResource,
       cropProductionControls,
+      cropTierControl,
       cropTitle,
       isCropFarmNode,
       isCropFarmPlaceholder,
@@ -435,6 +511,9 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       steamReport,
       showHatchControl,
       energyHatchType,
+      // A power card (src/lib/power): its knobs and PRODUCES figure come off
+      // the raw recipe - the panel writes settings there, custom-rate style.
+      powerInfo: recipe.power,
     };
   }, [dataset, previewedNode, recipe]);
 
@@ -446,6 +525,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     coilControl,
     coilResource,
     cropProductionControls,
+    cropTierControl,
     cropTitle,
     isCropFarmNode,
     isCropFarmPlaceholder,
@@ -466,6 +546,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     steamReport,
     showHatchControl,
     energyHatchType,
+    powerInfo,
   } = derived;
   // The chip's own art: the concrete hatch item this tier-and-family pair
   // names, from the once-per-dataset catalog.
@@ -486,6 +567,9 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   // numbers can change.
   const { project: liveProject, lastResult } = useFactoryStore.getState();
   const verdict = deriveNodeVerdict(liveProject, lastResult, projectNode.id);
+  // Solve mode: the card answers "how many machines" instead of "how hard is
+  // this build running", so the usage cell and the count stepper both yield.
+  const solveMode = useFactoryStore((state) => state.project.solveMode === true);
   const rails = buildRailPorts(
     liveProject,
     lastResult,
@@ -494,16 +578,92 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     verdict,
   );
   const powerStalled = powerReport !== undefined && powerReport.state !== "ok";
+  // The picture window's material: the workbook render for a multiblock,
+  // the machine item for a singleblock. Both are map lookups. The Industrial
+  // Farm is the one non-generator multiblock with a render of its own, so a
+  // crop card on that handler wears the same window (and the same hide
+  // button) as any large turbine.
+  const cropStructureArt =
+    selectedMachineHandler.id === CROP_HARVESTER_INDUSTRIAL_FARM_ID
+      ? "/power-art/industrial-farm.png"
+      : undefined;
+  const powerArt =
+    (powerInfo ? getPowerStructureArt(powerInfo.sourceId) : undefined) ?? cropStructureArt;
+  const powerMachineIcon = powerInfo ? getPowerMachineIcon(powerInfo.sourceId) : undefined;
+  const hasPowerPicture = Boolean(powerArt || powerMachineIcon?.iconPath);
+  // A generator's EU rides the output rail as its first row (a real port,
+  // kind "power"); machines that only DRAW keep the figure in the footer.
+  const hasOutputSide = rails.outputs.length > 0;
+  // A power card or a crop card with a bare side says so instead of standing
+  // lopsided: a solar panel's (or an Industrial Farm's) left half reads
+  // "No input", not a hole. Inert rows - nothing to wire is the point.
+  const saysNoFlow = powerInfo !== undefined || isCropProductionNode;
+  const showNoInputRow = saysNoFlow && rails.inputs.length === 0 && hasOutputSide;
+  const showNoOutputRow = saysNoFlow && !hasOutputSide && rails.inputs.length > 0;
+  const hasInputSideView = rails.inputs.length > 0 || showNoInputRow;
+  const hasOutputSideView = hasOutputSide || showNoOutputRow;
   // The card's draw figures follow the PEAK/AVG switch. PEAK is the full
   // draw the machine spikes to when it runs, 0 only at exactly 0% (a machine
   // that never starts draws nothing); AVG weights it by the solve's usage.
   const drawScale = drawScaleFor(averageDraw, result?.utilization);
+  // The crop harvester's draw for the footer's POWER cell: the Industrial
+  // Farm burns `getPowerUsage` continuously spread over its seeds, the Crop
+  // Manager spends `maxEUInput() / 8` per harvest - the same arithmetic the
+  // MACHINES ledger bills. Zero when picked by hand.
+  // In solve mode a crop card's planted count is the ANSWER, not the input:
+  // every seed-scaled figure on the card follows the solved requirement.
+  const cropSolvedSeeds =
+    solveMode && isCropProductionNode
+      ? Math.ceil((result?.theoreticalMachinesRequired ?? 0) - 0.000001)
+      : undefined;
+  const cropSeedCount = cropSolvedSeeds ?? projectNode.machineCount;
+  const cropDrawEuT = (() => {
+    if (!isCropProductionNode) {
+      return 0;
+    }
+    const stats = getCropsNhStats(effectiveRecipe);
+    const setup = cropsNhHarvesterFromTiers(
+      projectNode.machineConfigTiers,
+      projectNode.machineHandlerId,
+      stats?.minSeedBedTier,
+    );
+    if (cropsNhIsHandPicked(setup)) {
+      return 0;
+    }
+    const crops = Math.max(0, Math.round(cropSeedCount));
+    if (setup.id === CROP_HARVESTER_INDUSTRIAL_FARM_ID) {
+      // WHOLE farms bill: the last, partially filled farm draws its full
+      // power like the rest.
+      return cropsNhFarmEut(setup) * cropsNhHarvesterMachineCount(setup, crops);
+    }
+    if (!stats) {
+      return 0;
+    }
+    const ticks = cropsNhHarvestTicks(
+      stats,
+      cropsNhEnvironmentFromTiers(projectNode.machineConfigTiers),
+    );
+    return Number.isFinite(ticks) && ticks > 0
+      ? (cropsNhManagerEuPerHarvest(setup) * crops) / ticks
+      : 0;
+  })();
   const glanceDrawEuT = powerReport
     ? powerDrawEuT(powerReport, projectNode) * drawScale
     : 0;
   const glanceSteamLs = steamReport
     ? steamDrawLitresPerSecond(steamReport, projectNode) * drawScale
     : 0;
+  // A generator's power view answers with what it MAKES, signed and green
+  // like its row in the MACHINES ledger; a parasitic one shows its draw the
+  // way any machine does. Both ride the PEAK/AVG switch through drawScale.
+  const powerCardMachines = projectNode.machineCount * Math.max(1, projectNode.parallel);
+  const glancePowerCardEuT = powerInfo
+    ? Math.abs(powerInfo.euPerTick) * powerCardMachines * drawScale
+    : 0;
+  const powerCardMakes = (powerInfo?.euPerTick ?? 0) > 0;
+  const powerCardGlanceWord = powerInfo
+    ? (projectNode.machineConfigTiers?.tier ?? getPowerSource(powerInfo.sourceId)?.unlock)
+    : undefined;
   // What the LOD step paints this card, per smart view. Every non-identity
   // view returns a surface for EVERY card — a card with nothing to say gets
   // the neutral one rather than keeping its paint, because a red paint tag
@@ -546,6 +706,13 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       direction,
     );
     if (nextTier !== tierControl.current) {
+      // The board's ONE sound for a voltage tier: the power unit dial's
+      // ladder, so LV clicks and UV crackles identically wherever a tier
+      // is chosen. Rung 1..15 matches the dial's (0 is its EU/t floor).
+      playBoardSound("dialPower", { step: getVoltageTierIndex(nextTier) + 1 });
+      // The write below also crosses the diff watcher; 150ms of quiet keeps
+      // its generic adjust tap from doubling this voice.
+      suppressBoardSound("adjust", 150);
       updateNode(projectNode.id, {
         overclockTier: nextTier,
         // A hatch family that does not exist at the new tier (a laser below
@@ -574,7 +741,15 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       options[
         Math.min(options.length - 1, Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + direction))
       ];
-    if (next) {
+    if (next && (currentIndex < 0 || options[currentIndex] !== next)) {
+      // The supply ladder speaks the same electric language, quieter, and
+      // CLIMBS with the amps: each supply option is a quarter-rung above
+      // the last inside its tier, so more hatches audibly means more.
+      playBoardSound("dialPower", {
+        step: getVoltageTierIndex(tierControl.current) + 1 + options.indexOf(next) * 0.25,
+        gain: 0.6,
+      });
+      suppressBoardSound("adjust", 150);
       updateNode(projectNode.id, {
         energyHatchType: next.familyId === STANDARD_ENERGY_HATCH_ID ? undefined : next.familyId,
         energyHatches: next.hatches,
@@ -634,18 +809,21 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
     ) : undefined;
   const passiveProductionPanel =
     cropProductionControls.length > 0 ? (
-      <PassiveProductionConfigPanel
+      <CropConfigPanel
         className={CROP_CONFIG_PANEL_WIDTH_CLASS}
         controls={cropProductionControls}
+        handlerId={selectedMachineHandler.id}
+        machineConfigTiers={projectNode.machineConfigTiers}
+        machineCount={cropSeedCount}
+        minSeedBedTier={getCropsNhStats(effectiveRecipe)?.minSeedBedTier}
+        cropStats={getCropsNhStats(effectiveRecipe)}
         onSelect={updateMachineConfigTier}
-        getControlHelp={(controlId) => cropControlHelp(effectiveRecipe, controlId)}
-        title={selectedMachineHandler.label}
-        collapsed={projectNode.settingsCollapsed === true}
-        onToggleCollapsed={() =>
+        onSelectMany={(patch) =>
           updateNode(projectNode.id, {
-            settingsCollapsed: !(projectNode.settingsCollapsed === true),
+            machineConfigTiers: { ...(projectNode.machineConfigTiers ?? {}), ...patch },
           })
         }
+        getControlHelp={(controlId) => cropControlHelp(effectiveRecipe, controlId)}
       />
     ) : beePanelControls.length > 0 ? (
       <PassiveProductionConfigPanel
@@ -687,8 +865,17 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   const machineIcons = useMachineHandlerIcons();
   // The machine's own art, when the dataset ships it. Crop farms and custom
   // rate nodes have no machine to show.
-  const machineGlanceIcon =
-    !isCropFarmNode && !isCustomRateNode
+  const machineGlanceIcon = powerInfo
+    ? powerMachineIcon?.iconPath
+      ? ({
+          kind: "item",
+          id: powerMachineIcon.id,
+          displayName: powerMachineIcon.displayName,
+          iconPath: powerMachineIcon.iconPath,
+          dominantColor: powerMachineIcon.dominantColor,
+        } as unknown as MachineHandlerIcon)
+      : undefined
+    : !isCropFarmNode && !isCustomRateNode
       ? machineIcons.get(selectedMachineHandler.id)
       : undefined;
   // Presentation mode's tab zone: the selected machine's icon, big, and
@@ -842,13 +1029,17 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
         // a painted card needs nothing here but the RING: the dye at full
         // strength around the outside, which is what makes a tag legible from
         // across the board and at any zoom, however quiet the body is.
-        style={
-          nodeColor
+        style={{
+          ...(nodeColor
             ? {
                 boxShadow: `inset 0 0 0 2px ${nodeColor.border}, inset 4px 4px 0 var(--mc-100), inset -4px -4px 0 var(--mc-33), 0 0 0 2px ${nodeColor.shadow}`,
               }
-            : undefined
-        }
+            : undefined),
+          ...(isPowerCard ? { backgroundColor: POWER_CARD_FACE } : undefined),
+          ...(isCropProductionNode || isCropFarmNode
+            ? { backgroundColor: CROP_CARD_FACE }
+            : undefined),
+        }}
       >
       {/* The ring's mark, and the reason it is an ELEMENT rather than the
           window's ::after: a pseudo-element's box is only as trustworthy as
@@ -912,6 +1103,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       {glanceMode === "identity" ? (
         <GlanceIdentityLayer
           machineIcon={machineGlanceIcon}
+          artSrc={powerArt}
           fallbackResource={rails.outputs[0]?.resource ?? rails.inputs[0]?.resource}
           paintTint={nodeColor?.swatch}
           label={
@@ -922,11 +1114,46 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
           inputs={rails.inputs}
           outputs={rails.outputs}
         />
+      ) : glanceMode === "power" && powerInfo ? (
+        <NodeGlanceText
+          icon={
+            <GlanceMachineArt
+              machineIcon={machineGlanceIcon}
+              artSrc={powerArt}
+              fallbackResource={rails.outputs[0]?.resource ?? rails.inputs[0]?.resource}
+              small
+            />
+          }
+          className={powerCardMakes ? "text-emerald-300" : undefined}
+          valueSize={powerGlanceValueSize(
+            `${powerCardMakes ? "+" : ""}${formatCompact(glancePowerCardEuT)}`,
+          )}
+          text={
+            <>
+              <MotionNumberText
+                values={[glancePowerCardEuT]}
+                render={(shown) => {
+                  const value = shown[0] ?? glancePowerCardEuT;
+                  const figure =
+                    value === glancePowerCardEuT
+                      ? formatCompact(powerDisplayFromEuT(glancePowerCardEuT))
+                      : formatCompactStable(powerDisplayFromEuT(value));
+                  return powerCardMakes ? `+${figure}` : figure;
+                }}
+              />
+              <span className="ml-1.5 text-[18px] font-semibold opacity-70">
+                {powerDisplaySuffix()}
+              </span>
+            </>
+          }
+          word={powerCardGlanceWord}
+        />
       ) : glanceMode === "power" ? (
         <NodeGlanceText
           icon={
             <GlanceMachineArt
               machineIcon={machineGlanceIcon}
+              artSrc={powerArt}
               fallbackResource={rails.outputs[0]?.resource ?? rails.inputs[0]?.resource}
               small
             />
@@ -952,11 +1179,13 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                     // Same pact as the footer's POWER cell: stable widths
                     // mid-tween, the clean compact form at rest.
                     return value === glanceDrawEuT
-                      ? formatCompact(glanceDrawEuT)
-                      : formatCompactStable(value);
+                      ? formatCompact(powerDisplayFromEuT(glanceDrawEuT))
+                      : formatCompactStable(powerDisplayFromEuT(value));
                   }}
                 />
-                <span className="ml-1.5 text-[18px] font-semibold opacity-70">EU/t</span>
+                <span className="ml-1.5 text-[18px] font-semibold opacity-70">
+                  {powerDisplaySuffix()}
+                </span>
               </>
             ) : steamReport ? (
               // A steam machine's draw is litres, not EU: same cell, its own
@@ -996,6 +1225,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
           icon={
             <GlanceMachineArt
               machineIcon={machineGlanceIcon}
+              artSrc={powerArt}
               fallbackResource={rails.outputs[0]?.resource ?? rails.inputs[0]?.resource}
               small
             />
@@ -1048,13 +1278,20 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                 ? []
                 : isCropFarmPlaceholder || isCustomRateNode
                   ? ["24px", "24px"]
-                  : ["24px", "24px", "24px"]),
+                  : hasPowerPicture
+                    ? ["24px", "24px", "24px", "24px"]
+                    : ["24px", "24px", "24px"]),
               "minmax(0,1fr)",
               // The tier chip, with its hatch sister fused on the left when
               // the machine is a multiblock that takes energy hatches. The
               // pair sizes to content: a laser hatch's amp rating is wider
               // than a plain hatch count.
               ...(tierControl ? [showHatchControl ? "max-content" : "50px"] : []),
+              // A power card's tier chip (or its multiblock unlock chip).
+              ...(powerInfo && !tierControl ? ["50px"] : []),
+              // A crop card's harvester tier (manager or seed bed) wears the
+              // same top-right slot as every other card's voltage chip.
+              ...(cropTierControl && !tierControl && !powerInfo && !calmMode ? ["50px"] : []),
             ].join(" "),
           }}
         >
@@ -1098,6 +1335,29 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                   <RefreshCw aria-hidden className="h-3.5 w-3.5" />
                 </button>
               ) : null}
+              {hasPowerPicture ? (
+                // The picture window's switch lives with the card chrome:
+                // hidden, the window renders nothing at all.
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setPowerArtHidden((hidden) => {
+                      writePowerArtCollapsed(projectNode.id, !hidden);
+                      return !hidden;
+                    });
+                  }}
+                  className="nodrag flex h-6 w-6 items-center justify-center border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:bg-[var(--mc-61)]"
+                  title={powerArtHidden ? "Show the machine picture" : "Hide the machine picture"}
+                  aria-label={powerArtHidden ? "Show the machine picture" : "Hide the machine picture"}
+                  aria-pressed={!powerArtHidden}
+                >
+                  <ImageIcon
+                    aria-hidden
+                    className={powerArtHidden ? "h-3.5 w-3.5 opacity-40" : "h-3.5 w-3.5"}
+                  />
+                </button>
+              ) : null}
             </>
           ) : null}
           <div className="relative min-w-0">
@@ -1113,6 +1373,11 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                   ) : (
                     "Wire any port to this and it adopts that resource."
                   )
+                ) : isPowerCard ? (
+                  // A generator's stats live on the card (settings, stat
+                  // lines); the machine tooltip's overclock story does not
+                  // apply to it and would just be wrong here.
+                  (recipe.notes ?? recipe.name)
                 ) : (
                   <MachineStatsContent
                     recipe={recipe}
@@ -1185,6 +1450,30 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
               />
             ) : null}
           </div>
+          {/* A power card's tier lives where every machine's does: the header
+              chip, click up, right click down, wheel to scroll. Multiblock
+              generators have no tier knob (the workbook fixes their output),
+              so they wear their unlock tier as a static chip instead. */}
+          {powerInfo ? (
+            <PowerTierChip
+              nodeId={projectNode.id}
+              sourceId={powerInfo.sourceId}
+              values={projectNode.machineConfigTiers}
+            />
+          ) : null}
+          {cropTierControl && !tierControl && !powerInfo && !calmMode ? (
+            // The harvester's voltage (Crop Manager tier, or the farm's Seed
+            // Bed) in the card's usual tier slot: click up, right click down,
+            // wheel to scroll - the classic cycle, everywhere.
+            <CropTierChip
+              control={cropTierControl}
+              onPick={(key) => {
+                playBoardSound("dialPower", { step: Number.parseInt(key, 10) + 1 });
+                suppressBoardSound("adjust", 150);
+                updateMachineConfigTier(cropTierControl.id, key);
+              }}
+            />
+          ) : null}
           {tierControl && tierColor ? (
             // The fused chip trio is ONE hover surface telling the whole
             // power story - the same panel the footer's POWER cell shows -
@@ -1203,38 +1492,61 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
               }
             >
             <div className="flex">
-              {showHatchControl ? (
-                // The SUPPLY dropdown's chip: what powers the build (count
-                // and item, or an exotic's amp badge), fused left of the
-                // tier. Clicking opens every concrete supply at this tier.
+              {showHatchControl && hatchCountDraft !== undefined ? (
+                // The count chip MID-EDIT: type any hatch count. No menu -
+                // the wheel walks the ladder, the keyboard names a number.
+                <input
+                  autoFocus
+                  value={hatchCountDraft}
+                  onChange={(event) => setHatchCountDraft(event.target.value)}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onBlur={() => {
+                    const count = Number.parseInt(hatchCountDraft.trim(), 10);
+                    setHatchCountDraft(undefined);
+                    if (Number.isFinite(count) && count >= 1 && count <= 64) {
+                      playBoardSound("dialPower", {
+                        step: getVoltageTierIndex(tierControl.current) + 1,
+                        gain: 0.6,
+                      });
+                      suppressBoardSound("adjust", 150);
+                      updateNode(projectNode.id, {
+                        energyHatchType: undefined,
+                        energyHatches: count,
+                      });
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                    if (event.key === "Escape") {
+                      setHatchCountDraft(undefined);
+                    }
+                    event.stopPropagation();
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                  inputMode="numeric"
+                  aria-label="Energy hatch count"
+                  className="nodrag h-6 w-[44px] border-2 border-r-0 bg-[var(--mc-93)] px-1 text-center text-[11px] font-bold leading-none text-[var(--mc-ink)] outline-none focus:border-cyan-700"
+                  style={{ borderColor: tierColor.border }}
+                />
+              ) : showHatchControl ? (
+                // The SUPPLY chip: what powers the build (count and item, or
+                // an exotic's amp badge), fused left of the tier. CLICK to
+                // type any count; wheel or right-click walks the ladder
+                // (counts, then the exotic families).
                 <button
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    // Shift-click steps to the next supply without the menu
-                    // (or plain click, when the setting inverts the pair).
-                    if (event.shiftKey !== areChipClicksInverted()) {
-                      stepSupply(1);
-                      return;
-                    }
-                    setTierMenuAnchor(undefined);
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    setSupplyMenuAnchor((open) =>
-                      open ? undefined : { x: rect.right, top: rect.top, bottom: rect.bottom },
-                    );
+                    setHatchCountDraft(String(powerReport?.hatches ?? 1));
                   }}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    // Right click steps back, with or without shift: the
-                    // browser menu is suppressed anyway, so a plain right
-                    // click as a dead gesture only read as broken.
                     stepSupply(-1);
                   }}
-                  data-hatch-menu-anchor
-                  // Wheel over the chip steps the supply: the one cycling
-                  // gesture every browser honours (Firefox forces its menu on
-                  // shift-right-click and cannot be overridden).
                   onWheel={(event) => {
                     event.stopPropagation();
                     stepSupply(event.deltaY < 0 ? 1 : -1);
@@ -1246,7 +1558,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                     color: tierColor.text,
                     textShadow: `1px 1px 0 ${tierColor.shadow}`,
                   }}
-                  aria-label="Pick energy supply"
+                  aria-label="Energy hatch count"
                 >
                   <span className="pb-[3px]">
                     {energyHatchType.exotic
@@ -1264,16 +1576,8 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  // The TIER dropdown on multiblocks; singleblocks keep the
-                  // classic cycle, and shift-click cycles everywhere.
-                  if (showHatchControl && event.shiftKey === areChipClicksInverted()) {
-                    setSupplyMenuAnchor(undefined);
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    setTierMenuAnchor((open) =>
-                      open ? undefined : { x: rect.right, top: rect.top, bottom: rect.bottom },
-                    );
-                    return;
-                  }
+                  // No dropdown any more: click steps up, right-click steps
+                  // down, wheel walks - the classic cycle, everywhere.
                   updateTier(1);
                 }}
                 onContextMenu={(event) => {
@@ -1304,58 +1608,19 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
               </button>
             </div>
             </MinecraftTooltip>
-            {supplyMenuAnchor && showHatchControl ? (
-              <EnergySupplyMenu
-                anchor={supplyMenuAnchor}
-                tier={tierControl.current}
-                currentFamilyId={energyHatchType.id}
-                currentHatches={powerReport?.hatches ?? 1}
-                catalog={energyHatchCatalog}
-                onPick={(familyId, hatches) => {
-                  updateNode(projectNode.id, {
-                    energyHatchType: familyId === STANDARD_ENERGY_HATCH_ID ? undefined : familyId,
-                    energyHatches: hatches,
-                  });
-                  setHatchMenuPreview(undefined);
-                  setSupplyMenuAnchor(undefined);
-                }}
-                onPreview={(option) =>
-                  setHatchMenuPreview(option ? { kind: "supply", ...option } : undefined)
-                }
-                onClose={() => {
-                  setHatchMenuPreview(undefined);
-                  setSupplyMenuAnchor(undefined);
-                }}
-              />
-            ) : null}
-            {tierMenuAnchor && showHatchControl ? (
-              <EnergyTierMenu
-                anchor={tierMenuAnchor}
-                currentTier={tierControl.current}
-                minimumTier={powerReport?.minimumTier}
-                onPick={(tier) => {
-                  updateNode(projectNode.id, {
-                    overclockTier: tier,
-                    ...(energyHatchTypeExistsAtTier(projectNode.energyHatchType, tier)
-                      ? undefined
-                      : { energyHatchType: undefined }),
-                  });
-                  setHatchMenuPreview(undefined);
-                  setTierMenuAnchor(undefined);
-                }}
-                onPreview={(tier) =>
-                  setHatchMenuPreview(tier ? { kind: "tier", tier } : undefined)
-                }
-                onClose={() => {
-                  setHatchMenuPreview(undefined);
-                  setTierMenuAnchor(undefined);
-                }}
-              />
-            ) : null}
             </div>
           ) : null}
         </div>
         </div>
+        {/* The picture window sits under the title bar, over the ports:
+            the multiblock render (or the machine item), full card width. */}
+        {!calmMode && hasPowerPicture && !powerArtHidden ? (
+          <PowerStructureWindow
+            art={powerArt}
+            icon={powerMachineIcon}
+            tint={cropStructureArt ? "#4f8c33" : undefined}
+          />
+        ) : null}
         {/* The card body. No paint of its own: the window behind it is
             already the ramp's face, painted or not. */}
         <div>
@@ -1380,30 +1645,40 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
           <div
             className={[
               "flex items-start gap-1",
-              rails.inputs.length > 0 && rails.outputs.length > 0
+              hasInputSideView && hasOutputSideView
                 ? "justify-between"
-                : rails.outputs.length > 0
+                : hasOutputSideView
                   ? "justify-end"
                   : "justify-start",
             ].join(" ")}
           >
-            <PortRail
-              nodeId={projectNode.id}
-              side="input"
-              ports={rails.inputs}
-              pending={pendingResourceConnection}
-            />
-            {rails.inputs.length > 0 && rails.outputs.length > 0 ? (
+            {showNoInputRow ? (
+              <NoFlowRow label="No input" side="input" />
+            ) : (
+              <PortRail
+                nodeId={projectNode.id}
+                side="input"
+                ports={rails.inputs}
+                pending={pendingResourceConnection}
+              />
+            )}
+            {hasInputSideView && hasOutputSideView ? (
               <div className="flex w-4 shrink-0 items-center justify-center self-stretch text-[15px] font-black text-[var(--mc-ink-muted)]">
                 →
               </div>
             ) : null}
-            <PortRail
-              nodeId={projectNode.id}
-              side="output"
-              ports={rails.outputs}
-              pending={pendingResourceConnection}
-            />
+            {/* A generator's EU is an ordinary output row now (kind "power",
+                first on the rail): it wires, it solves, it reads EU/t. */}
+            {showNoOutputRow ? (
+              <NoFlowRow label="No output" side="output" />
+            ) : (
+              <PortRail
+                nodeId={projectNode.id}
+                side="output"
+                ports={rails.outputs}
+                pending={pendingResourceConnection}
+              />
+            )}
           </div>
           )}
           {/* The dial is on the card whether it holds a resource or not: an
@@ -1429,6 +1704,17 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
           !isCustomRatePlaceholder &&
           (!calmMode || !isCustomRateNode) ? (
             <GridBlock minCells={3} align="end" className="min-w-0">
+              {/* A power card's knobs: fuel, tier, rotor, boost - written
+                  through setPowerSetting so the owned recipe follows. */}
+              {!calmMode && powerInfo ? (
+                <PowerConfigPanel
+                  nodeId={projectNode.id}
+                  sourceId={powerInfo.sourceId}
+                  values={projectNode.machineConfigTiers}
+                  stats={powerInfo.stats}
+                  warnings={powerInfo.warnings}
+                />
+              ) : null}
               {calmMode ? null : machineConfigPanel}
               {calmMode ? null : passiveProductionPanel}
               <div
@@ -1449,12 +1735,15 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                      build. The pair centres together. */
                   <div className="flex min-w-0 items-stretch justify-center gap-1.5">
                     <span className="truncate border border-[var(--mc-47)] bg-[var(--mc-71)] px-3 py-0.5 text-[20px] font-bold leading-6 tabular-nums text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]">
-                      {projectNode.machineCount}×{" "}
+                      {solveMode
+                        ? formatSolvedMachines(result?.theoreticalMachinesRequired ?? 0)
+                        : projectNode.machineCount}
+                      ×{" "}
                       {isCropProductionNode
-                        ? projectNode.machineCount === 1
+                        ? projectNode.machineCount === 1 && !solveMode
                           ? "Seed"
                           : "Seeds"
-                        : projectNode.machineCount === 1
+                        : projectNode.machineCount === 1 && !solveMode
                           ? "Machine"
                           : "Machines"}
                     </span>
@@ -1489,9 +1778,13 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                         gridTemplateColumns: isCustomRateNode
                           ? "auto"
                           : [
-                              "auto",
+                              // Solve mode retires the usage cell: the solved
+                              // machine count is the whole reading.
+                              ...(solveMode ? [] : ["auto"]),
+                              ...(powerInfo && powerInfo.euPerTick < 0 ? ["auto"] : []),
                               ...(powerReport ? ["auto"] : []),
                               ...(steamReport ? ["auto"] : []),
+                              ...(cropDrawEuT > 0 ? ["auto"] : []),
                               ...(machineParallelMultiplier > 1 && !parallelChipLifts
                                 ? ["auto"]
                                 : []),
@@ -1502,14 +1795,33 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                             ].join(" "),
                       }}
                     >
-                      <UsageStat
-                        nodeId={projectNode.id}
-                        verdict={verdict}
-                        isCustomRate={isCustomRateNode}
-                        powerStall={powerReport}
-                      />
+                      {!solveMode ? (
+                        <UsageStat
+                          nodeId={projectNode.id}
+                          verdict={verdict}
+                          isCustomRate={isCustomRateNode}
+                          powerStall={powerReport}
+                        />
+                      ) : null}
                       {!isCustomRateNode ? (
                         <>
+                          {powerInfo && powerInfo.euPerTick < 0 ? (
+                            // A parasitic generator's draw speaks the same
+                            // language as every machine's: the POWER cell,
+                            // plain ink. Red implied a problem where there
+                            // is only a bill.
+                            <Stat
+                              label="Power"
+                              value={`${formatCompact(
+                                powerDisplayFromEuT(
+                                  Math.abs(powerInfo.euPerTick) *
+                                    projectNode.machineCount *
+                                    Math.max(1, projectNode.parallel) *
+                                    drawScale,
+                                ),
+                              )} ${powerDisplaySuffix()}`}
+                            />
+                          ) : null}
                           {powerReport ? (
                             <PowerStat
                               report={powerReport}
@@ -1528,17 +1840,37 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
                               average={averageDraw}
                             />
                           ) : null}
+                          {cropDrawEuT > 0 ? (
+                            // The harvester's draw in the machine's own
+                            // language: the POWER cell, riding the PEAK/AVG
+                            // switch like every draw figure on the board.
+                            <Stat
+                              label="Power"
+                              value={`${formatCompact(
+                                powerDisplayFromEuT(cropDrawEuT * drawScale),
+                              )} ${powerDisplaySuffix()}`}
+                            />
+                          ) : null}
                           {machineParallelMultiplier > 1 && !parallelChipLifts ? (
                             <Stat
                               label="Parallel"
                               value={`×${formatMachineParallelMultiplier(machineParallelMultiplier)}`}
                             />
                           ) : null}
-                          <MachineCountStat
-                            label={isCropProductionNode ? "Seeds" : "Machines"}
-                            machineCount={projectNode.machineCount}
-                            onChange={(machineCount) => updateNode(projectNode.id, { machineCount })}
-                          />
+                          {solveMode ? (
+                            <SolvedMachinesStat
+                              label={isCropProductionNode ? "Seeds" : "Machines"}
+                              needed={result?.theoreticalMachinesRequired ?? 0}
+                              pinned={projectNode.solvePin}
+                              onPin={(solvePin) => updateNode(projectNode.id, { solvePin })}
+                            />
+                          ) : (
+                            <MachineCountStat
+                              label={isCropProductionNode ? "Seeds" : "Machines"}
+                              machineCount={projectNode.machineCount}
+                              onChange={(machineCount) => updateNode(projectNode.id, { machineCount })}
+                            />
+                          )}
                           {programmedCircuit ? (
                             <CircuitChip circuit={programmedCircuit} />
                           ) : null}
@@ -1645,6 +1977,7 @@ function CircuitChip({ circuit }: { circuit: RecipeProgrammedCircuit }) {
  */
 function GlanceIdentityLayer({
   machineIcon,
+  artSrc,
   fallbackResource,
   paintTint,
   label,
@@ -1652,6 +1985,8 @@ function GlanceIdentityLayer({
   outputs,
 }: {
   machineIcon?: MachineHandlerIcon;
+  /** A full structure render (a power card's picture) beats the item. */
+  artSrc?: string;
   fallbackResource?: ResourceAmount;
   /** The card's paint, when painted — it beats the icon's own colour. */
   paintTint?: string;
@@ -1685,7 +2020,7 @@ function GlanceIdentityLayer({
         border: `2px solid color-mix(in srgb, ${tileTint} 55%, #262b34)`,
       }}
     >
-      <GlanceMachineArt machineIcon={machineIcon} fallbackResource={fallbackResource} />
+      <GlanceMachineArt machineIcon={machineIcon} artSrc={artSrc} fallbackResource={fallbackResource} />
       {/* The reveal. Fixed 560px wide and scaled to screen size by the CSS;
           left-1/2 + origin-top keep its top edge pinned to the card's centre
           at every zoom. Inputs left, arrow, outputs right — the same reading
@@ -1730,10 +2065,13 @@ function GlanceIdentityLayer({
 function GlanceMachineArt({
   machineIcon,
   fallbackResource,
+  artSrc,
   small = false,
 }: {
   machineIcon?: MachineHandlerIcon;
   fallbackResource?: ResourceAmount;
+  /** A full structure render (the power picker's banners) beats the item. */
+  artSrc?: string;
   small?: boolean;
 }) {
   // A quiet drop shadow lifts the art off the card. In board pixels, so it
@@ -1742,6 +2080,17 @@ function GlanceMachineArt({
   const shadow = "drop-shadow-[4px_6px_5px_rgba(0,0,0,0.45)]";
   const box = small ? "!h-[112px] !w-[112px]" : "!h-[192px] !w-[192px]";
   const pixels = small ? 112 : 192;
+  if (artSrc) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={artSrc}
+        alt=""
+        draggable={false}
+        className={["object-contain [image-rendering:pixelated]", box, shadow].join(" ")}
+      />
+    );
+  }
   if (machineIcon) {
     return (
       <ResourceIcon
@@ -1782,6 +2131,32 @@ function GlanceMachineArt({
   );
 }
 
+/**
+ * An energy reading as a number with a small grey tail: "200" and then
+ * "EU/Item" a size down in the same amber. The number carries the eye and
+ * the eye; the unit only has to be there.
+ */
+function EnergyReading({
+  euPerUnit,
+  kind,
+  unitSize,
+}: {
+  euPerUnit: number;
+  kind: string;
+  /** The tail's font size in px, two down from the number's. */
+  unitSize: number;
+}) {
+  const parts = formatEnergyPerUnitParts(euPerUnit, kind);
+  return (
+    <>
+      {parts.value}
+      <span className={ENERGY_UNIT_TEXT} style={{ fontSize: unitSize }}>
+        {parts.unit}
+      </span>
+    </>
+  );
+}
+
 /** One chip of the hover reveal, in the card's own chip clothes. */
 function GlanceIoRow({ port }: { port: RailPort }) {
   return (
@@ -1812,8 +2187,17 @@ function GlanceIoRow({ port }: { port: RailPort }) {
         <span className="truncate text-[14px] font-bold leading-[17px] text-[var(--mc-ink)]">
           {port.displayName}
         </span>
-        <span className="truncate text-[13px] leading-4 tabular-nums text-[var(--mc-ink-muted)]">
-          {formatSlotRate(port.currentPerSecond, port.kind)}
+        <span
+          className={[
+            "truncate text-[13px] leading-4 tabular-nums",
+            portReadsEnergy(port) ? ENERGY_READING_TEXT : "text-[var(--mc-ink-muted)]",
+          ].join(" ")}
+        >
+          {portReadsEnergy(port) ? (
+            <EnergyReading euPerUnit={port.energyPerUnit!} kind={port.kind} unitSize={10} />
+          ) : (
+            formatPortRate(port, port.currentPerSecond)
+          )}
         </span>
       </span>
     </span>
@@ -2250,7 +2634,7 @@ function GridBlock({
   minCells?: number;
   style?: CSSProperties;
   /** Where content sits in the rounded-up block. The footer bottom-aligns. */
-  align?: "center" | "end";
+  align?: "start" | "center" | "end";
   /**
    * Extra height the measurement must reserve beyond the content itself —
    * the caller's own padding and border, which scrollHeight cannot see.
@@ -2286,7 +2670,11 @@ function GridBlock({
           height; the child stays auto. */}
       <div
         className={
-          align === "end" ? "flex h-full flex-col justify-end" : "flex h-full flex-col justify-center"
+          align === "end"
+            ? "flex h-full flex-col justify-end"
+            : align === "start"
+              ? "flex h-full flex-col justify-start"
+              : "flex h-full flex-col justify-center"
         }
       >
         <div ref={contentRef}>{children}</div>
@@ -2345,6 +2733,266 @@ function PortRail({
           <OutputSocketRow key={port.key} nodeId={nodeId} port={port} pending={pending} />
         ),
       )}
+    </div>
+  );
+}
+
+/**
+ * A power card's bare side: the same footprint as a port row, dashed and
+ * muted, saying plainly that there is nothing to wire here. Inert on
+ * purpose - it is the absence of a port, not a port.
+ */
+function NoFlowRow({ label, side }: { label: string; side: "input" | "output" }) {
+  // Input chips are 140px and output rows 176 (chip + coupling): the stand-in
+  // must match its side's width or it shoves the other rail off the card.
+  return (
+    <div
+      aria-hidden
+      className={[
+        "flex h-[40px] shrink-0 items-center justify-center border-2 border-dashed border-[var(--mc-47)] text-[12px] font-bold text-[var(--mc-ink-muted)]/70",
+        side === "input" ? PORT_CHIP_WIDTH_CLASS : "w-[176px]",
+      ].join(" ")}
+    >
+      {label}
+    </div>
+  );
+}
+
+const POWER_ART_COLLAPSED_KEY = "gtnh-factory-flow.power-art-collapsed.v1";
+
+function readPowerArtCollapsed(nodeId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = window.localStorage.getItem(POWER_ART_COLLAPSED_KEY);
+    return raw ? (JSON.parse(raw) as string[]).includes(nodeId) : false;
+  } catch {
+    return false;
+  }
+}
+
+function writePowerArtCollapsed(nodeId: string, collapsed: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(POWER_ART_COLLAPSED_KEY);
+    const ids = new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
+    if (collapsed) {
+      ids.add(nodeId);
+    } else {
+      ids.delete(nodeId);
+    }
+    // The list only ever grows by cards someone deliberately folded; cap it
+    // so a long-lived browser profile never accumulates unbounded ids.
+    window.localStorage.setItem(POWER_ART_COLLAPSED_KEY, JSON.stringify([...ids].slice(-200)));
+  } catch {
+    // Storage unavailable: the toggle still holds for this session.
+  }
+}
+
+/**
+ * The picture window: the workbook's own multiblock render (a singleblock
+ * shows its machine item), spanning the card between the title bar and the
+ * ports, on a recessed ground from the card's own palette with a whisper
+ * of the power amber - there to help you see the thing you are planning.
+ * The header's picture button hides it entirely; hidden, nothing renders.
+ * Height plus the breathing room below stays a whole number of grid cells.
+ */
+function PowerStructureWindow({
+  art,
+  icon,
+  tint = "#d99a2b",
+}: {
+  art?: string;
+  icon?: PowerMachineIcon;
+  /** The sector's colour behind the render: power amber, crop green. */
+  tint?: string;
+}) {
+  if (!art && !icon?.iconPath) {
+    return null;
+  }
+  return (
+    <div
+      className="box-border mb-2 flex h-[112px] w-full items-center justify-center overflow-hidden border-2 border-[var(--mc-47)] p-1 shadow-[inset_2px_2px_0_rgba(0,0,0,0.3),inset_-2px_-2px_0_rgba(255,255,255,0.04)]"
+      style={{ backgroundColor: `color-mix(in srgb, var(--mc-33) 92%, ${tint} 8%)` }}
+    >
+      {art ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={art}
+          alt=""
+          draggable={false}
+          className="max-h-full max-w-full object-contain [image-rendering:pixelated]"
+        />
+      ) : (
+        <ResourceIcon
+          resource={{
+            kind: "item",
+            id: icon!.id,
+            amount: 1,
+            displayName: icon!.displayName,
+            iconPath: icon!.iconPath,
+            dominantColor: icon!.dominantColor,
+          }}
+          bare
+          tooltip={false}
+          showAmount={false}
+          showConsumedState={false}
+          // Same zoom-and-crop ratio the picker's banner uses, scaled to
+          // this window's height: the render's padding goes, its face stays.
+          iconPixelSize={170}
+          className="!h-[100px] !w-[100px]"
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A power card's header tier chip, with the classic gestures: click steps
+ * up, right click steps down, wheel scrolls, wrapping at the ends of the
+ * family's own ladder (an LV-HV steam turbine cycles those three). Writes
+ * through setPowerSetting so the card's recipe follows. Sources without a
+ * tier knob wear their unlock tier as a static chip.
+ */
+function PowerTierChip({
+  nodeId,
+  sourceId,
+  values,
+}: {
+  nodeId: string;
+  sourceId: string;
+  values: Record<string, string> | undefined;
+}) {
+  const setPowerSetting = useFactoryStore((state) => state.setPowerSetting);
+  const source = getPowerSource(sourceId);
+  if (!source) {
+    return null;
+  }
+  const setting = source.settings.find(
+    (entry): entry is PowerSelectSetting => entry.type === "select" && entry.id === "tier",
+  );
+  const shownTier = setting
+    ? values?.tier && setting.options.some((option) => option.key === values.tier)
+      ? values.tier
+      : setting.defaultKey
+    : source.unlock;
+  const color = shownTier && shownTier in GT_TIER_COLORS
+    ? GT_TIER_COLORS[shownTier as keyof typeof GT_TIER_COLORS]
+    : undefined;
+  if (!shownTier || !color) {
+    return null;
+  }
+  const chipStyle = {
+    backgroundColor: color.background,
+    borderColor: color.border,
+    color: color.text,
+    textShadow: `1px 1px 0 ${color.shadow}`,
+    textDecoration: color.underline ? "underline" : undefined,
+  };
+  if (!setting) {
+    return (
+      // No text-size utility on purpose: the interactive chips are BUTTONS,
+      // and the unlayered `button { font: inherit }` in globals.css beats
+      // their text-[11px], so they render at the card's base size. A span
+      // must simply inherit to match them.
+      <span
+        className="flex h-6 w-[50px] items-center justify-center border-2 px-1 pb-[3px] font-bold leading-none shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)]"
+        style={chipStyle}
+        title={`Unlocks at ${shownTier}`}
+      >
+        {shownTier}
+      </span>
+    );
+  }
+  const index = Math.max(0, setting.options.findIndex((option) => option.key === shownTier));
+  const step = (delta: number) => {
+    // Clamped, never wrapped: every tier ladder on the board stops at its
+    // ends (the machine chips, the power unit dial), and this one looping
+    // from MAX back to the floor read as broken.
+    const next = setting.options[Math.min(setting.options.length - 1, Math.max(0, index + delta))];
+    if (next && next.key !== shownTier) {
+      setPowerSetting(nodeId, "tier", next.key);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        step(1);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        step(-1);
+      }}
+      onWheel={(event) => {
+        event.stopPropagation();
+        step(event.deltaY < 0 ? 1 : -1);
+      }}
+      className="nodrag nowheel flex h-6 w-[50px] items-center justify-center border-2 px-1 pb-[3px] text-[11px] font-bold leading-none shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)] hover:brightness-110"
+      style={chipStyle}
+      title={`Tier ${shownTier}`}
+      aria-label={`Tier ${shownTier}`}
+    >
+      {shownTier}
+    </button>
+  );
+}
+
+/**
+ * A power card's EU, worn as the FIRST output row: the product of a
+ * generator is power, so it sits where the products sit, lightning bolt for
+ * a face. The coupling slot is deliberately inert - nothing wires to power
+ * yet - but the row already holds the place wires will land.
+ */
+function PowerEuSocketRow({
+  euPerTick,
+  machines,
+  drawScale,
+  average,
+}: {
+  euPerTick: number;
+  machines: number;
+  /** The PEAK/AVG switch, applied like every other EU figure's; a stalled
+   * generator makes 0 EU/t under both readings. */
+  drawScale: number;
+  /** Which reading the switch has picked, named beside the EU title so the
+   * figure says what it is. */
+  average: boolean;
+}) {
+  const totalEuT = euPerTick * machines * drawScale;
+  return (
+    <div className="relative flex items-stretch">
+      <MinecraftTooltip label="Power this card makes. Power does not wire to machines yet; it counts in POWER MADE, bottom right.">
+        <div
+          className={`flow-port relative flex h-[40px] ${PORT_CHIP_WIDTH_CLASS} flex-none items-center gap-1 px-0.5 py-0`}
+        >
+          <span className="pointer-events-none relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden">
+            <span className="flex h-7 w-7 items-center justify-center border border-[var(--mc-47)] bg-[var(--mc-55)]">
+              <Zap className="h-4 w-4 text-amber-300" aria-hidden />
+            </span>
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col justify-center pr-0.5">
+            <span className="block truncate text-[11px] font-bold leading-[13px] text-[var(--mc-ink)]">
+              EU{" "}
+              <span className="text-[9px] font-normal text-[var(--mc-ink-muted)] opacity-75">
+                ({average ? "avg" : "peak"})
+              </span>
+            </span>
+            <span className="block truncate text-[10px] leading-[12px] tabular-nums text-amber-200/90">
+              <MotionNumberText
+                values={[totalEuT]}
+                render={(shown) =>
+                  `${formatCompact(powerDisplayFromEuT(shown[0] ?? totalEuT))} ${powerDisplaySuffix()}`
+                }
+              />
+            </span>
+          </span>
+        </div>
+      </MinecraftTooltip>
+      <span className="flow-socket-empty">
+        <Zap className="h-3 w-3 text-amber-300/60" aria-hidden />
+      </span>
     </div>
   );
 }
@@ -2664,7 +3312,13 @@ export function PortChip({
     port.resource?.alternatives,
     port.handleId,
   );
-  const browse = (mode: PortBrowseMode) =>
+  const browse = (mode: PortBrowseMode) => {
+    // POWER has no recipe book: EU is made by generator cards (the power
+    // picker's job) and consumed by nothing, so browsing it would query the
+    // dataset for a resource that is not in any dataset.
+    if (port.kind === "power") {
+      return;
+    }
     browseResource(
       {
         kind: port.kind,
@@ -2677,6 +3331,7 @@ export function PortChip({
       },
       mode,
     );
+  };
   // Everything the row answers with, in one place: the pointer, the keyboard and
   // the long-press menu all end up here.
   const rowBrowse = usePortRowBrowse({ nodeId, port, browse });
@@ -2699,7 +3354,13 @@ export function PortChip({
   // shows the bare actual rate: no fraction, nothing to diagnose.
   // The numbers ease to a new solve (value motion, board-motion.tsx): the
   // leaf re-renders itself per frame while they move, never the row.
-  const rateText = (
+  // The EU unit swaps an output's line for the energy each unit cost. It is
+  // gold, and gold only here: the one reading on the board that is not a
+  // rate, dressed so it can never be mistaken for one.
+  const readsEnergy = portReadsEnergy(port);
+  const rateText = readsEnergy ? (
+    <EnergyReading euPerUnit={port.energyPerUnit!} kind={port.kind} unitSize={calmMode ? 10 : 8} />
+  ) : (
     <MotionNumberText
       values={[port.currentPerSecond, port.nameplatePerSecond]}
       render={(shown) => {
@@ -2711,6 +3372,7 @@ export function PortChip({
       }}
     />
   );
+  const rateInk = readsEnergy ? ENERGY_READING_TEXT : "text-[var(--mc-ink-muted)]";
 
   // One bar, one ruler: 100% = full blast. Solid = now, hatch = would unlock
   // if fed. The caret/burst (the want) is an INPUT-side signal — on outputs
@@ -2843,7 +3505,9 @@ export function PortChip({
           /* Presentation: no bar, no want marks — the room they used goes to
              the number, which is the thing a viewer actually reads. Muted ink
              a step below the name, so the pair still reads name-first. */
-          <span className="block truncate text-[13px] font-bold leading-[15px] tabular-nums text-[var(--mc-ink-muted)]">
+          <span
+            className={`block truncate text-[13px] font-bold leading-[15px] tabular-nums ${rateInk}`}
+          >
             {rateText}
           </span>
         ) : (
@@ -2851,7 +3515,9 @@ export function PortChip({
             {/* Neutral, quieter ink: the chip's BAR carries the machine
                 story's color. Green text over a red bar told two stories at
                 once. */}
-            <span className="block truncate text-[10px] leading-[12px] tabular-nums text-[var(--mc-ink-muted)] opacity-80">
+            <span
+              className={`block truncate text-[10px] leading-[12px] tabular-nums ${rateInk} ${readsEnergy ? "font-bold" : "opacity-80"}`}
+            >
               {rateText}
             </span>
             {port.unsupplied ? (
@@ -3071,7 +3737,7 @@ function CustomRatePanel({
         className="nodrag h-6 shrink-0 border border-[var(--mc-33)] bg-[var(--mc-93)] px-1 text-right text-[13px] text-[var(--mc-ink)]"
       />
       <span className="shrink-0 pr-1 text-[11px] font-bold text-[var(--mc-ink-muted)]">
-        {rateUnitSuffix(kind === "fluid").trim() || "/s"}
+        {rateSuffixForKind(kind).trim() || "/s"}
       </span>
     </div>
     </GridBlock>
@@ -3788,6 +4454,777 @@ function PassiveProductionConfigPanel({
   );
 }
 
+/** Caption line plus an h-6 control row, the power config panel's shape. */
+const CROP_PANEL_ROW_PX = 40;
+
+/** The unit types' pip colours, one per block, echoed by the slot pips. */
+const CROP_UNIT_PIP_COLORS: Record<string, string> = {
+  [CROP_IF_GROWTH_UNIT_CONTROL_ID]: "#6fbf50",
+  [CROP_IF_FERTILIZER_UNIT_CONTROL_ID]: "#c9a24a",
+  [CROP_IF_HARVEST_UNIT_CONTROL_ID]: "#5aa7d9",
+  [CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID]: "#b06fd9",
+  [CROP_IF_OVERCLOCK_CONTROL_ID]: "#e06060",
+};
+
+// The SEEDS cell's exact chrome, shared by every crop knob so the settings
+// speak the same beveled tile language as the footer under them.
+const CROP_TILE_CLASS =
+  "nodrag nowheel min-w-0 border border-[var(--mc-47)] bg-[var(--mc-71)] px-1 pb-0.5 shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]";
+const CROP_TILE_CAPTION_CLASS =
+  "flex items-center gap-1 truncate text-[11px] uppercase leading-[13px] text-[var(--mc-ink-muted)]";
+// Narrow buttons, so the word well between them keeps the width: "60% Wet"
+// has to fit a four-across tile.
+const CROP_TILE_BUTTON_CLASS =
+  "nodrag flex h-5 w-3.5 shrink-0 items-center justify-center border border-[var(--mc-33)] bg-[var(--mc-82)] text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-100),inset_-1px_-1px_0_var(--mc-47)] enabled:hover:bg-[var(--mc-100)] enabled:active:shadow-[inset_1px_1px_0_var(--mc-47),inset_-1px_-1px_0_var(--mc-100)] disabled:opacity-35";
+
+/** One browser-wide fold for every crop card's worked-formula strip. */
+const CROP_FORMULAS_OPEN_KEY = "gtnh-factory-flow.crop-formulas-open.v1";
+function readCropFormulasOpen(): boolean {
+  try {
+    return window.localStorage.getItem(CROP_FORMULAS_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+function writeCropFormulasOpen(open: boolean) {
+  try {
+    window.localStorage.setItem(CROP_FORMULAS_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // A blocked storage just forgets the fold.
+  }
+}
+
+/** The unit's tiny colour mark before its caption, echoing its slot pip. */
+function CropPipSwatch({ color }: { color?: string }) {
+  return color ? (
+    <span
+      aria-hidden
+      className="h-[6px] w-[6px] shrink-0 border border-black/40"
+      style={{ backgroundColor: color }}
+    />
+  ) : null;
+}
+
+/**
+ * One knob of the crop settings as a SEEDS-style tile: the caption inside
+ * the bevel, h-5 stepper buttons around a recessed count well.
+ */
+function CropStepperRow({
+  label,
+  effect,
+  value,
+  min,
+  max,
+  lockedHint,
+  pipColor,
+  onStep,
+  help,
+}: {
+  label: string;
+  /** What the current count does; lives in the hover, never on the row. */
+  effect?: string;
+  value: number;
+  min: number;
+  max: number;
+  /** Why the row cannot go up right now ("No free slot"). */
+  lockedHint?: string;
+  /** The unit's slot-pip colour, worn as a small swatch by the caption. */
+  pipColor?: string;
+  onStep: (next: number) => void;
+  help?: ReactNode;
+}) {
+  const step = (direction: -1 | 1) => {
+    const next = Math.max(min, Math.min(max, value + direction));
+    if (next !== value) {
+      onStep(next);
+    }
+  };
+  const row = (
+    <div
+      className={CROP_TILE_CLASS}
+      title={[effect, value >= max && lockedHint ? lockedHint : undefined]
+        .filter(Boolean)
+        .join(" · ")}
+      onWheel={(event) => {
+        event.stopPropagation();
+        step(event.deltaY < 0 ? 1 : -1);
+      }}
+    >
+      <div className={CROP_TILE_CAPTION_CLASS}>
+        <CropPipSwatch color={pipColor} />
+        <span className="min-w-0 truncate">{label}</span>
+      </div>
+      <div className="flex min-w-0 items-center gap-0.5">
+        <button
+          type="button"
+          className={CROP_TILE_BUTTON_CLASS}
+          disabled={value <= min}
+          onClick={(event) => {
+            event.stopPropagation();
+            step(-1);
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          aria-label={`Fewer ${label}`}
+        >
+          <Minus className="h-3 w-3" />
+        </button>
+        <span className="h-5 w-0 min-w-0 flex-1 border border-[var(--mc-47)] bg-[var(--mc-85)] px-1 text-center text-[13px] font-medium leading-[18px] tabular-nums text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-100),inset_-1px_-1px_0_var(--mc-54)]">
+          {value}
+        </span>
+        <button
+          type="button"
+          className={CROP_TILE_BUTTON_CLASS}
+          disabled={value >= max}
+          title={value >= max ? lockedHint : undefined}
+          onClick={(event) => {
+            event.stopPropagation();
+            step(1);
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          aria-label={`More ${label}`}
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+  return help ? <MinecraftTooltip content={help}>{row}</MinecraftTooltip> : row;
+}
+
+/**
+ * An option cell as the same +/- stepper the counts use: the well shows the
+ * option's word instead of a number, minus walks back, plus walks forward.
+ */
+function CropCycleRow({
+  label,
+  options,
+  currentKey,
+  onPick,
+  help,
+}: {
+  label: string;
+  options: MachineConfigTierOption[];
+  currentKey: string;
+  onPick: (option: MachineConfigTierOption, index: number) => void;
+  help?: ReactNode;
+}) {
+  const index = Math.max(
+    0,
+    options.findIndex((option) => option.key === currentKey),
+  );
+  const current = options[index]!;
+  const step = (direction: -1 | 1) => {
+    const next = options[Math.max(0, Math.min(options.length - 1, index + direction))];
+    if (next && next.key !== current.key) {
+      onPick(next, options.indexOf(next));
+    }
+  };
+  const row = (
+    <div
+      className={CROP_TILE_CLASS}
+      title={`${label}: ${current.label}`}
+      onWheel={(event) => {
+        event.stopPropagation();
+        step(event.deltaY < 0 ? 1 : -1);
+      }}
+    >
+      <div className={CROP_TILE_CAPTION_CLASS}>
+        <span className="min-w-0 truncate">{label}</span>
+      </div>
+      <div className="flex min-w-0 items-center gap-0.5">
+        <button
+          type="button"
+          className={CROP_TILE_BUTTON_CLASS}
+          disabled={index <= 0}
+          onClick={(event) => {
+            event.stopPropagation();
+            step(-1);
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          aria-label={`Previous ${label}`}
+        >
+          <Minus className="h-3 w-3" />
+        </button>
+        <span className="h-5 w-0 min-w-0 flex-1 overflow-hidden whitespace-nowrap border border-[var(--mc-47)] bg-[var(--mc-85)] px-0.5 text-center text-[10px] font-medium leading-[18px] text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-100),inset_-1px_-1px_0_var(--mc-54)]">
+          {current.label}
+        </span>
+        <button
+          type="button"
+          className={CROP_TILE_BUTTON_CLASS}
+          disabled={index >= options.length - 1}
+          onClick={(event) => {
+            event.stopPropagation();
+            step(1);
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          aria-label={`Next ${label}`}
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+  return help ? <MinecraftTooltip content={help}>{row}</MinecraftTooltip> : row;
+}
+
+/**
+ * The harvester's voltage chip in the card header's tier slot, in the game's
+ * tier colours; "By Hand" wears plain chrome.
+ */
+function CropTierChip({
+  control,
+  onPick,
+}: {
+  control: MachineConfigTierControl;
+  onPick: (key: string) => void;
+}) {
+  const index = Math.max(
+    0,
+    control.tiers.findIndex((tier) => tier.key === control.current.key),
+  );
+  const step = (direction: -1 | 1) => {
+    const next = control.tiers[Math.max(0, Math.min(control.tiers.length - 1, index + direction))];
+    if (next && next.key !== control.current.key) {
+      onPick(next.key);
+    }
+  };
+  const tierColor = (
+    GT_TIER_COLORS as Record<string, (typeof GT_TIER_COLORS)["LV"] | undefined>
+  )[control.current.label];
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        step(1);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        step(-1);
+      }}
+      onWheel={(event) => {
+        event.stopPropagation();
+        step(event.deltaY < 0 ? 1 : -1);
+      }}
+      className="nodrag nowheel flex h-6 w-[50px] items-center justify-center border-2 px-1 pb-[3px] text-[11px] font-bold leading-none shadow-[inset_2px_2px_0_rgba(255,255,255,0.55),inset_-2px_-2px_0_rgba(0,0,0,0.45)] hover:brightness-110"
+      style={
+        tierColor
+          ? {
+              backgroundColor: tierColor.background,
+              borderColor: tierColor.border,
+              color: tierColor.text,
+              textShadow: `1px 1px 0 ${tierColor.shadow}`,
+              textDecoration: tierColor.underline ? "underline" : undefined,
+            }
+          : {
+              backgroundColor: "var(--mc-49)",
+              borderColor: "var(--mc-15)",
+              color: "#fff",
+            }
+      }
+      title={`${control.label}: ${control.current.label}. Click for the next tier, right-click for the previous, wheel for both.`}
+      aria-label={`${control.label} tier`}
+    >
+      {control.current.label}
+    </button>
+  );
+}
+
+/**
+ * The crop card's settings, redrawn as a bespoke panel: tier chips in the
+ * game's voltage colours, one +/- stepper per farm unit with the real block
+ * art, and the farm's shared upgrade-slot budget made physical as a row of
+ * pips - a setup the game cannot build cannot be dialed in here either.
+ */
+function CropConfigPanel({
+  className = "",
+  controls,
+  handlerId,
+  machineConfigTiers,
+  machineCount,
+  minSeedBedTier,
+  cropStats,
+  onSelect,
+  onSelectMany,
+  getControlHelp,
+}: {
+  className?: string;
+  controls: MachineConfigTierControl[];
+  handlerId: string | undefined;
+  machineConfigTiers: Record<string, string | undefined> | undefined;
+  machineCount: number;
+  /** The crop's seed bed floor: math clamps to it exactly as the chip does. */
+  minSeedBedTier?: number;
+  /** The crop's own stats, for the plugged-in formula strip. */
+  cropStats?: CropsNhStats;
+  onSelect: (controlId: string, nextTier: string) => void;
+  /**
+   * Writes several knobs in one undo step. Every unit step commits the WHOLE
+   * normalized unit set, so what is stored always equals what is shown and a
+   * later change can never silently reshuffle slots between units.
+   */
+  onSelectMany: (patch: Record<string, string>) => void;
+  getControlHelp?: (controlId: string) => ReactNode;
+}) {
+  const [formulasOpen, setFormulasOpen] = useState(readCropFormulasOpen);
+  const onToggleFormulas = () => {
+    setFormulasOpen((open) => {
+      writeCropFormulasOpen(!open);
+      return !open;
+    });
+  };
+  if (controls.length === 0) {
+    return null;
+  }
+
+  const setup = cropsNhHarvesterFromTiers(machineConfigTiers, handlerId, minSeedBedTier);
+  const isFarm = setup.id === CROP_HARVESTER_INDUSTRIAL_FARM_ID;
+  const handPicked = cropsNhIsHandPicked(setup);
+  const slots = cropsNhUpgradeSlots(setup.tierIndex);
+  const used = cropsNhUnitSlotsUsed(setup);
+  const remaining = Math.max(0, slots - used);
+  const capacity = cropsNhCropsPerMachine(setup);
+  const crops = Math.max(1, Math.round(machineCount));
+  const machines = handPicked ? 0 : Math.max(1, Math.ceil(crops / capacity));
+
+  const pickWithSound = (controlId: string, key: string, soundStep: number) => {
+    playBoardSound("dialRate", { step: Math.max(0, Math.min(10, soundStep)) });
+    suppressBoardSound("adjust", 150);
+    onSelect(controlId, key);
+  };
+  // A unit step writes the WHOLE normalized set back, so stored values always
+  // equal the shown ones and later steps can never reshuffle slots.
+  const commitUnitStep = (controlId: string, next: number) => {
+    const nextSetup = cropsNhHarvesterFromTiers(
+      { ...(machineConfigTiers ?? {}), [controlId]: String(next) },
+      handlerId,
+      minSeedBedTier,
+    );
+    playBoardSound("dialRate", { step: Math.max(0, Math.min(10, next)) });
+    suppressBoardSound("adjust", 150);
+    onSelectMany({
+      [CROP_IF_GROWTH_UNIT_CONTROL_ID]: String(nextSetup.growthUnits),
+      [CROP_IF_FERTILIZER_UNIT_CONTROL_ID]: String(nextSetup.fertilizerUnits),
+      [CROP_IF_HARVEST_UNIT_CONTROL_ID]: String(nextSetup.harvestUnits),
+      [CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID]: String(nextSetup.environmentUnits),
+      [CROP_IF_OVERCLOCK_CONTROL_ID]: String(nextSetup.overclocks),
+    });
+  };
+  const isUnitControl = (controlId: string) => controlId in CROP_UNIT_PIP_COLORS;
+  const stepperRow = (
+    control: MachineConfigTierControl,
+    value: number,
+    min: number,
+    max: number,
+    effect?: string,
+    lockedHint?: string,
+  ) => (
+    <CropStepperRow
+      key={control.id}
+      label={control.label}
+      effect={effect}
+      value={value}
+      min={min}
+      max={max}
+      lockedHint={lockedHint}
+      pipColor={CROP_UNIT_PIP_COLORS[control.id]}
+      onStep={(next) =>
+        isUnitControl(control.id)
+          ? commitUnitStep(control.id, next)
+          : // A 31-rung stat ladder squeezes onto the tap's 10 rungs so the
+            // top of the stat is the top of the climb, not a plateau.
+            pickWithSound(control.id, String(next), max > 10 ? (next / max) * 10 : next)
+      }
+      help={getControlHelp?.(control.id)}
+    />
+  );
+
+  const rows = controls.map((control) => {
+    switch (control.id) {
+      case CROP_MANAGER_TIER_CONTROL_ID:
+      case CROP_SEED_BED_TIER_CONTROL_ID:
+        // The harvester's voltage lives in the card header's tier slot.
+        return null;
+      case CROP_GROWTH_STAT_CONTROL_ID:
+      case CROP_GAIN_STAT_CONTROL_ID: {
+        const value = Number.parseInt(control.current.key, 10) || 1;
+        return stepperRow(
+          control,
+          value,
+          1,
+          31,
+          control.id === CROP_GROWTH_STAT_CONTROL_ID
+            ? "Higher ripens sooner"
+            : "Higher drops more per harvest",
+        );
+      }
+      case CROP_IF_GROWTH_UNIT_CONTROL_ID:
+        return stepperRow(
+          control,
+          setup.growthUnits,
+          0,
+          setup.overclocks > 0 ? 0 : setup.growthUnits + remaining,
+          setup.overclocks > 0
+            ? "The Overclocked unit replaces these"
+            : `+${setup.growthUnits * 100}% growth speed`,
+          setup.overclocks > 0 ? "The Overclocked unit replaces these" : "No free upgrade slot",
+        );
+      case CROP_IF_FERTILIZER_UNIT_CONTROL_ID:
+        return stepperRow(
+          control,
+          setup.fertilizerUnits,
+          0,
+          Math.min(1, setup.fertilizerUnits + remaining),
+          setup.fertilizerUnits > 0 ? "×1.5 speed · +0.5 harvest rounds" : "Feeds enriched fertilizer",
+          remaining === 0 && setup.fertilizerUnits === 0 ? "No free upgrade slot" : "The farm fits one",
+        );
+      case CROP_IF_HARVEST_UNIT_CONTROL_ID:
+        return stepperRow(
+          control,
+          setup.harvestUnits,
+          0,
+          Math.min(2, setup.harvestUnits + remaining),
+          `×${(1 + setup.harvestUnits * 0.2).toFixed(1)} harvest rounds`,
+          remaining === 0 && setup.harvestUnits < 2 ? "No free upgrade slot" : "The farm fits two",
+        );
+      case CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID: {
+        // A card adds a liked biome TAG, which stacks with the biome's own
+        // tags up to the two-tag cap - so the honest number is the delta the
+        // cards actually buy in this biome, not units x 14.
+        const baseEnv = cropsNhEnvironmentFromTiers(machineConfigTiers);
+        const withCards = cropsNhHarvesterEnvironment(setup, baseEnv);
+        const withoutCards = cropsNhHarvesterEnvironment(
+          { ...setup, environmentUnits: 0 },
+          baseEnv,
+        );
+        return stepperRow(
+          control,
+          setup.environmentUnits,
+          0,
+          Math.min(2, setup.environmentUnits + remaining),
+          `+${withCards.biomeBonus - withoutCards.biomeBonus} biome score in this biome`,
+          remaining === 0 && setup.environmentUnits < 2 ? "No free upgrade slot" : "The farm fits two",
+        );
+      }
+      case CROP_IF_OVERCLOCK_CONTROL_ID: {
+        const belowZpm = setup.tierIndex < 7;
+        const noSlot = setup.overclocks === 0 && remaining === 0;
+        return stepperRow(
+          control,
+          setup.overclocks,
+          0,
+          belowZpm || noSlot ? setup.overclocks : 6,
+          setup.overclocks > 0
+            ? `×${2 ** setup.overclocks} output · ×${4 ** setup.overclocks} EU`
+            : "Doubles output, quadruples EU, per step",
+          belowZpm ? "Needs a ZPM seed bed or better" : "No free upgrade slot",
+        );
+      }
+      default:
+        return (
+          <CropCycleRow
+            key={control.id}
+            label={control.label}
+            options={control.tiers}
+            currentKey={control.current.key}
+            onPick={(next, index) => pickWithSound(control.id, next.key, index)}
+            help={getControlHelp?.(control.id)}
+          />
+        );
+    }
+  });
+  // The knobs split into the card's two stories: what the CROP is, and what
+  // hardware the farm carries. The pips ride the UPGRADES section head, in a
+  // stable per-unit colour order, so the budget lives with what spends it.
+  const cellEntries = controls
+    .map((control, index) => ({ id: control.id, cell: rows[index] }))
+    .filter((entry) => Boolean(entry.cell));
+  const cropCells = cellEntries
+    .filter((entry) => !(entry.id in CROP_UNIT_PIP_COLORS))
+    .map((entry) => entry.cell);
+  const unitCells = cellEntries
+    .filter((entry) => entry.id in CROP_UNIT_PIP_COLORS)
+    .map((entry) => entry.cell);
+  const pipFills = [
+    ...Array.from({ length: setup.growthUnits }, () => CROP_UNIT_PIP_COLORS[CROP_IF_GROWTH_UNIT_CONTROL_ID]!),
+    ...Array.from({ length: setup.fertilizerUnits }, () => CROP_UNIT_PIP_COLORS[CROP_IF_FERTILIZER_UNIT_CONTROL_ID]!),
+    ...Array.from({ length: setup.harvestUnits }, () => CROP_UNIT_PIP_COLORS[CROP_IF_HARVEST_UNIT_CONTROL_ID]!),
+    ...Array.from({ length: setup.environmentUnits }, () => CROP_UNIT_PIP_COLORS[CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID]!),
+    ...(setup.overclocks > 0 ? [CROP_UNIT_PIP_COLORS[CROP_IF_OVERCLOCK_CONTROL_ID]!] : []),
+  ];
+  const footer = handPicked ? null : (
+    <div
+      key="crop-machine-footer"
+      className="mt-0.5 flex h-[14px] items-center text-[10px] leading-[12px] text-[var(--mc-ink-muted)]"
+    >
+      <span className="truncate">
+        {crops.toLocaleString()} planted / {capacity.toLocaleString()} per machine
+      </span>
+      <span className="ml-auto shrink-0 text-[var(--mc-ink)]">
+        ×{machines.toLocaleString()} {isFarm ? "Industrial Farm" : "Crop Manager"}
+        {machines === 1 ? "" : "s"}
+      </span>
+    </div>
+  );
+
+  // THE WORKED FORMULAS: every number on this card, derived in front of the
+  // player with their own settings plugged in. Muted fine print under the
+  // footer, one equation per line, each unit's count in its own pip colour.
+  // Folds on its FORMULAS head; the choice is a browser preference shared by
+  // every crop card.
+  const workedFormulas = (() => {
+    if (!cropStats) {
+      return null;
+    }
+    const head = (
+      <button
+        type="button"
+        className="nodrag flex h-[12px] w-full items-center gap-1 text-left text-[9px] uppercase tracking-wide text-[var(--mc-ink-muted)] hover:text-[var(--mc-ink)]"
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleFormulas();
+        }}
+        aria-expanded={formulasOpen}
+        title={formulasOpen ? "Hide the worked formulas" : "Show the worked formulas"}
+      >
+        <ChevronDown
+          aria-hidden
+          className={[
+            // Rotates in place; the box never moves between states.
+            "h-2.5 w-2.5 shrink-0 transition-transform duration-100",
+            formulasOpen ? "" : "-rotate-90",
+          ].join(" ")}
+        />
+        <span className="text-[9px] leading-[11px]">Formulas</span>
+      </button>
+    );
+    if (!formulasOpen) {
+      // The SAME wrapper the open state uses, minus the lines: the head must
+      // be pixel-identical folded and unfolded.
+      return (
+        <div className="mt-1 border-t border-[var(--mc-56)] pt-0.5 text-[9px] leading-[11px] text-[var(--mc-ink-muted)]">
+          {head}
+        </div>
+      );
+    }
+    const env = cropsNhHarvesterEnvironment(setup, cropsNhEnvironmentFromTiers(machineConfigTiers));
+    const waterBonus = Math.floor((Math.min(100, Math.max(0, env.water)) + 9) / 10);
+    const fertBonus = Math.floor((Math.min(100, Math.max(0, env.fertilizer)) + 9) / 10);
+    const skyBonus = env.sky ? 2 : 0;
+    const supply = cropsNhNutrientScore(env) * 5;
+    const demand = cropStats.tier * 10;
+    const speedMult = cropsNhGrowthSpeedMultiplier(setup);
+    const roundMult = cropsNhHarvestRoundMultiplier(setup);
+    // Each unit's count wears its slot-pip colour, so the equation reads
+    // back to the knobs above without a legend.
+    const tint = (value: ReactNode, controlId: string) => (
+      <span style={{ color: CROP_UNIT_PIP_COLORS[controlId] }}>{value}</span>
+    );
+    const growthN = tint(setup.growthUnits, CROP_IF_GROWTH_UNIT_CONTROL_ID);
+    const fertN = tint(setup.fertilizerUnits, CROP_IF_FERTILIZER_UNIT_CONTROL_ID);
+    const harvestN = tint(setup.harvestUnits, CROP_IF_HARVEST_UNIT_CONTROL_ID);
+    const biomeN = tint(setup.environmentUnits, CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID);
+    const ocN = tint(setup.overclocks, CROP_IF_OVERCLOCK_CONTROL_ID);
+    // The classic aligned-equations look: every derivation right-aligns into
+    // one shared "=" column and the answers stand in a bright left-aligned
+    // column of their own - the eye can read just the results, or the whole
+    // working, without a box in sight.
+    const line = (label: string, math: ReactNode, result: ReactNode) => (
+      <div
+        key={label}
+        className="grid min-w-0 grid-cols-[44px_minmax(0,1fr)_auto] items-baseline gap-x-1 whitespace-nowrap"
+      >
+        <span className="uppercase tracking-wide">{label}</span>
+        <span className="min-w-0 overflow-hidden text-ellipsis text-right tabular-nums">
+          {math}
+        </span>
+        <span className="min-w-0 overflow-hidden text-ellipsis text-[10px] font-semibold tabular-nums text-[var(--mc-ink)]">
+          {" "}= {result}
+        </span>
+      </div>
+    );
+    // THE STORY, each line feeding the next until the card's own per-second
+    // figure falls out: food sets the growth rate, the rate sets the seconds
+    // per harvest, the gain sets the items per harvest, and the last line is
+    // the output the wires carry.
+    const surplusPct =
+      supply >= demand ? 100 + (supply - demand) : Math.max(0, 100 - (demand - supply) * 4);
+    const rate = cropsNhGrowthRate(cropStats, env);
+    const cycleSec = cropStats.growthCycleTicks / 20;
+    const cycles = rate > 0 ? Math.ceil(cropStats.growthPoints / rate) : 0;
+    const harvestSec = rate > 0 ? (cycles * cycleSec) / speedMult : 0;
+    const itemsPerHarvest =
+      cropStats.drops.reduce(
+        (sum, drop) => sum + cropsNhExpectedDrop(cropStats, env.gain, drop),
+        0,
+      ) * roundMult;
+    const outPerSec = rate > 0 ? (itemsPerHarvest / harvestSec) * crops : 0;
+    const lines: ReactNode[] = [
+      line(
+        "food",
+        <>(5+{waterBonus}+{fertBonus}+{skyBonus}+{env.biomeBonus})·5 vs {cropStats.tier}·10</>,
+        <>
+          {supply} vs {demand}{" "}
+          <span style={{ color: supply >= demand ? "#7fd94a" : "#e06060" }}>
+            → {surplusPct}%
+          </span>
+        </>,
+      ),
+      line(
+        "grows",
+        <>(6+{env.growth})·{surplusPct}%</>,
+        <>
+          {rate} pts per {formatCompact(cycleSec)}s
+        </>,
+      ),
+      line(
+        "harvest",
+        rate > 0 ? (
+          // Every term stays put whatever the knobs say, and every unit
+          // count stands IN the equation wearing its own colour - so when a
+          // green knob moves, a green number moves here.
+          isFarm ? (
+            <>
+              ⌈{cropStats.growthPoints}/{rate}⌉·{formatCompact(cycleSec)}s ÷ (1+{growthN}
+              )·(1+0.5·{fertN})·2<sup>{ocN}</sup>
+            </>
+          ) : (
+            <>
+              ⌈{cropStats.growthPoints}/{rate}⌉·{formatCompact(cycleSec)}s
+            </>
+          )
+        ) : (
+          <>too hungry to grow</>
+        ),
+        rate > 0 ? <>{formatCompact(harvestSec)}s</> : <span style={{ color: "#e06060" }}>never</span>,
+      ),
+      line(
+        "drops",
+        isFarm ? (
+          <>
+            {formatCompact(cropStats.dropChance)}·1.03<sup>{env.gain}</sup>·(1+0.2·
+            {setup.tierIndex}+0.5·{fertN})·(1+0.2·{harvestN})
+          </>
+        ) : (
+          <>
+            {formatCompact(cropStats.dropChance)}·1.03<sup>{env.gain}</sup>·(1+0.05·
+            {setup.tierIndex})
+          </>
+        ),
+        <>{formatCompact(itemsPerHarvest)}</>,
+      ),
+      line(
+        "output",
+        <>
+          {formatCompact(itemsPerHarvest)} ÷ {formatCompact(harvestSec)}s · {crops.toLocaleString()} seeds
+        </>,
+        <>{formatCompact(outPerSec)}/s</>,
+      ),
+    ];
+    if (isFarm) {
+      const unitPowerFactor =
+        1 +
+        1.25 * setup.growthUnits +
+        0.5 * (setup.fertilizerUnits + setup.harvestUnits + setup.environmentUnits);
+      const farmEu = cropsNhFarmEut(setup);
+      const baseEu = Math.round(farmEu / (unitPowerFactor * 4 ** setup.overclocks));
+      lines.push(
+        line(
+          "power",
+          <>
+            {baseEu}·(1+1.25·{growthN}+0.5·({fertN}+{harvestN}+{biomeN}))·4
+            <sup>{ocN}</sup>·{machines}
+          </>,
+          <>{Math.round(farmEu * machines).toLocaleString()} EU/t</>,
+        ),
+      );
+    } else {
+      const euPerHarvest = cropsNhManagerEuPerHarvest(setup);
+      lines.push(
+        line(
+          "power",
+          <>{(euPerHarvest * 8).toLocaleString()}/8 per crop picked</>,
+          <>{euPerHarvest.toLocaleString()} EU</>,
+        ),
+      );
+    }
+    return (
+      <div className="mt-1 border-t border-[var(--mc-56)] pt-0.5 text-[9px] leading-[11px] text-[var(--mc-ink-muted)]">
+        {head}
+        <div className="mt-0.5 space-y-0.5">{lines}</div>
+      </div>
+    );
+  })();
+
+  const sectionHead = (title: string, trailing?: ReactNode) => (
+    <div className="mb-0.5 flex h-[14px] items-center gap-1.5 text-[10px] uppercase tracking-wide leading-[12px] text-[var(--mc-ink-muted)]">
+      <span>{title}</span>
+      {trailing}
+    </div>
+  );
+  // An ACCURATE floor, neither inflated nor tiny: an inflated estimate
+  // bought dead space between the ports and the hairline, and a bare floor
+  // painted the panel one frame short before GridBlock's measurement caught
+  // up, which flashed the whole card's layout.
+  const bodyPx =
+    8 +
+    (cropCells.length > 0 ? Math.ceil(cropCells.length / 4) * 44 : 0) +
+    (unitCells.length > 0 ? 16 + Math.ceil(unitCells.length / 3) * 44 : 0) +
+    (footer ? 16 : 0) +
+    (cropStats ? (formulasOpen ? 12 + 6 * 11 + 8 : 18) : 0);
+  // The crop's own tiles sit right under the hairline with no section head
+  // of their own - what they are is obvious - and the farm's hardware
+  // follows under the UPGRADES head with its slot budget.
+  return (
+    <GridBlock
+      className={["nodrag min-w-0", className].join(" ")}
+      minCells={Math.max(1, Math.ceil(bodyPx / BOARD_GRID))}
+      clearancePx={4}
+      // The block's own rounding slack goes ABOVE the knobs (where the
+      // cluster already breathes), never under the formulas fold, where a
+      // collapsed strip read as a big empty shelf.
+      align="end"
+    >
+      <div className="min-w-0 border-t border-[var(--mc-56)] pb-1 pt-0.5">
+        {cropCells.length > 0 ? (
+          // Four across: the crop's own knobs are narrow (a two-digit stat,
+          // a one-word option), so the row need not wrap.
+          <div className="grid min-w-0 grid-cols-[repeat(4,minmax(0,1fr))] gap-x-1 gap-y-1">
+            {cropCells}
+          </div>
+        ) : null}
+        {unitCells.length > 0 ? (
+          <div className={cropCells.length > 0 ? "mt-1" : ""}>
+            {sectionHead(
+              "Upgrades",
+              <>
+                <span className="flex items-center gap-[3px]">
+                  {Array.from({ length: slots }, (_unused, index) => (
+                    <span
+                      key={index}
+                      className="h-2.5 w-2.5 border border-[var(--mc-33)]"
+                      style={{ backgroundColor: pipFills[index] ?? "var(--mc-47)" }}
+                    />
+                  ))}
+                </span>
+                <span className="ml-auto tabular-nums">
+                  {used}/{slots} slots
+                </span>
+              </>,
+            )}
+            <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-x-1 gap-y-1">
+              {unitCells}
+            </div>
+          </div>
+        ) : null}
+        {footer}
+        {workedFormulas}
+      </div>
+    </GridBlock>
+  );
+}
+
 const CROP_HELP_GOOD = "#4ade80";
 const CROP_HELP_BAD = "#f87171";
 
@@ -3954,8 +5391,9 @@ function cropControlHelp(recipe: Recipe, controlId: string): ReactNode {
             biggest feeding boost there is.
           </p>
           <p className="text-slate-300">
-            Without a matching biome, a wet one (80%+ humidity, like a swamp or jungle) still gives
-            up to +14.
+            Without a matching biome, humidity stands in for one like: the percent options are the
+            biome&apos;s humidity, worth +4 at 60%, +9 at 70% and the full +14 at 80% or wetter
+            (a swamp or jungle). It never stacks with real likes.
           </p>
         </CropHelpPanel>
       );
@@ -4029,6 +5467,140 @@ function getConnectionSlotState(
   }
 
   return "idle";
+}
+
+/** Solve mode's machine figure: the smaller the count, the more decimals it
+ * earns - a x0.0417 sliver is a real answer and rounding it to x0.04 hides
+ * a fifth of it. Big counts stay whole. */
+function formatSolvedMachines(value: number): string {
+  if (value <= 0.0000005) {
+    return "0";
+  }
+  // Below the finest step the cell can print, say so rather than rounding a
+  // real sliver to nothing.
+  if (value < 0.0005) {
+    return "<0.001";
+  }
+  if (value >= 100) {
+    return String(Math.ceil(value - 0.000001));
+  }
+  const decimals = value < 1 ? 3 : value < 10 ? 2 : 1;
+  return value.toFixed(decimals).replace(/\.?0+$/, "");
+}
+
+/**
+ * The solve-mode replacement for the count stepper: how many of this machine
+ * the typed product amounts require. The count is normally the ANSWER - but
+ * clicking it PINS it ("run exactly 20 of these; solve the rest of the
+ * line"), the same dotted-underline-and-pencil invitation the product
+ * drawer's amount wears. A pinned count shows gold; emptying the field
+ * unpins and hands the count back to the solver.
+ */
+function SolvedMachinesStat({
+  label,
+  needed,
+  pinned,
+  onPin,
+}: {
+  label: string;
+  needed: number;
+  pinned: number | undefined;
+  onPin: (machines: number | undefined) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const isPinned = pinned !== undefined && pinned > 0;
+  const whole = Math.ceil(needed - 0.000001);
+  const pct = whole > 0 ? Math.round((needed / whole) * 100) : 0;
+  const title = isPinned
+    ? `Pinned: exactly ${formatSolvedMachines(pinned)} run and the line solves around them. Click to change; empty unpins.`
+    : needed <= 0.0000005
+      ? "No product amount needs this machine. Click to pin a count and solve the line around it."
+      : `Build ${whole} and run at ${pct}%. Click to pin a count instead.`;
+  const commit = () => {
+    setEditing(false);
+    if (draft.trim() === "") {
+      onPin(undefined);
+      return;
+    }
+    const value = Number.parseFloat(draft.trim());
+    if (Number.isFinite(value) && value > 0) {
+      onPin(value);
+    }
+  };
+  return (
+    <div
+      title={title}
+      className="min-w-0 border border-[var(--mc-47)] bg-[var(--mc-71)] px-1 shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]"
+    >
+      {/* The label stays MACHINES either way - it never stops being one.
+          The gold value is what says the count is pinned. */}
+      <div className="truncate text-[11px] uppercase leading-[13px] text-[var(--mc-ink-muted)]">
+        {label}
+      </div>
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+            if (event.key === "Escape") {
+              setEditing(false);
+            }
+            event.stopPropagation();
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          inputMode="decimal"
+          aria-label="Pinned machine count"
+          className="nodrag h-5 w-full min-w-0 border border-[var(--mc-47)] bg-[var(--mc-85)] px-1 text-center text-[13px] font-medium leading-4 text-[var(--mc-ink)] outline-none focus:border-cyan-700 focus:ring-1 focus:ring-cyan-400"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setDraft(isPinned ? formatSolvedMachines(pinned) : "");
+            setEditing(true);
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          aria-label={isPinned ? "Change the pinned machine count" : "Pin a machine count"}
+          className="nodrag group/pin flex w-full min-w-0 items-center gap-[3px] text-left"
+        >
+          <span
+            className={[
+              "truncate font-medium tabular-nums underline decoration-dotted decoration-[1.5px] underline-offset-[3px]",
+              isPinned
+                ? "text-[#ffd257]"
+                : needed <= 0.0000005
+                  ? "text-[var(--mc-ink-muted)]"
+                  : "",
+            ].join(" ")}
+          >
+            {!isPinned && needed > 0.0000005 && needed < 0.0005 ? (
+              // A sliver below the finest printable step: a quiet small
+              // grey < in place of the × so it reads "less than 0.001".
+              <>
+                <span className="text-[9px] font-normal text-[var(--mc-ink-muted)]">{"<"}</span>
+                0.001
+              </>
+            ) : (
+              <>×{formatSolvedMachines(isPinned ? pinned : needed)}</>
+            )}
+          </span>
+          <Pencil
+            aria-hidden
+            className="h-[9px] w-[9px] shrink-0 translate-y-[1.5px] fill-current text-[var(--mc-ink-muted)] group-hover/pin:text-[var(--mc-ink)]"
+          />
+        </button>
+      )}
+    </div>
+  );
 }
 
 function Stat({
@@ -4120,13 +5692,15 @@ function PowerStat({
                 values={[drawEuT]}
                 render={(shown) =>
                   shown[0] === drawEuT
-                    ? formatCompact(drawEuT)
-                    : formatCompactStable(shown[0] ?? drawEuT)
+                    ? formatCompact(powerDisplayFromEuT(drawEuT))
+                    : formatCompactStable(powerDisplayFromEuT(shown[0] ?? drawEuT))
                 }
               />
               {/* The unit rides small and grey against the number: the row
-                  is fighting for width and EVERY power figure is EU/t. */}
-              <span className="ml-0.5 text-[8px] text-[var(--mc-ink-muted)]">EU/t</span>
+                  is fighting for width; the unit is the board's power dial. */}
+              <span className="ml-0.5 text-[8px] text-[var(--mc-ink-muted)]">
+                {powerDisplaySuffix()}
+              </span>
             </>
           )}
         </div>
@@ -4642,11 +6216,19 @@ function MachineCountStat({
     }
   };
 
-  const stepBy = (direction: 1 | -1, event: React.MouseEvent) => {
-    // Shift-click steps by 100, Ctrl-click (or Cmd on mac) by 10.
-    const step = event.shiftKey ? 100 : event.ctrlKey || event.metaKey ? 10 : 1;
+  const stepBy = (
+    direction: 1 | -1,
+    modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
+  ) => {
+    // Shift steps by 100, Ctrl (or Cmd on mac) by 10 - clicks and wheel alike.
+    const step = modifiers.shiftKey ? 100 : modifiers.ctrlKey || modifiers.metaKey ? 10 : 1;
     const next = Math.max(1, machineCount + direction * step);
     if (next !== machineCount) {
+      // The tap CLIMBS with the count, two rungs per decade capped at rung
+      // six (~1kHz): a crop card legitimately holds tens of thousands of
+      // seeds, and the full ladder up there was a dog whistle.
+      playBoardSound("dialRate", { step: Math.min(6, Math.log10(Math.max(1, next)) * 2) });
+      suppressBoardSound("adjust", 150);
       setDraftState({ machineCount: next, draft: String(next) });
       onChange(next);
     }
@@ -4656,7 +6238,15 @@ function MachineCountStat({
     "nodrag flex h-5 w-5 shrink-0 items-center justify-center border border-[var(--mc-33)] bg-[var(--mc-82)] text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-100),inset_-1px_-1px_0_var(--mc-47)] hover:bg-[var(--mc-100)] active:shadow-[inset_1px_1px_0_var(--mc-47),inset_-1px_-1px_0_var(--mc-100)]";
 
   return (
-    <div className="min-w-0 border border-[var(--mc-47)] bg-[var(--mc-71)] px-1 shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]">
+    <div
+      className="nodrag nowheel min-w-0 border border-[var(--mc-47)] bg-[var(--mc-71)] px-1 shadow-[inset_1px_1px_0_var(--mc-93),inset_-1px_-1px_0_var(--mc-47)]"
+      // The wheel walks the count too, with the same shift/ctrl multipliers
+      // the buttons take. "nowheel" keeps React Flow from zooming under it.
+      onWheel={(event) => {
+        event.stopPropagation();
+        stepBy(event.deltaY < 0 ? 1 : -1, event);
+      }}
+    >
       <div className="truncate text-[11px] uppercase leading-[13px] text-[var(--mc-ink-muted)]">{label}</div>
       <div className="flex min-w-0 items-center gap-0.5">
         <button

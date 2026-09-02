@@ -75,18 +75,68 @@ export function getNodeDetailLevel(zoom: number, current: NodeDetailLevel): Node
 let detailLevel: NodeDetailLevel = NODE_DETAIL_FULL;
 const detailListeners = new Set<() => void>();
 
+/**
+ * The dev menu's "always glance" switch: the zoomed-out faces at EVERY
+ * zoom. The controller keeps computing and publishing the honest level
+ * underneath, so switching it off lands straight back on whatever the
+ * current zoom deserves - no stale level, no waiting for the next wheel
+ * step.
+ */
+const FORCE_GLANCE_KEY = "gtnh-factory-flow.dev.force-glance";
+
+let forceGlance = readStoredForceGlance();
+
+function readStoredForceGlance(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(FORCE_GLANCE_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
+
+export function isNodeDetailGlanceForced(): boolean {
+  return forceGlance;
+}
+
+export function setNodeDetailGlanceForced(forced: boolean): void {
+  if (forced === forceGlance) {
+    return;
+  }
+  forceGlance = forced;
+  try {
+    if (forced) {
+      window.localStorage.setItem(FORCE_GLANCE_KEY, "on");
+    } else {
+      window.localStorage.removeItem(FORCE_GLANCE_KEY);
+    }
+  } catch {
+    // Session-only is fine.
+  }
+  for (const listener of detailListeners) {
+    listener();
+  }
+}
+
 export function setNodeDetailLevel(level: NodeDetailLevel) {
   if (level === detailLevel) {
     return;
   }
   detailLevel = level;
+  if (forceGlance) {
+    // Published output is pinned to glance; the honest level above still
+    // updated, so lifting the pin lands on it.
+    return;
+  }
   for (const listener of detailListeners) {
     listener();
   }
 }
 
 export function getPublishedNodeDetailLevel(): NodeDetailLevel {
-  return detailLevel;
+  return forceGlance ? NODE_DETAIL_GLANCE : detailLevel;
 }
 
 /** Server render has no viewport, so it always describes the full board. */

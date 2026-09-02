@@ -4,6 +4,7 @@ import { normalizeProjectFuelProfiles } from "./fuels";
 import { isCustomRateRecipe, releaseCustomRates } from "./custom-rate";
 import { dedupeEdgeWires } from "./edge-identity";
 import { isTrashRecipe } from "./trash";
+import { resynthesizePowerRecipes } from "@/lib/power/power-recipe";
 import { snapPositionToGrid, snapSizeUpToGrid } from "@/lib/board-grid";
 
 /**
@@ -23,7 +24,14 @@ export function normalizeLoadedProject(project: FactoryProject): FactoryProject 
             dropCrossFormConnections(
               migrateTrashCansToDrawers(
                 dropImpossibleEnergyHatchTypes(
-                  normalizeProjectFuelProfiles(renameOpvTier(adoptSetupRules(project))),
+                  // Power cards rebuild their synthesized recipe from the
+                  // node's settings, so stored plans pick up corrected
+                  // generator math. BEFORE the wire checks: a power recipe
+                  // saved slotless would otherwise read as a card with no
+                  // fluid slot and lose its fuel wire to the cross-form drop.
+                  resynthesizePowerRecipes(
+                    normalizeProjectFuelProfiles(renameOpvTier(adoptSetupRules(project))),
+                  ),
                 ),
               ),
             ),

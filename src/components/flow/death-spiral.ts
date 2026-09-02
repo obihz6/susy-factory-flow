@@ -107,6 +107,14 @@ export function findDeathSpirals(
   if (!result) {
     return EMPTY_INDEX;
   }
+  // SOLVE MODE has no death spirals: a ring at zero there means "no typed
+  // amount needs this ring", not "this ring starved itself" - the diagnosis
+  // describes a FIXED build's dynamics, and the build is what solve mode
+  // computes. Silenced at the detector so every reader (the notice, the
+  // wire tint, the verdict, the board dump) agrees.
+  if (project.solveMode) {
+    return EMPTY_INDEX;
+  }
 
   const storageIds = new Set((project.storages ?? []).map((storage) => storage.id));
   const nodeById = new Map(project.nodes.map((node) => [node.id, node]));

@@ -161,7 +161,9 @@ describe("the titanium line the lesson reads", () => {
     const before = utilizationByNode(titanium, result);
     const after = utilizationByNode(flipped, flippedResult);
     for (const node of titanium.nodes) {
-      expect(after.get(node.id)).toBeCloseTo(before.get(node.id) ?? 0, 9);
+      // Precision 6, not 9: the engine's lock rows carry 1e-9 of deliberate
+      // slack, so equal-optimum solves may differ by that much in either run.
+      expect(after.get(node.id)).toBeCloseTo(before.get(node.id) ?? 0, 6);
     }
 
     // And the one word: the freezer (the product drawer's feeder) reads

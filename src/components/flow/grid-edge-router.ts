@@ -192,8 +192,19 @@ const COST_INSIDE_EXEMPT = 3;
 const COST_OUTSIDE_HOME = 3;
 /** Cost of one 90° turn, in pixel-equivalents. */
 const TURN_COST = 30;
-/** A* gives up after this many pops and the caller falls back. */
-const MAX_ASTAR_POPS = 40_000;
+/**
+ * A* gives up after this many pops, or after every state in the window has
+ * been popped a couple of times over, whichever is LARGER, and the caller
+ * falls back. The bound has to scale with the window: with a consistent
+ * heuristic a state is settled once, so a search that has not finished
+ * within the window's own state count is boxed in, not lost. The old flat
+ * 40k cap was smaller than a busy board's window (~80k states), so long
+ * wires between boards failed on size alone, grew the window, failed again,
+ * and were drawn as L's straight through cards - after burning a quarter
+ * second each.
+ */
+const MIN_ASTAR_POPS = 40_000;
+const ASTAR_POPS_PER_STATE = 2;
 
 /**
  * Pooled A* state, shared by every leg of every edge of every solve.
@@ -256,6 +267,71 @@ function ensureSearchHeapCapacity(size: number) {
   searchHeapState = nextState;
   searchHeapSeq = nextSeq;
 }
+/**
+ * The run-cost memo, pooled the same way. A RUN is the stretch between two
+ * neighbouring vertices of the window graph, and its cost (blocked, or
+ * distance x lane factor x frame penalty) depends on nothing that changes
+ * while one wire is being routed: occupancy is claimed only after the final
+ * leg. So each run is priced once per routing attempt and every leg, every
+ * direction and every revisit reads the price back. Before this the A* re-ran
+ * the blocked-interval scan, the occupancy walk over every cell of the run
+ * and the frame tests on every single expansion.
+ */
+let runPoolCapacity = 0;
+let runPoolGeneration = 0;
+let runPoolStamp = new Int32Array(0);
+let runPoolCost = new Float64Array(0);
+
+function acquireRunGeneration(runCount: number): number {
+  if (runCount > runPoolCapacity) {
+    runPoolCapacity = Math.max(runCount, runPoolCapacity * 2, 4096);
+    runPoolStamp = new Int32Array(runPoolCapacity);
+    runPoolCost = new Float64Array(runPoolCapacity);
+    runPoolGeneration = 0;
+  }
+  runPoolGeneration += 1;
+  if (runPoolGeneration >= 0x7ffffffe) {
+    runPoolStamp.fill(0);
+    runPoolGeneration = 1;
+  }
+  return runPoolGeneration;
+}
+
+/** A run is blocked: it enters a card's margin. */
+const RUN_BLOCKED = -1;
+
+/** The reachability flood's visited stamps and queue, pooled per vertex. */
+let floodPoolCapacity = 0;
+let floodPoolGeneration = 0;
+let floodPoolStamp = new Int32Array(0);
+let floodPoolQueue = new Int32Array(0);
+
+function acquireFloodGeneration(vertexCount: number): number {
+  if (vertexCount > floodPoolCapacity) {
+    floodPoolCapacity = Math.max(vertexCount, floodPoolCapacity * 2, 4096);
+    floodPoolStamp = new Int32Array(floodPoolCapacity);
+    floodPoolQueue = new Int32Array(floodPoolCapacity);
+    floodPoolGeneration = 0;
+  }
+  floodPoolGeneration += 1;
+  if (floodPoolGeneration >= 0x7ffffffe) {
+    floodPoolStamp.fill(0);
+    floodPoolGeneration = 1;
+  }
+  return floodPoolGeneration;
+}
+
+/**
+ * routeWithinWindow's answer when no path exists AND no larger window could
+ * hold one: an end is walled in by the cards around it (a drawer packed
+ * against its neighbours, a card wedged into a corner). Growing the window
+ * adds lines only OUTSIDE the current one, so a region the flood could not
+ * walk to the current border from is sealed at every size. Before this the
+ * router searched three windows, each sixteen times the area of the last,
+ * to learn the same thing three times.
+ */
+const SEALED = "sealed";
+
 /** Search-window padding around the endpoints, then the growth factor. */
 const WINDOW_PAD = 400;
 const WINDOW_GROWTH = 4;
@@ -274,11 +350,29 @@ interface LaneClaim {
  * wires can share a line for part of its length and part company later —
  * capacity is a property of a stretch, not of the whole line.
  */
-class LaneOccupancy {
-  private cells = new Map<string, LaneClaim[]>();
+/**
+ * Cell keys are one integer, not a string: the A* asks about lane occupancy
+ * for every run it considers, millions of times on a busy board, and a
+ * string key per cell per ask was most of the routing cost. Lines are
+ * multiples of BOARD_GRID and cells are already integers; both are offset
+ * to stay non-negative and packed below 2^53.
+ */
+const LANE_KEY_LINE_OFFSET = 1 << 20;
+const LANE_KEY_LINE_SPAN = 1 << 21;
+const LANE_KEY_CELL_OFFSET = 1 << 21;
+const LANE_KEY_CELL_SPAN = 1 << 22;
 
-  private key(axis: "h" | "v", line: number, cell: number): string {
-    return `${axis}:${line}:${cell}`;
+class LaneOccupancy {
+  private cells = new Map<number, LaneClaim[]>();
+  /** Total claimed stroke per cell, kept alongside so usedWidth never sums. */
+  private totals = new Map<number, number>();
+
+  private key(axis: "h" | "v", line: number, cell: number): number {
+    const lineIndex = Math.round(line / BOARD_GRID) + LANE_KEY_LINE_OFFSET;
+    return (
+      ((axis === "h" ? 1 : 0) * LANE_KEY_LINE_SPAN + lineIndex) * LANE_KEY_CELL_SPAN +
+      (cell + LANE_KEY_CELL_OFFSET)
+    );
   }
 
   claimsFor(axis: "h" | "v", line: number, from: number, to: number): LaneClaim[] {
@@ -303,15 +397,8 @@ class LaneOccupancy {
     const hi = Math.floor(Math.max(from, to) / BOARD_GRID);
     let worst = 0;
     for (let cell = lo; cell <= hi; cell += 1) {
-      const claims = this.cells.get(this.key(axis, line, cell));
-      if (!claims) {
-        continue;
-      }
-      let total = 0;
-      for (const claim of claims) {
-        total += claim.hi - claim.lo;
-      }
-      if (total > worst) {
+      const total = this.totals.get(this.key(axis, line, cell));
+      if (total !== undefined && total > worst) {
         worst = total;
       }
     }
@@ -321,6 +408,7 @@ class LaneOccupancy {
   claim(axis: "h" | "v", line: number, from: number, to: number, claimInterval: LaneClaim) {
     const lo = Math.floor(Math.min(from, to) / BOARD_GRID);
     const hi = Math.floor(Math.max(from, to) / BOARD_GRID);
+    const width = claimInterval.hi - claimInterval.lo;
     for (let cell = lo; cell <= hi; cell += 1) {
       const key = this.key(axis, line, cell);
       const claims = this.cells.get(key);
@@ -329,6 +417,7 @@ class LaneOccupancy {
       } else {
         this.cells.set(key, [claimInterval]);
       }
+      this.totals.set(key, (this.totals.get(key) ?? 0) + width);
     }
   }
 }
@@ -582,6 +671,9 @@ function routeOne(context: SolveContext, request: GridRouteRequest): GridRoutedE
   let pad = WINDOW_PAD;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const routed = routeWithinWindow(context, obstacles, exemptRects, homeRects, request, sources, targets, waypoints, pad);
+    if (routed === SEALED) {
+      break;
+    }
     if (routed) {
       return routed;
     }
@@ -593,6 +685,9 @@ function routeOne(context: SolveContext, request: GridRouteRequest): GridRoutedE
     pad = WINDOW_PAD;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const routed = routeWithinWindow(context, obstacles, exemptRects, homeRects, request, sources, targets, [], pad);
+      if (routed === SEALED) {
+        break;
+      }
       if (routed) {
         return routed;
       }
@@ -634,7 +729,7 @@ function routeWithinWindow(
   targets: GridEndpoint[],
   waypoints: GridPoint[],
   pad: number,
-): GridRoutedEdge | undefined {
+): GridRoutedEdge | typeof SEALED | undefined {
   const sourceAprons = sources.map(apronPoint);
   const targetAprons = targets.map(apronPoint);
   const stops = waypoints.map((point) => ({ x: snapLine(point.x), y: snapLine(point.y) }));
@@ -718,6 +813,103 @@ function routeWithinWindow(
   const xCount = xAxis.coords.length;
   const yCount = yAxis.coords.length;
   const stateCount = xCount * yCount * 4;
+  const maxPops = Math.max(MIN_ASTAR_POPS, stateCount * ASTAR_POPS_PER_STATE);
+
+  // Where a run sits relative to the frames that matter to it. The border
+  // line itself counts as inside.
+  const touches = (
+    rect: GridObstacle,
+    horizontal: boolean,
+    laneLine: number,
+    spanLo: number,
+    spanHi: number,
+  ): boolean =>
+    horizontal
+      ? laneLine >= rect.top - 1e-6 &&
+        laneLine <= rect.bottom + 1e-6 &&
+        spanHi > rect.left - 1e-6 &&
+        spanLo < rect.right + 1e-6
+      : laneLine >= rect.left - 1e-6 &&
+        laneLine <= rect.right + 1e-6 &&
+        spanHi > rect.top - 1e-6 &&
+        spanLo < rect.bottom + 1e-6;
+  const within = (
+    rect: GridObstacle,
+    horizontal: boolean,
+    laneLine: number,
+    spanLo: number,
+    spanHi: number,
+  ): boolean =>
+    horizontal
+      ? laneLine >= rect.top - 1e-6 &&
+        laneLine <= rect.bottom + 1e-6 &&
+        spanLo >= rect.left - 1e-6 &&
+        spanHi <= rect.right + 1e-6
+      : laneLine >= rect.left - 1e-6 &&
+        laneLine <= rect.right + 1e-6 &&
+        spanLo >= rect.top - 1e-6 &&
+        spanHi <= rect.bottom + 1e-6;
+
+  // Runs are indexed by their lower vertex and axis: (vertex x 2) for the
+  // horizontal run to the next x line, (vertex x 2 + 1) for the vertical
+  // run to the next y line. Priced lazily, once per attempt (see the pool).
+  const runGeneration = acquireRunGeneration(xCount * yCount * 2);
+  const runStamp = runPoolStamp;
+  const runCosts = runPoolCost;
+  const priceRun = (runIndex: number, xi: number, yi: number, horizontal: boolean): number => {
+    if (runStamp[runIndex] === runGeneration) {
+      return runCosts[runIndex];
+    }
+    runStamp[runIndex] = runGeneration;
+    let laneLine: number;
+    let from: number;
+    let to: number;
+    let free: boolean;
+    if (horizontal) {
+      laneLine = yAxis.coords[yi];
+      from = xAxis.coords[xi];
+      to = xAxis.coords[xi + 1];
+      free = runIsFree(horizontalBlocked.byLine[yi], from, to);
+    } else {
+      laneLine = xAxis.coords[xi];
+      from = yAxis.coords[yi];
+      to = yAxis.coords[yi + 1];
+      free = runIsFree(verticalBlocked.byLine[xi], from, to);
+    }
+    if (!free) {
+      runCosts[runIndex] = RUN_BLOCKED;
+      return RUN_BLOCKED;
+    }
+    const distance = to - from;
+    const used = context.occupancy.usedWidth(horizontal ? "h" : "v", laneLine, from, to);
+    const fits = used === 0 || used + LANE_GAP + request.strokeWidth <= LANE_CAPACITY;
+    const factor = used === 0 ? COST_EMPTY : fits ? COST_SHARED : COST_OVERFLOW;
+    // Loitering in a frame the wire is leaving costs; so does straying out
+    // of the frame it lives in. A run only counts as home when it lies
+    // wholly inside - a run half out is already the excursion.
+    let insideExempt = false;
+    for (const rect of exemptRects) {
+      if (touches(rect, horizontal, laneLine, from, to)) {
+        insideExempt = true;
+        break;
+      }
+    }
+    let strayedFromHome = false;
+    for (const rect of homeRects) {
+      if (!within(rect, horizontal, laneLine, from, to)) {
+        strayedFromHome = true;
+        break;
+      }
+    }
+    const framePenalty = insideExempt
+      ? COST_INSIDE_EXEMPT
+      : strayedFromHome
+        ? COST_OUTSIDE_HOME
+        : 1;
+    const cost = distance * factor * framePenalty;
+    runCosts[runIndex] = cost;
+    return cost;
+  };
 
   const vertexOf = (point: GridPoint): number | undefined => {
     const xi = xAxis.index.get(point.x);
@@ -749,6 +941,82 @@ function routeWithinWindow(
       return undefined;
     }
     stopVertices.push(vertex);
+  }
+
+  /**
+   * Cost-free flood over free runs from a seed set: does it reach any of
+   * `wanted`, and does it touch the window border? Prices the runs it walks,
+   * which the A* then reads back for free.
+   */
+  const flood = (
+    seedVertices: Iterable<number>,
+    wanted: Map<number, number>,
+  ): { reached: boolean; touchedBorder: boolean } => {
+    const generation = acquireFloodGeneration(xCount * yCount);
+    const stamp = floodPoolStamp;
+    const queue = floodPoolQueue;
+    let head = 0;
+    let tail = 0;
+    let touchedBorder = false;
+    for (const seed of seedVertices) {
+      if (stamp[seed] !== generation) {
+        stamp[seed] = generation;
+        queue[tail] = seed;
+        tail += 1;
+      }
+    }
+    while (head < tail) {
+      const vertex = queue[head];
+      head += 1;
+      if (wanted.has(vertex)) {
+        return { reached: true, touchedBorder };
+      }
+      const xi = Math.floor(vertex / yCount);
+      const yi = vertex % yCount;
+      if (xi === 0 || yi === 0 || xi === xCount - 1 || yi === yCount - 1) {
+        touchedBorder = true;
+      }
+      for (let dir = 0; dir < 4; dir += 1) {
+        const { dx, dy } = DIRECTIONS[dir];
+        const nxi = xi + dx;
+        const nyi = yi + dy;
+        if (nxi < 0 || nxi >= xCount || nyi < 0 || nyi >= yCount) {
+          continue;
+        }
+        const runCost =
+          dy === 0
+            ? priceRun(((dx < 0 ? nxi : xi) * yCount + yi) * 2, dx < 0 ? nxi : xi, yi, true)
+            : priceRun((xi * yCount + (dy < 0 ? nyi : yi)) * 2 + 1, xi, dy < 0 ? nyi : yi, false);
+        if (runCost === RUN_BLOCKED) {
+          continue;
+        }
+        const next = nxi * yCount + nyi;
+        if (stamp[next] !== generation) {
+          stamp[next] = generation;
+          queue[tail] = next;
+          tail += 1;
+        }
+      }
+    }
+    return { reached: false, touchedBorder };
+  };
+  // A direct wire (no stops) is checked for reachability before the A*
+  // spends anything on it. Unreachable, and either end's region never
+  // touches the border: sealed, no window will do. Unreachable but both
+  // regions reach the border: the way round lies outside, so grow.
+  if (stopVertices.length === 0) {
+    const startVertices = new Map<number, number>();
+    for (const start of starts) {
+      startVertices.set(start.vertex, start.endpointIndex);
+    }
+    const fromStarts = flood(startVertices.keys(), goals);
+    if (!fromStarts.reached) {
+      if (!fromStarts.touchedBorder) {
+        return SEALED;
+      }
+      const fromGoals = flood(goals.keys(), startVertices);
+      return fromGoals.touchedBorder ? undefined : SEALED;
+    }
   }
 
   interface LegSeed {
@@ -918,7 +1186,7 @@ function routeWithinWindow(
         continue;
       }
       pops += 1;
-      if (pops > MAX_ASTAR_POPS) {
+      if (pops > maxPops) {
         return undefined;
       }
       const vertex = Math.floor(currentState / 4);
@@ -943,74 +1211,15 @@ function routeWithinWindow(
         if (nxi < 0 || nxi >= xCount || nyi < 0 || nyi >= yCount) {
           continue;
         }
-        const fromX = xAxis.coords[xi];
-        const fromY = yAxis.coords[yi];
-        const toX = xAxis.coords[nxi];
-        const toY = yAxis.coords[nyi];
-        let laneAxis: "h" | "v";
-        let laneLine: number;
-        let from: number;
-        let to: number;
-        if (dy === 0) {
-          // Horizontal move rides the horizontal line y = fromY.
-          laneAxis = "h";
-          laneLine = fromY;
-          from = fromX;
-          to = toX;
-          if (!runIsFree(horizontalBlocked.byLine[yi], fromX, toX)) {
-            continue;
-          }
-        } else {
-          laneAxis = "v";
-          laneLine = fromX;
-          from = fromY;
-          to = toY;
-          if (!runIsFree(verticalBlocked.byLine[xi], fromY, toY)) {
-            continue;
-          }
+        // The run between the two vertices, keyed by the lower one.
+        const runCost =
+          dy === 0
+            ? priceRun(((dx < 0 ? nxi : xi) * yCount + yi) * 2, dx < 0 ? nxi : xi, yi, true)
+            : priceRun((xi * yCount + (dy < 0 ? nyi : yi)) * 2 + 1, xi, dy < 0 ? nyi : yi, false);
+        if (runCost === RUN_BLOCKED) {
+          continue;
         }
-
-        const distance = Math.abs(to - from);
-        const used = context.occupancy.usedWidth(laneAxis, laneLine, from, to);
-        const fits = used === 0 || used + LANE_GAP + request.strokeWidth <= LANE_CAPACITY;
-        const factor = used === 0 ? COST_EMPTY : fits ? COST_SHARED : COST_OVERFLOW;
-        // Where this run sits relative to the frames that matter to it.
-        // The border line itself counts as inside.
-        const spanLo = Math.min(from, to);
-        const spanHi = Math.max(from, to);
-        const touches = (rect: GridObstacle): boolean =>
-          laneAxis === "h"
-            ? laneLine >= rect.top - 1e-6 &&
-              laneLine <= rect.bottom + 1e-6 &&
-              spanHi > rect.left - 1e-6 &&
-              spanLo < rect.right + 1e-6
-            : laneLine >= rect.left - 1e-6 &&
-              laneLine <= rect.right + 1e-6 &&
-              spanHi > rect.top - 1e-6 &&
-              spanLo < rect.bottom + 1e-6;
-        const within = (rect: GridObstacle): boolean =>
-          laneAxis === "h"
-            ? laneLine >= rect.top - 1e-6 &&
-              laneLine <= rect.bottom + 1e-6 &&
-              spanLo >= rect.left - 1e-6 &&
-              spanHi <= rect.right + 1e-6
-            : laneLine >= rect.left - 1e-6 &&
-              laneLine <= rect.right + 1e-6 &&
-              spanLo >= rect.top - 1e-6 &&
-              spanHi <= rect.bottom + 1e-6;
-        // Loitering in a frame the wire is leaving costs; so does straying
-        // out of the frame it lives in. A run only counts as home when it
-        // lies wholly inside — a run half out is already the excursion.
-        const insideExempt = exemptRects.length > 0 && exemptRects.some(touches);
-        const strayedFromHome = homeRects.length > 0 && !homeRects.every(within);
-        const framePenalty =
-          insideExempt || strayedFromHome
-            ? insideExempt
-              ? COST_INSIDE_EXEMPT
-              : COST_OUTSIDE_HOME
-            : 1;
-        const stepCost =
-          distance * factor * framePenalty + (dir === currentDir ? 0 : TURN_COST);
+        const stepCost = runCost + (dir === currentDir ? 0 : TURN_COST);
         const nextState = (nxi * yCount + nyi) * 4 + dir;
         const nextG = currentG + stepCost;
         touch(nextState);

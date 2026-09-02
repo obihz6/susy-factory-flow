@@ -31,7 +31,7 @@ export function parseResourceHandleId(handleId?: string | null): ResourceHandleP
   const [side, kind, encodedResourceId] = handleId.split(":");
   if (
     (side !== "input" && side !== "output") ||
-    (kind !== "item" && kind !== "fluid") ||
+    (kind !== "item" && kind !== "fluid" && kind !== "aspect" && kind !== "power") ||
     !encodedResourceId
   ) {
     return undefined;

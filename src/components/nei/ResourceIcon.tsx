@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Zap } from "lucide-react";
 import type { ResourceAmount, ResourceIconAtlasRef, ResourceKind } from "@/lib/model/types";
 import { NEI_TEXTURES } from "@/lib/nei-renderer/theme/textures";
 import {
@@ -329,6 +330,12 @@ function IconImage({
     return <AtlasIconImage resource={resource} atlas={atlas} iconPixelSize={iconPixelSize} />;
   }
 
+  // POWER has no sprite anywhere: EU is app-synthesized, and its face is a
+  // drawn bolt in the app's power gold.
+  if (resource.kind === "power") {
+    return <PowerIconGlyph iconPixelSize={iconPixelSize} />;
+  }
+
   const iconPath = resource.iconPath ?? getFallbackIconPath(resource);
   if (!iconPath) {
     // The dataset ships no art for fluids at all — not one of the thousands of
@@ -348,6 +355,29 @@ function IconImage({
   }
 
   return <SpriteImage resource={resource} iconPath={iconPath} iconPixelSize={iconPixelSize} />;
+}
+
+/**
+ * EU's face: a chunky pixel-family lightning bolt in the power gold, drawn
+ * rather than fetched - power is synthesized by the app and has no sprite in
+ * any dataset. Crisp edges (no anti-aliased curves) so it sits beside the
+ * item pixel art without looking imported from another game.
+ */
+function PowerIconGlyph({ iconPixelSize }: { iconPixelSize?: number }) {
+  const size = iconPixelSize ?? 32;
+  // The same thunderbolt, same amber, as the POWER button top-left - and a
+  // step smaller than the box, because the bolt reads bigger than a sprite
+  // of equal size (all its ink is in the middle).
+  const bolt = Math.max(10, Math.round(size * 0.7));
+  return (
+    <span
+      aria-hidden
+      className="flex items-center justify-center"
+      style={{ width: size, height: size }}
+    >
+      <Zap width={bolt} height={bolt} className="fill-current text-amber-400" strokeWidth={1.5} />
+    </span>
+  );
 }
 
 /**

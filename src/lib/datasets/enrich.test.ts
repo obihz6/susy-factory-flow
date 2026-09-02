@@ -257,6 +257,7 @@ describe("enrichDatasetRecipes", () => {
       "Mega Apiary",
     ]);
     expect(recipe?.machineConfigControls?.map((control) => control.id)).toEqual([
+      "beeSpeedGene",
       "beeFrameSlot1",
       "beeFrameSlot2",
       "beeFrameSlot3",
@@ -272,6 +273,7 @@ describe("enrichDatasetRecipes", () => {
         ?.find((handler) => handler.id === "alveary")
         ?.machineConfigControls?.map((control) => control.id),
     ).toEqual([
+      "beeSpeedGene",
       "beeAlvearyFrameHousing",
       "beeAlvearyStimulator",
       "beeAlvearySupport",
@@ -281,12 +283,12 @@ describe("enrichDatasetRecipes", () => {
       recipe?.machineHandlers
         ?.find((handler) => handler.id === "industrial-apiary")
         ?.machineConfigControls?.map((control) => control.id),
-    ).toEqual(["beeIndustrialSpeed", "beeIndustrialProduction", "beeEnvironment"]);
+    ).toEqual(["beeSpeedGene", "beeIndustrialSpeed", "beeIndustrialProduction", "beeEnvironment"]);
     expect(
       recipe?.machineHandlers
         ?.find((handler) => handler.id === "mega-apiary")
         ?.machineConfigControls?.map((control) => control.id),
-    ).toEqual(["beeMegaRoyalJelly"]);
+    ).toEqual(["beeSpeedGene", "beeMegaRoyalJelly"]);
   });
 
   it("does not treat ordinary craft names as passive production", () => {

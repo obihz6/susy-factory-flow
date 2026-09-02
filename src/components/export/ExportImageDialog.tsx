@@ -65,6 +65,7 @@ const RATE_UNITS: Array<{ id: RateUnit; label: string }> = [
   { id: "second", label: "/s" },
   { id: "minute", label: "/min" },
   { id: "hour", label: "/hr" },
+  { id: "eu", label: "EU/Item" },
 ];
 
 /** The checkerboard every image editor uses for "nothing here". */

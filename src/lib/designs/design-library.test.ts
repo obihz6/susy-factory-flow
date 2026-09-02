@@ -9,6 +9,7 @@ import {
   pickDesignAfterDelete,
   renameDesign,
   sortDesigns,
+  stampDesignOrder,
   updateDesignProject,
   type DesignSummary,
 } from "./design-library";
@@ -112,6 +113,50 @@ describe("sortDesigns", () => {
     ];
     sortDesigns(designs);
     expect(designs.map((design) => design.id)).toEqual(["b", "a"]);
+  });
+
+  it("puts a hand-picked order ahead of creation order", () => {
+    const designs = [
+      { ...makeSummary("a", "A", "2026-01-01T00:00:00.000Z"), order: 1 },
+      { ...makeSummary("b", "B", "2026-02-01T00:00:00.000Z"), order: 0 },
+    ];
+
+    expect(sortDesigns(designs).map((design) => design.id)).toEqual(["b", "a"]);
+  });
+
+  it("sends a design without an order to the end of a rearranged strip", () => {
+    const designs = [
+      makeSummary("new", "New", "2026-01-01T00:00:00.000Z"),
+      { ...makeSummary("a", "A", "2026-02-01T00:00:00.000Z"), order: 0 },
+      { ...makeSummary("b", "B", "2026-03-01T00:00:00.000Z"), order: 1 },
+    ];
+
+    expect(sortDesigns(designs).map((design) => design.id)).toEqual(["a", "b", "new"]);
+  });
+});
+
+describe("stampDesignOrder", () => {
+  const summaries = [
+    makeSummary("a", "A", "2026-01-01T00:00:00.000Z"),
+    makeSummary("b", "B", "2026-02-01T00:00:00.000Z"),
+    makeSummary("c", "C", "2026-03-01T00:00:00.000Z"),
+  ];
+
+  it("stamps every summary with its place in the given order", () => {
+    const stamped = stampDesignOrder(summaries, ["c", "a", "b"]);
+    expect(stamped.map((design) => design.id)).toEqual(["c", "a", "b"]);
+    expect(stamped.map((design) => design.order)).toEqual([0, 1, 2]);
+  });
+
+  it("appends a summary the order list missed instead of losing it", () => {
+    const stamped = stampDesignOrder(summaries, ["c", "a"]);
+    expect(stamped.map((design) => design.id)).toEqual(["c", "a", "b"]);
+    expect(stamped.map((design) => design.order)).toEqual([0, 1, 2]);
+  });
+
+  it("ignores ids the strip does not know", () => {
+    const stamped = stampDesignOrder(summaries, ["ghost", "b", "a", "c"]);
+    expect(stamped.map((design) => design.id)).toEqual(["b", "a", "c"]);
   });
 });
 

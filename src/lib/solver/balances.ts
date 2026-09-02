@@ -187,6 +187,12 @@ export function calculateEffectiveBalances(
     }
 
     for (const output of Object.values(node.outputs)) {
+      // POWER stays out of the resource books entirely: EU is not an item,
+      // and the INPUTS/OUTPUTS lists are the plan's material boundary. The
+      // MACHINES panel's MADE column is where EU is accounted.
+      if (output.kind === "power") {
+        continue;
+      }
       addBalanceProduction(
         balances,
         {
@@ -255,6 +261,10 @@ function applyBoundaryDrawerBalances(
   const bufferNetById = new Map<string, number>();
 
   for (const edge of project.edges) {
+    // POWER never reaches the resource books; see the node-flow skip above.
+    if (edge.resourceKind === "power") {
+      continue;
+    }
     const transferredPerSecond = edgeResults[edge.id]?.transferredPerSecond ?? 0;
     if (transferredPerSecond <= EPSILON) {
       continue;

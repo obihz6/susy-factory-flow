@@ -15,6 +15,7 @@ import { collectTrashNodeIds } from "@/lib/model/trash";
 import { describeStorage, getStorageRole, getStorageRoles } from "@/lib/model/storage-role";
 import { makeResourceHandleId } from "./resource-handles";
 import { getSetupRules, type ResolvedSetupRules } from "@/lib/model/setup-rules";
+import { energyPerUnit } from "@/lib/model/rate-unit";
 
 type ProjectEdge = FactoryProject["edges"][number];
 
@@ -444,12 +445,26 @@ export function deriveNodeVerdict(
   const rules = getSetupRules(project);
   if (!rules.freeInputs || !rules.freeOutputs) {
     const bare = findBareSlots(project, nodeResult, incoming, outgoing, rules);
-    if (bare || (incoming.length === 0 && outgoing.length === 0)) {
-      // The second clause catches a card with no wires AND nothing to wire -
-      // a recipe the solver has no flows for. There are no bare slots to mark,
-      // but "unwired" is still the only true thing to say about it.
+    // A machine whose recipe has NO slots at all (a solar panel: nothing in,
+    // EU out through no port) has nothing to wire, so "unwired" would nag
+    // about a wire that cannot exist. It runs; the ordinary readings apply.
+    const recipe = project.recipes.find((entry) => entry.id === node.recipeId);
+    const hasSlots = (recipe?.inputs.length ?? 0) > 0 || (recipe?.outputs.length ?? 0) > 0;
+    if (bare || (hasSlots && incoming.length === 0 && outgoing.length === 0)) {
+      // The second clause catches a SLOTTED card with no wires whose slots
+      // the solver has no flows for. There are no bare slots to mark, but
+      // "unwired" is still the only true thing to say about it.
       return { kind: "unwired", pct, bare };
     }
+  }
+
+  // SOLVE MODE: the books are the solved build, not the player's, and every
+  // diagnosis below (spirals, clog locks, deficits, starvation ladders)
+  // describes a FIXED build that is not what is on screen. A solved machine
+  // runs by construction; one at zero is simply not needed by any typed
+  // amount - a quiet reading, never an alarm.
+  if (project.solveMode) {
+    return utilization > VERDICT_EPSILON ? { kind: "balanced", pct } : { kind: "demand-set", pct };
   }
 
   // A dead ring outranks every other reading. Its members ARE starved and
@@ -578,9 +593,13 @@ export function findUnwiredNodeIds(
     }
     const incoming = incomingBy.get(node.id) ?? [];
     const outgoing = outgoingBy.get(node.id) ?? [];
+    // Same rule as the verdict: a machine whose recipe has no slots at all
+    // (a solar panel) has nothing to wire, so the checklist skips it.
+    const recipe = project.recipes.find((entry) => entry.id === node.recipeId);
+    const hasSlots = (recipe?.inputs.length ?? 0) > 0 || (recipe?.outputs.length ?? 0) > 0;
     if (
       findBareSlots(project, nodeResult, incoming, outgoing, rules) ||
-      (incoming.length === 0 && outgoing.length === 0)
+      (hasSlots && incoming.length === 0 && outgoing.length === 0)
     ) {
       ids.push(node.id);
     }
@@ -624,6 +643,11 @@ function findBareSlots(
   const outputs: NonNullable<NodeVerdict["bare"]>["outputs"] = [];
   if (!rules.freeOutputs) {
     for (const [key, flow] of Object.entries(nodeResult.outputs)) {
+      // An unwired EU port is not a bare slot: unbanked power dissipates in
+      // game, so the closed-plan rule waives it (as the solver cores do).
+      if (flow.kind === "power") {
+        continue;
+      }
       if (flow.amountPerSecond > RATE_EPSILON && !wiredOn(outgoing, key)) {
         outputs.push(describe(flow, key));
       }
@@ -770,7 +794,23 @@ function findWorstOutputDeficit(
     if (!edgeResult) {
       continue;
     }
-    const wanted = honestEdgeAskPerSecond(edgeResult, result.nodes[edge.target], edge);
+    // An output-throttled consumer (disposal its binding limit — the same
+    // predicate the CLOGGED branch reads) cannot run faster however much it
+    // is fed, so its leftover ask is not hunger this card can answer. Its
+    // damped ask never collapses to shipped, and counting it crowned feeders
+    // BOTTLENECK at 18% while the real jam sat on the consumer's output side.
+    const targetResult = result.nodes[edge.target];
+    if (targetResult) {
+      const targetDisposal = clamp01(targetResult.disposalUtilization, 1);
+      const targetCapable = clamp01(targetResult.capableUtilization, 1);
+      if (
+        targetDisposal < 1 - VERDICT_EPSILON &&
+        targetDisposal < targetCapable - VERDICT_EPSILON
+      ) {
+        continue;
+      }
+    }
+    const wanted = honestEdgeAskPerSecond(edgeResult, targetResult, edge);
     const missing = Math.max(0, wanted - (edgeResult.transferredPerSecond ?? 0));
     if (missing <= RATE_EPSILON) {
       continue;
@@ -1201,6 +1241,13 @@ export interface RailPort {
   badge?: { kind: "short" | "asked"; perSecond: number };
   /** Render "current / nameplate" instead of the bare current rate. */
   showNameplate: boolean;
+  /**
+   * The EU this card spends per unit crossing this port (its EU/t over the
+   * port's flow, both from the same books): per unit MADE on an output, per
+   * unit EATEN on an input. The "EU" rate unit shows it in place of the
+   * rate; every other unit ignores it.
+   */
+  energyPerUnit?: number;
 }
 
 export function buildRailPorts(
@@ -1444,6 +1491,13 @@ export function buildRailPorts(
         plug,
         badge,
         showNameplate: isInput && isBinding,
+        // A flow-less port (no books yet) has no power to divide; a power
+        // port IS the EU, so it never reads as EU per EU. Inputs carry it
+        // too - the EU spent per unit eaten - drawn in a much quieter gold.
+        energyPerUnit:
+          kind !== "power" && flows && nodeResult
+            ? energyPerUnit(nodeResult.euT, nameplate)
+            : undefined,
       });
     };
 

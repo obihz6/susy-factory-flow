@@ -16,7 +16,13 @@ import { MachineShoppingList } from "./MachineShoppingList";
 import { formatCompact } from "@/lib/model";
 import { makeResourceKey } from "@/lib/model/resources";
 import { getStorageRoles } from "@/lib/model/storage-role";
-import { rateUnitMultiplier, rateUnitSuffix } from "@/lib/model/rate-unit";
+import {
+  energyPerUnit,
+  isEnergyRateUnit,
+  rateMultiplierForKind,
+  rateSuffixForKind,
+} from "@/lib/model/rate-unit";
+import { ENERGY_READING_TEXT, formatEnergyPerUnitParts } from "./flow/flow-explainers";
 import type {
   FactoryProject,
   ResourceAmount,
@@ -72,12 +78,12 @@ const EMPTY_KEYS: ReadonlySet<string> = new Set();
  * The unit is a module singleton and the store re-solves when it changes, so
  * these read the live setting at render with nothing to thread through.
  */
-function formatRateValue(perSecond: number): string {
-  return formatCompact(perSecond * rateUnitMultiplier());
+function formatRateValue(perSecond: number, kind: string = "item"): string {
+  return formatCompact(perSecond * rateMultiplierForKind(kind));
 }
 
 function rateUnitFor(kind: ResourceBalance["kind"]): string {
-  return rateUnitSuffix(kind === "fluid").trim();
+  return rateSuffixForKind(kind).trim();
 }
 
 /** How long a row takes to grow into the list or fold out of it. */
@@ -292,7 +298,8 @@ export function InspectorPanel() {
         <FlowIOPanel />
       </div>
       {/* The build list rides the panel's floor: what to build, at which
-          tier, and what one of each draws. */}
+          tier, what one of each draws - and, when generators stand on the
+          board, what they make and the plan's net power. */}
       <MachineShoppingList />
     </aside>
   );
@@ -692,6 +699,8 @@ function FlowIOPanel() {
         // Charts are a whole-plan record, so a scoped panel has none to show.
         showCharts={workspace.trendsOpen && !selection}
         manageMode={workspace.showHiddenResources}
+        // Read at render: flipping the unit re-solves, which re-renders here.
+        energyEuT={isEnergyRateUnit() ? scope.totalEuT : undefined}
         onToggleSection={toggleSection}
         onHover={setHoveredFlowResourceKey}
         onFocusBoard={focusBoardOnResource}
@@ -813,6 +822,7 @@ function FlowVirtualList({
   favourites,
   showCharts,
   manageMode,
+  energyEuT,
   onToggleSection,
   onHover,
   onFocusBoard,
@@ -826,6 +836,8 @@ function FlowVirtualList({
   favourites: ReadonlySet<string>;
   showCharts: boolean;
   manageMode: boolean;
+  /** The scope's power draw while the EU unit is on; undefined otherwise. */
+  energyEuT?: number;
   onToggleSection: (id: FlowSectionId) => void;
   onHover: (resourceKey?: string) => void;
   onFocusBoard: (resourceKey: string) => void;
@@ -1182,6 +1194,7 @@ function FlowVirtualList({
             isHidden={hidden.has(row.balance.key)}
             isFavourite={favourites.has(row.balance.key)}
             manageMode={manageMode}
+            energyEuT={row.section.id !== "internal" ? energyEuT : undefined}
             onHover={onHover}
             onExpand={setExpanded}
             onFocusBoard={onFocusBoard}
@@ -1242,6 +1255,7 @@ function FlowVirtualList({
             isHidden={hidden.has(expandedRow.balance.key)}
             isFavourite={favourites.has(expandedRow.balance.key)}
             manageMode={manageMode}
+            energyEuT={expandedRow.section.id !== "internal" ? energyEuT : undefined}
             expanded
             onHover={onHover}
             onExpand={setExpanded}
@@ -1330,7 +1344,7 @@ const FlowChartRow = memo(function FlowChartRow({
           series={series}
           height={ROW_HEIGHTS.chart - 10}
           unit={rateUnitFor(balance.kind)}
-          multiplier={rateUnitMultiplier()}
+          multiplier={rateMultiplierForKind(balance.kind)}
         />
       </div>
     </div>
@@ -1381,6 +1395,7 @@ const FlowResourceRow = memo(function FlowResourceRow({
   isHidden,
   isFavourite,
   manageMode,
+  energyEuT,
   expanded = false,
   onHover,
   onExpand,
@@ -1396,6 +1411,12 @@ const FlowResourceRow = memo(function FlowResourceRow({
   isHidden: boolean;
   isFavourite: boolean;
   manageMode: boolean;
+  /**
+   * The scope's whole power draw while the EU unit is on, Inputs and Outputs rows:
+   * the row then reads the EU the entire chain spent per unit of this resource
+   * (made, or brought in) instead of its rate. Undefined otherwise and for Internal.
+   */
+  energyEuT?: number;
   /** The wide copy floating over the board: no truncation, opaque, raised. */
   expanded?: boolean;
   onHover: (resourceKey?: string) => void;
@@ -1406,8 +1427,14 @@ const FlowResourceRow = memo(function FlowResourceRow({
 }) {
   const toneStyle = TONE_STYLES[tone];
   const value = getFlowRowValue(sectionId, balance);
+  // The energy reading: what the whole scope spends per unit of this product.
+  // EU itself never reads as EU per EU.
+  const euEach =
+    energyEuT !== undefined && balance.kind !== "power"
+      ? energyPerUnit(energyEuT, Math.abs(value))
+      : undefined;
   const unit = rateUnitFor(balance.kind);
-  const prefix = sign === -1 ? "−" : sign === 1 ? "+" : "";
+  const prefix = euEach !== undefined ? "" : sign === -1 ? "−" : sign === 1 ? "+" : "";
   const name = balance.displayName ?? balance.resourceId;
 
   return (
@@ -1518,17 +1545,35 @@ const FlowResourceRow = memo(function FlowResourceRow({
         </span>
 
         <span
-          className={["ml-2 flex shrink-0 items-baseline", toneStyle.value].join(" ")}
+          className={[
+            "ml-2 flex shrink-0 items-baseline",
+            euEach !== undefined ? ENERGY_READING_TEXT : toneStyle.value,
+          ].join(" ")}
         >
           <span className="text-base font-bold tabular-nums">
             {prefix}
-            {/* Eases to a new solve on the board's value-motion clock; the
-                sign and tone flip immediately, only the digits travel. */}
-            <MotionNumberText
-              values={[Math.abs(value)]}
-              render={(shown) => formatRateValue(shown[0] ?? Math.abs(value))}
-            />
-            <span className="ml-0.5 text-[11px] font-semibold opacity-70">{unit}</span>
+            {euEach !== undefined ? (
+              // The chain's cost per unit, in the gold every energy reading
+              // wears, the unit a small grey tail. Not eased: it is a
+              // quotient of two moving figures and tweening it read as the
+              // cost drifting on its own.
+              <>
+                {formatEnergyPerUnitParts(euEach, balance.kind).value}
+                <span className="ml-0.5 text-[10px] font-medium text-[#8c7d4c]">
+                  {formatEnergyPerUnitParts(euEach, balance.kind).unit}
+                </span>
+              </>
+            ) : (
+              <>
+                {/* Eases to a new solve on the board's value-motion clock; the
+                    sign and tone flip immediately, only the digits travel. */}
+                <MotionNumberText
+                  values={[Math.abs(value)]}
+                  render={(shown) => formatRateValue(shown[0] ?? Math.abs(value), balance.kind)}
+                />
+                <span className="ml-0.5 text-[11px] font-semibold opacity-70">{unit}</span>
+              </>
+            )}
           </span>
 
           {/*

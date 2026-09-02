@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { datasetCacheHeaders } from "@/lib/server/dataset-cache-headers";
 import { queryDatasetResources } from "@/lib/server/dataset-query";
+import { getResourcePopularity } from "@/lib/server/resource-popularity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,8 @@ export async function GET(
     const kindParam = url.searchParams.get("kind");
     const sortParam = url.searchParams.get("sort");
     const sourceParam = url.searchParams.get("source");
+    const popularity =
+      sortParam === "popular" ? await getResourcePopularity() : undefined;
     const result = await queryDatasetResources(versionId, {
       query: url.searchParams.get("query") ?? "",
       offset: parseOffset(url.searchParams.get("offset")),
@@ -26,13 +29,20 @@ export async function GET(
         sortParam === "mod" ||
         sortParam === "recipes" ||
         sortParam === "made" ||
-        sortParam === "uses"
+        sortParam === "uses" ||
+        sortParam === "popular"
           ? sortParam
           : undefined,
       source: sourceParam === "plants" || sourceParam === "bees" ? sourceParam : undefined,
+      popularity,
     });
     return NextResponse.json(result, {
-      headers: datasetCacheHeaders(request),
+      // Popularity is community data, not dataset bytes: the datasetHash
+      // fingerprint doesn't pin it, so it must not ride the immutable policy.
+      headers:
+        sortParam === "popular"
+          ? { "Cache-Control": "public, max-age=1800" }
+          : datasetCacheHeaders(request),
     });
   } catch (error) {
     return NextResponse.json(
