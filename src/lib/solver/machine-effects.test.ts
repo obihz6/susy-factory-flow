@@ -3,8 +3,14 @@ import type { FactoryNode, Recipe } from "@/lib/model/types";
 import { applyMachineHandlerToRecipe } from "@/lib/model/recipe-rules";
 import {
   cropsNhCropsPerMachine,
+  cropsNhEnvironmentFromTiers,
+  cropsNhEutPerCrop,
+  cropsNhFarmEut,
+  cropsNhHarvesterEnvironment,
+  cropsNhHarvesterMachineCount,
   cropsNhHarvesterFromTiers,
   cropsNhSquarePerTier,
+  cropsNhUnitSlotsUsed,
   cropsNhUpgradeSlots,
   enrichPassiveProductionRecipe,
 } from "@/lib/model/passive-production";
@@ -110,11 +116,13 @@ describe("CropsNH analytic crop math", () => {
   it("matches the in-game growth formula at the reference environment", () => {
     const recipe = argentia();
     // score 55 -> supply 275 vs demand 70; rate = trunc(37 * 305 / 100) = 112;
-    // ceil(1400 / 112) = 13 cycles of 256 ticks -> multiplier 1 at defaults.
+    // ceil(1400 / 112) = 13 cycles of 256 ticks -> duration 1 at defaults.
+    // Output is the default LV Crop Manager's 1 + 0.05 harvest rounds - the
+    // by-hand rung is gone, so a bare card is an LV-managed one.
     expect(getMachineDurationMultiplier(recipe, { machineConfigTiers: {} })).toBe(1);
     expect(
       getMachineOutputMultiplier(recipe, { machineConfigTiers: {} }, recipe.outputs[0]!, "LV"),
-    ).toBe(1);
+    ).toBeCloseTo(1.05, 10);
   });
 
   it("slows down at low growth stats using integer cycle math", () => {
@@ -127,7 +135,9 @@ describe("CropsNH analytic crop math", () => {
   it("scales yield by 1.03^gain drop rounds plus the bonus roll", () => {
     const recipe = argentia();
     const node = { machineConfigTiers: { cropGainStat: "1" } };
-    const expected = (1.03 ** (1 - 31) * (1 + 0.02)) / (1 + 0.32);
+    // The default LV manager's 1.05 harvest rounds ride on top of the crop's
+    // own gain curve.
+    const expected = ((1.03 ** (1 - 31) * (1 + 0.02)) / (1 + 0.32)) * 1.05;
     expect(
       getMachineOutputMultiplier(recipe, node, recipe.outputs[0]!, "LV"),
     ).toBeCloseTo(expected, 10);
@@ -191,6 +201,38 @@ describe("passive production machine effects", () => {
     ).toBeCloseTo(Math.pow(31, 0.52));
   });
 
+  it("applies the speed gene as the getFinalChance speed^0.37 factor", () => {
+    const recipe = enrichPassiveProductionRecipe(testBeeRecipe());
+    const blindingNode: Pick<FactoryNode, "machineConfigTiers" | "coilTier"> = {
+      machineConfigTiers: { beeSpeedGene: "blinding" },
+    };
+    const slowestNode: Pick<FactoryNode, "machineConfigTiers" | "coilTier"> = {
+      machineConfigTiers: { beeSpeedGene: "slowest" },
+    };
+
+    expect(
+      getMachineOutputMultiplier(recipe, blindingNode, recipe.outputs[0]!, "LV"),
+    ).toBeCloseTo(Math.pow(2, 0.37), 5);
+    expect(
+      getMachineOutputMultiplier(recipe, slowestNode, recipe.outputs[0]!, "LV"),
+    ).toBeCloseTo(Math.pow(0.3, 0.37), 5);
+    expect(getMachineDurationMultiplier(recipe, blindingNode)).toBe(1);
+  });
+
+  it("stacks the speed gene with housing production terms", () => {
+    const recipe = enrichPassiveProductionRecipe(testBeeRecipe());
+    const node: Pick<FactoryNode, "machineConfigTiers" | "machineHandlerId"> = {
+      machineConfigTiers: { beeSpeedGene: "blinding" },
+      machineHandlerId: "alveary",
+    };
+    const alvearyRecipe = applyMachineHandlerToRecipe(recipe, node);
+
+    expect(getMachineOutputMultiplier(alvearyRecipe, node, recipe.outputs[0]!, "LV")).toBeCloseTo(
+      Math.pow(2, 0.37) * Math.pow(10, 0.52),
+      5,
+    );
+  });
+
   it("applies bee climate requirements to specialty outputs", () => {
     const recipe = enrichPassiveProductionRecipe({
       ...testBeeRecipe(),
@@ -252,6 +294,7 @@ describe("passive production machine effects", () => {
     const stats = getOverclockedRecipeStats(industrialRecipe, node);
 
     expect(industrialRecipe.machineConfigControls?.map((control) => control.id)).toEqual([
+      "beeSpeedGene",
       "beeIndustrialSpeed",
       "beeIndustrialProduction",
       "beeEnvironment",
@@ -399,10 +442,11 @@ describe("CropsNH harvesters", () => {
   const WORLD_N27 = { cropWater: "100", cropFertilizer: "100", cropSky: "yes", cropBiome: "none" };
   const WORLD_N41 = { ...WORLD_N27, cropBiome: "one-tag" };
 
-  it("puts by hand at the bottom of the manager tiers, not in a tab of its own", () => {
+  it("starts the manager ladder at the LV machine, with no by-hand rung", () => {
     const recipe = oilBerry();
-    // Crop sticks and an Industrial Farm are the two places a crop can live.
-    // Picking by hand is the stick side with no manager on it.
+    // Crop sticks and an Industrial Farm are the two places a crop can live,
+    // and a planned crop board is an automated one: the by-hand rung was
+    // removed, so the ladder opens on the LV machine.
     expect(recipe.machineHandlers?.map((handler) => handler.id)).toEqual([
       "crop-manager",
       "crop-industrial-farm",
@@ -410,20 +454,23 @@ describe("CropsNH harvesters", () => {
     const manager = recipe.machineHandlers![0]!.machineConfigControls!.find(
       (control) => control.id === "cropManagerTier",
     )!;
-    expect(manager.defaultKey).toBe("none");
-    expect(manager.tiers[0]).toMatchObject({ key: "none", label: "By Hand" });
-    expect(manager.tiers[1]).toMatchObject({ key: "1", label: "LV" });
+    expect(manager.defaultKey).toBe("1");
+    expect(manager.tiers[0]).toMatchObject({ key: "1", label: "LV" });
+    expect(manager.tiers.map((tier) => tier.key)).not.toContain("none");
   });
 
-  it("treats no manager as picking by hand, and LV as the first real machine", () => {
+  it("loads a legacy by-hand plan as the LV machine", () => {
     const recipe = oilBerry();
     const output = recipe.outputs[0]!;
     const at = (key: string) => ({ machineConfigTiers: { cropManagerTier: key } });
-    expect(getMachineOutputMultiplier(recipe, at("none"), output, "LV")).toBe(1);
-    expect(cropsNhCropsPerMachine(cropsNhHarvesterFromTiers({ cropManagerTier: "none" }, "crop-manager"))).toBe(1);
-    // LV: 1 + 0.05 * 1 harvest rounds, and its full five-layer reach.
-    expect(getMachineOutputMultiplier(recipe, at("1"), output, "LV")).toBeCloseTo(1.05, 10);
-    expect(cropsNhCropsPerMachine(cropsNhHarvesterFromTiers({ cropManagerTier: "1" }, "crop-manager"))).toBe(605);
+    // LV: 1 + 0.05 * 1 harvest rounds, and its full five-layer reach - for a
+    // stored legacy "none" exactly as for an explicit LV pick.
+    for (const key of ["none", "1"]) {
+      expect(getMachineOutputMultiplier(recipe, at(key), output, "LV")).toBeCloseTo(1.05, 10);
+      expect(
+        cropsNhCropsPerMachine(cropsNhHarvesterFromTiers({ cropManagerTier: key }, "crop-manager")),
+      ).toBe(605);
+    }
   });
 
   it("hides water, fertilizer and sky on an Industrial Farm and shows them elsewhere", () => {
@@ -530,10 +577,205 @@ describe("CropsNH harvesters", () => {
     expect(setup.growthUnits + setup.fertilizerUnits).toBeLessThanOrEqual(1);
   });
 
-  it("keeps by-hand cards exactly where they were before harvesters existed", () => {
+  it("squeezes EVERY unit type through the shared slot budget, not just growth", () => {
+    // MTEIndustrialFarm: one 'U' upgrade position per slice, all five unit
+    // types compete for them. An MV farm (1 slot) asked for a fertilizer
+    // unit, two harvest units and two biome cards keeps only the first in
+    // the degrade order.
+    const setup = cropsNhHarvesterFromTiers(
+      {
+        cropSeedBedTier: "2",
+        cropIfFertilizerUnits: "1",
+        cropIfHarvestUnits: "2",
+        cropIfEnvironmentUnits: "2",
+      },
+      "crop-industrial-farm",
+    );
+    expect(cropsNhUnitSlotsUsed(setup)).toBe(1);
+    expect(setup.fertilizerUnits).toBe(1);
+    expect(setup.harvestUnits).toBe(0);
+    expect(setup.environmentUnits).toBe(0);
+  });
+
+  it("charges the Overclocked unit one slot and drops growth units under it", () => {
+    // ZPM bed: 6 slots. The Overclocked unit is one block whatever its
+    // overclock count, growth units are exclusive with it, and the rest of
+    // the units still fit beside it.
+    const setup = cropsNhHarvesterFromTiers(
+      {
+        cropSeedBedTier: "7",
+        cropIfOverclocks: "4",
+        cropIfGrowthUnits: "5",
+        cropIfFertilizerUnits: "1",
+        cropIfHarvestUnits: "2",
+        cropIfEnvironmentUnits: "2",
+      },
+      "crop-industrial-farm",
+    );
+    expect(setup.overclocks).toBe(4);
+    expect(setup.growthUnits).toBe(0);
+    expect(setup.fertilizerUnits).toBe(1);
+    expect(setup.harvestUnits).toBe(2);
+    expect(setup.environmentUnits).toBe(2);
+    expect(cropsNhUnitSlotsUsed(setup)).toBe(6);
+  });
+
+  it("stacks biome cards with the biome's real tags, never with the humidity substitute", () => {
+    const farmEnv = (biomeKey: string, environmentUnits: number) =>
+      cropsNhHarvesterEnvironment(
+        cropsNhHarvesterFromTiers(
+          {
+            cropSeedBedTier: "3",
+            cropBiome: biomeKey,
+            cropIfEnvironmentUnits: String(environmentUnits),
+          },
+          "crop-industrial-farm",
+        ),
+        cropsNhEnvironmentFromTiers({ cropBiome: biomeKey }),
+      ).biomeBonus;
+    // A card adds one liked TAG (`getNutrientScore` adds module tags to the
+    // biome's set), so one real tag plus one card is the full two-tag 28.
+    expect(farmEnv("one-tag", 1)).toBe(28);
+    // Tags cap at two; a third source of tags buys nothing.
+    expect(farmEnv("two-tags", 2)).toBe(28);
+    // The 80%-humidity substitute simulates ONE tag inside a max(), so one
+    // card in a humid no-tag biome is still 14, and two cards reach 28.
+    expect(farmEnv("humid", 1)).toBe(14);
+    expect(farmEnv("humid", 2)).toBe(28);
+    expect(farmEnv("none", 1)).toBe(14);
+  });
+
+  it("holds the seed bed at the crop's own minimum tier", () => {
+    // `CHECK_RECIPE_RESULT_SEED_BED_TIER_TOO_LOW`: the farm refuses a seed
+    // below its bed tier, so the ladder starts there and a stored lower
+    // tier clamps UP - display and math alike.
+    const setup = cropsNhHarvesterFromTiers(
+      { cropSeedBedTier: "2" },
+      "crop-industrial-farm",
+      5,
+    );
+    expect(setup.tierIndex).toBe(5);
+    const recipe = enrichPassiveProductionRecipe({
+      ...oilBerry(),
+      metadata: {
+        cropsNh: {
+          ...(oilBerry().metadata as { cropsNh: Record<string, unknown> }).cropsNh,
+          minSeedBedTier: 5,
+        },
+      },
+    });
+    const seedBed = applyMachineHandlerToRecipe(recipe, {
+      machineHandlerId: "crop-industrial-farm",
+    }).machineConfigControls!.find((control) => control.id === "cropSeedBedTier")!;
+    expect(seedBed.tiers[0]!.key).toBe("5");
+    expect(seedBed.defaultKey).toBe("5");
+  });
+
+  it("gives a Crop Manager nothing from a machine-only crop", () => {
+    // The guide's rule: Industrial Farm-only crops grow and spread in the
+    // world but drop NOTHING on harvest; only the farm runs them.
+    const base = oilBerry();
+    const recipe = enrichPassiveProductionRecipe({
+      ...base,
+      metadata: {
+        cropsNh: {
+          ...(base.metadata as { cropsNh: Record<string, unknown> }).cropsNh,
+          machineOnly: true,
+        },
+      },
+    });
+    const output = recipe.outputs[0]!;
+    expect(
+      getMachineOutputMultiplier(
+        recipe,
+        { machineHandlerId: "crop-manager", machineConfigTiers: { cropManagerTier: "3" } },
+        output,
+        "LV",
+      ),
+    ).toBe(0);
+    expect(
+      getMachineOutputMultiplier(
+        recipe,
+        {
+          machineHandlerId: "crop-industrial-farm",
+          machineConfigTiers: { cropSeedBedTier: "2" },
+        },
+        output,
+        "LV",
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it("walks the humidity gradient the way getNutrientsPerCycle does", () => {
+    // floor(clamp((rainfall - 0.5) / 0.3, 0, 1) * 14): 60% is +4, 70% +9,
+    // 80% the full simulated tag.
+    const bonus = (key: string) =>
+      cropsNhEnvironmentFromTiers({ cropBiome: key }).biomeBonus;
+    expect(bonus("humid-60")).toBe(4);
+    expect(bonus("humid-70")).toBe(9);
+    expect(bonus("humid")).toBe(14);
+  });
+
+  it("only grants the farm's fertilizer food while fertilizer is fed", () => {
+    const env = (tiers: Record<string, string>) =>
+      cropsNhHarvesterEnvironment(
+        cropsNhHarvesterFromTiers(tiers, "crop-industrial-farm"),
+        cropsNhEnvironmentFromTiers(tiers),
+      ).fertilizer;
+    expect(env({ cropSeedBedTier: "2" })).toBe(200);
+    expect(env({ cropSeedBedTier: "2", cropIfFertilized: "no" })).toBe(0);
+    // A Fertilization Unit runs on enriched fertilizer, so it forces fed.
+    expect(
+      env({ cropSeedBedTier: "3", cropIfFertilized: "no", cropIfFertilizerUnits: "1" }),
+    ).toBe(200);
+  });
+
+  it("bills a partially filled farm as a whole farm", () => {
+    // A farm burns its full getPowerUsage however many seeds it holds: 900
+    // seeds in 729-seat IV farms is TWO farms at full draw, not 1.23 farms.
+    const setup = cropsNhHarvesterFromTiers({ cropSeedBedTier: "5" }, "crop-industrial-farm");
+    expect(cropsNhFarmEut(setup)).toBeCloseTo(7680, 6);
+    expect(cropsNhHarvesterMachineCount(setup, 900)).toBe(2);
+    expect(cropsNhFarmEut(setup) * cropsNhHarvesterMachineCount(setup, 900)).toBeCloseTo(
+      15360,
+      6,
+    );
+  });
+
+  it("bills the farm's units and overclocks the way getPowerUsage does", () => {
+    // IV bed: base VP = 7680 EU/t. Two growth units (+1.25 each), one
+    // fertilizer and one harvest unit (+0.5 each) make x4.5, spread over the
+    // bed's 27x27 seeds.
+    const setup = cropsNhHarvesterFromTiers(
+      {
+        cropSeedBedTier: "5",
+        cropIfGrowthUnits: "2",
+        cropIfFertilizerUnits: "1",
+        cropIfHarvestUnits: "1",
+      },
+      "crop-industrial-farm",
+    );
+    expect(cropsNhEutPerCrop(setup) * cropsNhSquarePerTier(5)).toBeCloseTo(7680 * 4.5, 6);
+    // The OverclockCalculator QUADRUPLES consumption per overclock while
+    // production only doubles; the Overclocked unit itself adds no percentage.
+    const overclocked = cropsNhHarvesterFromTiers(
+      { cropSeedBedTier: "7", cropIfOverclocks: "2" },
+      "crop-industrial-farm",
+    );
+    expect(cropsNhEutPerCrop(overclocked) * cropsNhSquarePerTier(7)).toBeCloseTo(
+      Math.floor((8 * 4 ** 7 * 30) / 32) * 16,
+      6,
+    );
+  });
+
+  it("gives a bare card the LV manager's numbers, world pace included", () => {
     const bare = { machineConfigTiers: {} } as FactoryNode;
     const recipe = oilBerry();
+    // A manager never speeds the crop up; it only rolls more harvests.
     expect(getMachineDurationMultiplier(recipe, bare)).toBe(1);
-    expect(getMachineOutputMultiplier(recipe, bare, recipe.outputs[0]!, "LV")).toBe(1);
+    expect(getMachineOutputMultiplier(recipe, bare, recipe.outputs[0]!, "LV")).toBeCloseTo(
+      1.05,
+      10,
+    );
   });
 });

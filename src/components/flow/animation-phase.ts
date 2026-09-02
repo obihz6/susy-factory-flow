@@ -22,9 +22,10 @@ import { useEffect, type RefObject } from "react";
  * `--board-pulse` as its duration. A pulse missing from this list still runs;
  * it just runs alone, which is the exact bug this exists to prevent.
  *
- * One-shot flashes are deliberately absent: `board-card-placed` fires four
- * times and stops, and lining it up with the board's clock would only delay
- * the answer to "where did my card land".
+ * One-shot flashes are deliberately absent: they fire and stop, and lining
+ * one up with the board's clock would only delay its answer. (The white
+ * `board-card-placed` beacon that used to be the example here was removed
+ * outright in 2026-08.)
  */
 export const BOARD_PULSE_ANIMATIONS = [
   // Hovered/selected resource: the glow wash on cards, and the shape-clipped

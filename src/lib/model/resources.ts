@@ -6,7 +6,7 @@ import type {
   ResourceKey,
   ResourceKind,
 } from "./types";
-import { rateUnitMultiplier, rateUnitSuffix } from "./rate-unit";
+import { rateMultiplierForKind, rateSuffixForKind } from "./rate-unit";
 import { getCropsNhStats } from "./passive-production";
 
 export function makeResourceKey(kind: ResourceKind, resourceId: string): ResourceKey {
@@ -182,8 +182,8 @@ export function formatResourceRate(flow: ResourceFlow | undefined): string {
   }
 
   return `${resourceLabel({ id: flow.resourceId, displayName: flow.displayName })} ${formatRate(
-    flow.amountPerSecond * rateUnitMultiplier(),
-  )}${rateUnitSuffix(flow.kind === "fluid").trimStart()}`;
+    flow.amountPerSecond * rateMultiplierForKind(flow.kind),
+  )}${rateSuffixForKind(flow.kind).trimStart()}`;
 }
 
 export function primaryOutput(recipe: Recipe): RecipeOutput | undefined {

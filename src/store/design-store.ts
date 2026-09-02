@@ -9,6 +9,8 @@ import {
   normalizeDesignName,
   pickDesignAfterDelete,
   sortDesigns,
+  stampDesignOrder,
+  toDesignSummary,
   updateDesignProject,
   type DesignRecord,
   type DesignSummary,
@@ -60,6 +62,11 @@ interface DesignStore {
    * when the active design is among the closed.
    */
   removeDesigns: (ids: string[], keepActiveId?: string) => Promise<void>;
+  /**
+   * Rearranges the strip to `orderedIds`, stamping each summary's `order`.
+   * State updates first so the drop lands instantly; the writes follow.
+   */
+  reorderDesigns: (orderedIds: string[]) => Promise<void>;
   /**
    * Saves `project` into `designId`.
    *
@@ -156,6 +163,8 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
 
       if (summaries.length === 0) {
         summaries = [await seedFirstDesign()];
+      } else {
+        summaries = await backfillSummaryIcons(summaries);
       }
 
       const remembered = readActiveDesignId();
@@ -348,6 +357,14 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
     }
   },
 
+  reorderDesigns: async (orderedIds) => {
+    const stamped = stampDesignOrder(get().designs, orderedIds);
+    set({ designs: stamped });
+    for (const summary of stamped) {
+      await writeDesignSummary(summary);
+    }
+  },
+
   saveActiveProject: async (designId, project) => {
     const { activeDesignId, designs } = get();
     if (!designId || designId !== activeDesignId) {
@@ -372,6 +389,40 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
     }
   },
 }));
+
+/**
+ * Summaries written before they carried an icon never get one until their plan
+ * happens to be saved again, so tabs would sit blank for exactly the designs
+ * that have been around longest. Once per browser, every plan is read and its
+ * summary restamped; new writes keep the copy fresh from then on.
+ */
+const ICON_BACKFILL_KEY = "gtnh-factory-flow.design-summary-icons.v1";
+
+async function backfillSummaryIcons(summaries: DesignSummary[]): Promise<DesignSummary[]> {
+  try {
+    if (window.localStorage.getItem(ICON_BACKFILL_KEY)) {
+      return summaries;
+    }
+  } catch {
+    // No localStorage means no way to remember the pass ran; skip it rather
+    // than reread every plan on every load.
+    return summaries;
+  }
+
+  for (const summary of summaries) {
+    const record = await readDesign(summary.id);
+    if (record?.project.icon) {
+      await writeDesignSummary(toDesignSummary(record));
+    }
+  }
+
+  try {
+    window.localStorage.setItem(ICON_BACKFILL_KEY, "done");
+  } catch {
+    // A failed flag just means the pass runs again next load.
+  }
+  return sortDesigns(await listDesignSummaries());
+}
 
 /**
  * First run: adopt the plan the app used to keep under a single localStorage

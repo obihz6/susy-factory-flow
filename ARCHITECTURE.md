@@ -186,6 +186,33 @@ each solve is timed through to paint — one over `LIVE_DRAG_BUDGET_MS`
 freezes later drags until the board shrinks well below the size that
 lagged. Frozen means what it always did: cached routes until the drop.
 
+The solve itself has three things keeping it cheap on a big board, all in
+`grid-edge-router.ts`: lane occupancy is keyed by packed integers, not
+strings (a string per cell per ask was most of the cost of a 150-wire
+board); every RUN between two neighbouring window vertices is priced once
+per attempt (blocked, or distance x lane factor x frame penalty) and every
+leg, direction and revisit reads it back; and the A* pop cap scales with
+the window (`MIN_ASTAR_POPS` or two pops per state, whichever is larger).
+The old flat 40k cap was smaller than a busy board's window, so long wires
+between boards failed on size alone, grew the window, failed again, and
+were drawn as L's through cards after a quarter second each. A wire whose
+end is walled in (a drawer packed against its neighbours) is found by a
+cost-free flood before the A* spends anything, and `SEALED` skips the
+window growth, because growth adds lines only outside the current window.
+
+Past `ASYNC_ROUTE_EDGE_LIMIT` wires the solve leaves the main thread
+(`grid-route-solve.ts`, `grid-route.worker.ts`), the same shape as the LP
+worker in `solve-books.ts`: the render keeps serving the routes already
+installed (`gridSolveSignature` does not move until the answer lands),
+`installSolvedRoutes` parks the result and re-issues the edges, and the
+route morph glides them over. One job in flight, only the newest waiting
+job kept, and a sequence number per request so a late answer never lands
+over a fresher one. Endpoints ride as one Float64Array because a request
+carries a card's whole perimeter as candidate docks. Small boards still
+solve synchronously in render so their wires never lag a frame behind the
+held card; the routing invariant is untouched because the worker runs the
+same pure function on the same flow-space inputs.
+
 ### Rules of thumb for new board code
 
 - Never call `querySelectorAll`/`getBoundingClientRect` per edge, per node, or

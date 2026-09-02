@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   APP_FONTS,
   getStoredAppFont,
@@ -10,6 +10,13 @@ import {
 } from "@/lib/app-font";
 import { isUpdatePopupEnabled, setUpdatePopupEnabled } from "@/lib/whats-new";
 import { areChipClicksInverted, setChipClicksInverted } from "@/lib/chip-clicks";
+import {
+  areBoardSoundsEnabled,
+  getBoardSoundVolume,
+  playBoardSound,
+  setBoardSoundsEnabled,
+  setBoardSoundVolume,
+} from "@/lib/board-sounds";
 
 /**
  * The planner's settings, in one small sheet.
@@ -26,6 +33,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [font, setFont] = useState<AppFontId>(() => getStoredAppFont());
   const [updatePopup, setUpdatePopup] = useState<boolean>(() => isUpdatePopupEnabled());
   const [invertedClicks, setInvertedClicks] = useState<boolean>(() => areChipClicksInverted());
+  const [sounds, setSounds] = useState<boolean>(() => areBoardSoundsEnabled());
+  const [volume, setVolume] = useState<number>(() => getBoardSoundVolume());
+  // The preview thump fires when the drag SETTLES, not per input event: a
+  // slider emits dozens of changes a second, and previewing each one had
+  // the notes stealing each other into fragments while the repeat duck
+  // faded the pile down.
+  const previewTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(previewTimerRef.current), []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -149,6 +164,78 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 ].join(" ")}
               />
             </button>
+          </section>
+
+          <section className="mt-4">
+            <h3 className="px-1 pb-1.5 text-[11px] font-bold uppercase tracking-widest text-fg-muted">
+              Sound
+            </h3>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !sounds;
+                setBoardSoundsEnabled(next);
+                setSounds(next);
+              }}
+              aria-pressed={sounds}
+              className={[
+                "flex w-full items-center gap-3 rounded border px-3 py-2.5 text-left",
+                sounds
+                  ? "border-cyan-600 bg-cyan-500/10"
+                  : "border-line hover:border-line-strong hover:bg-surface-raised",
+              ].join(" ")}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-base leading-tight text-fg">Interface sounds</span>
+                <span className="mt-0.5 block text-xs text-fg-muted">
+                  Quiet notes when you place cards, wire them, change their settings, or a wire
+                  is refused. Off, the planner is silent.
+                </span>
+              </span>
+              <Check
+                aria-hidden
+                className={[
+                  "h-4 w-4 shrink-0",
+                  sounds ? "text-cyan-400" : "invisible",
+                ].join(" ")}
+              />
+            </button>
+
+            <div
+              className={[
+                "mt-1 flex items-center gap-3 rounded border border-line px-3 py-2.5",
+                sounds ? "" : "opacity-40",
+              ].join(" ")}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-base leading-tight text-fg">Volume</span>
+                <span className="mt-0.5 block text-xs text-fg-muted">
+                  Drag to hear the level.
+                </span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(volume * 100)}
+                disabled={!sounds}
+                aria-label="Sound volume"
+                onChange={(event) => {
+                  const next = Number(event.target.value) / 100;
+                  setBoardSoundVolume(next);
+                  setVolume(next);
+                  window.clearTimeout(previewTimerRef.current);
+                  previewTimerRef.current = window.setTimeout(() => {
+                    playBoardSound("place");
+                  }, 180);
+                }}
+                className="w-36 accent-cyan-500"
+              />
+              <span className="w-10 shrink-0 text-right text-sm tabular-nums text-fg-muted">
+                {Math.round(volume * 100)}%
+              </span>
+            </div>
           </section>
 
           <section className="mt-4">

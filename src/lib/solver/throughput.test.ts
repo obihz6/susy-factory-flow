@@ -1481,9 +1481,10 @@ describe("calculateThroughput", () => {
 
     const result = solveClosed(project);
 
-    // 0.59 per 128s harvest, NOT 0.59 x 0.25.
+    // 0.59 per 128s harvest, NOT 0.59 x 0.25. The default LV Crop Manager
+    // (the by-hand rung is gone) rolls its 1 + 0.05 harvest rounds on top.
     expect(result.nodes["crop-node"].outputs["item:blaze_rod"].amountPerSecond).toBeCloseTo(
-      0.59 * (20 / 2560),
+      0.59 * (20 / 2560) * 1.05,
       10,
     );
   });

@@ -15,13 +15,32 @@
  * `factory-flow-board--wiring` class instead, so CSS does that half for free.
  */
 let wiringConnection = false;
+const wiringListeners = new Set<(active: boolean) => void>();
 
 export function isWiringConnection(): boolean {
   return wiringConnection;
 }
 
 export function setWiringConnection(active: boolean): void {
+  if (wiringConnection === active) {
+    return;
+  }
   wiringConnection = active;
+  for (const listener of wiringListeners) {
+    listener(active);
+  }
+}
+
+/**
+ * For the ONE component that must mount per wire gesture (the void-drop
+ * ghost). Everything else keeps reading the flag imperatively - a value the
+ * whole board subscribed to would rebuild it twice per gesture.
+ */
+export function onWiringConnectionChange(listener: (active: boolean) => void): () => void {
+  wiringListeners.add(listener);
+  return () => {
+    wiringListeners.delete(listener);
+  };
 }
 
 /**

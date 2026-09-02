@@ -128,6 +128,13 @@ export interface MachineContext {
    * Blast Smelter). Optional because test harnesses predate it.
    */
   recipeVoltageTier?: number;
+  /**
+   * The recipe's special value, for the machines whose coefficients read it as
+   * something other than heat (the Naquadah Fuel Refinery's minimum field
+   * restriction coil tier). Optional because test harnesses predate it, so a
+   * formula must state its own default.
+   */
+  recipeSpecialValue?: number;
 }
 
 type Coefficient = number | ((ctx: MachineContext) => number);
@@ -449,6 +456,46 @@ const HEATING_COIL_CONTROL: MachineConfigControl = {
       amount: 1,
       displayName: `${label} Coil Block`,
       tooltip: ["Heating coil tier", `Heat capacity: ${heat} K`],
+      consumed: false,
+    },
+  })),
+};
+
+/**
+ * The Naquadah Fuel Refinery's four field restriction coils
+ * (MTENaquadahFuelRefinery / GoodGenerator's FRF_Coil_1..4). Each recipe's
+ * special value is its minimum coil tier (1-based), which
+ * `minimumFromSpecialValue` turns into the control's per-recipe floor -
+ * below it the machine refuses the recipe outright in game.
+ */
+const FIELD_COIL = "fieldRestrictionCoil";
+const FIELD_COIL_TIERS: Array<[key: string, label: string, block: string]> = [
+  ["t1", "Field Restriction Coil", "goodgenerator:frf_coil_1"],
+  ["t2", "Advanced Field Restriction Coil", "goodgenerator:frf_coil_2"],
+  ["t3", "Ultimate Field Restriction Coil", "goodgenerator:frf_coil_3"],
+  ["t4", "Temporal Field Restriction Coil", "goodgenerator:frf_coil_4"],
+];
+const FIELD_COIL_CONTROL: MachineConfigControl = {
+  id: FIELD_COIL,
+  // "Field Coil", not the full block name: the config panel's knob labels sit
+  // in a half-card column and three words wrap.
+  label: "Field Coil",
+  minimumKey: "t1",
+  defaultKey: "t1",
+  minimumFromSpecialValue: true,
+  tiers: FIELD_COIL_TIERS.map(([key, label, block], index) => ({
+    key,
+    label: `T${index + 1} ${label}`,
+    resource: {
+      kind: "item" as const,
+      id: block,
+      amount: 1,
+      displayName: label,
+      tooltip: [
+        `Field restriction coil tier ${index + 1}`,
+        `Parallels: ${4 * (index + 1)}`,
+        "One perfect overclock per tier above the recipe's minimum",
+      ],
       consumed: false,
     },
   })),
@@ -899,6 +946,22 @@ const MACHINES: Record<string, MachineBehaviour> = {
     controls: [NEUTRON_PIPE_CONTROL],
     note: "Power use is not counted.",
   },
+  /**
+   * MTENaquadahFuelRefinery: 4 parallels per field restriction coil tier
+   * (getMaxParallelRecipes = 4 x tier), and each coil tier above the recipe's
+   * own minimum - exported as the recipe's special value, 1 through 4 - is one
+   * PERFECT overclock (setMaxOverclocks(tier - mSpecialValue) with
+   * enablePerfectOverclock). Extra voltage past those steps buys nothing. The
+   * scraper misread the coils as heating coils, hence hidesControls.
+   */
+  "Naquadah Fuel Refinery": {
+    overclock: (c) =>
+      OVERCLOCK.perfect(Math.max(0, c.tier(FIELD_COIL) + 1 - (c.recipeSpecialValue ?? 1))),
+    parallels: (c) => 4 * (c.tier(FIELD_COIL) + 1),
+    unlimitedTierSkip: true,
+    controls: [FIELD_COIL_CONTROL],
+    hidesControls: [COIL],
+  },
   "Endothermic Fridge": {
     overclock: (c) => OVERCLOCK.perfectThenNormal(c.tier("fridgeCoolant")),
     // Its speed boost ramps from 1 to 1.5 while it runs (cryotheum only
@@ -1190,6 +1253,26 @@ export function resolveOverclockSpec(
 /** Every machine name the table answers to, for coverage reporting in tests. */
 export function machineTableNames(): string[] {
   return Object.keys(MACHINES);
+}
+
+/**
+ * Every real dataset resource a table-declared control puts on a card (coil
+ * blocks, casings). The catalog ships these in its machine-config resource
+ * index so the client can swap the labelled-slot fallback for the block's own
+ * icon; `factoryflow:` ids are synthetic and have no texture to find.
+ */
+export function machineTableControlResourceIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const behaviour of Object.values(MACHINES)) {
+    for (const control of behaviour.controls ?? []) {
+      for (const tier of control.tiers) {
+        if (!tier.resource.id.startsWith("factoryflow:")) {
+          ids.add(tier.resource.id);
+        }
+      }
+    }
+  }
+  return ids;
 }
 
 export function normalizeMachineName(name: string): string {

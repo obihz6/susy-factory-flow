@@ -79,6 +79,18 @@ export function getOverclockedRecipeStats(
   > &
     Partial<Pick<FactoryNode, "energyHatches" | "energyHatchType">>,
 ): OverclockedRecipeStats {
+  // A power card's rates are the model's own (src/lib/power): no handler
+  // stats, no overclock ladder, no steam rebilling - the recipe as written.
+  if ((recipe as Recipe).power) {
+    return {
+      tier: getRecipeMinimumVoltageTier(recipe),
+      minimumTier: getRecipeMinimumVoltageTier(recipe),
+      overclockSteps: 0,
+      ...PLAIN_OVERCLOCK_STEPS,
+      durationTicks: recipe.durationTicks,
+      eut: recipe.eut,
+    };
+  }
   const effectiveRecipe = recipe.machineType
     ? applyMachineHandlerToRecipe(recipe as Recipe, node)
     : recipe;

@@ -207,14 +207,18 @@ public final class GtnhCalcOracleExporter {
 
                 int index = 0;
                 for (GTRecipe recipe : rawRecipes) {
-                    if (!recipe.mEnabled || recipe.mDuration <= 0) {
+                    // Zero-duration recipes are real: BartWorks autogenerates werkstoff
+                    // solidifier/extraction recipes with duration = mass, and a werkstoff
+                    // with no declared mass yields 0 ticks (e.g. Ruthenium Tetroxide).
+                    // The game floors processing at one tick, so export them clamped.
+                    if (!recipe.mEnabled || recipe.mDuration < 0) {
                         continue;
                     }
 
                     Map<String, Object> exportedRecipe = map();
                     exportedRecipe.put("id", sha1(map.unlocalizedName + ":" + index + ":" + recipe.toString()).substring(0, 16));
                     exportedRecipe.put("enabled", Boolean.TRUE);
-                    exportedRecipe.put("durationTicks", Integer.valueOf(recipe.mDuration));
+                    exportedRecipe.put("durationTicks", Integer.valueOf(Math.max(1, recipe.mDuration)));
                     exportedRecipe.put("eut", Long.valueOf(recipe.mEUt));
                     exportedRecipe.put("specialValue", Integer.valueOf(recipe.mSpecialValue));
                     List<Integer> itemInputSlots = new ArrayList<Integer>();

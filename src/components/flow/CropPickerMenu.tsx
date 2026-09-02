@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { LoaderCircle } from "lucide-react";
 import type { DatasetVersion, RecipeSummary } from "@/lib/datasets/types";
 import { DEFAULT_DATASET_MANIFEST_URL } from "@/lib/datasets/remote";
 import { getRecipeDatasetRecipe, listRecipeDatasetCrops } from "@/lib/datasets/browser-loader";
 import { ResourceIcon } from "@/components/nei/ResourceIcon";
+import { MinecraftTooltip } from "@/components/nei/MinecraftTooltip";
 import { useFactoryStore } from "@/store/factory-store";
 
 // One crop catalog fetch per dataset version, shared by every picker.
@@ -31,6 +33,14 @@ export function CropPickerMenu({
   const datasetManifest = useFactoryStore((state) => state.datasetManifest);
   const selectedDatasetVersionId = useFactoryStore((state) => state.selectedDatasetVersionId);
   const setNodeRecipe = useFactoryStore((state) => state.setNodeRecipe);
+  // On the Crop Manager, a machine-only crop harvests to NOTHING; the tile
+  // grays out so the dead pick is visible before it is made (the Industrial
+  // Farm tab shows them in full color).
+  const onIndustrialFarm = useFactoryStore(
+    (state) =>
+      state.project.nodes.find((entry) => entry.id === nodeId)?.machineHandlerId ===
+      "crop-industrial-farm",
+  );
   const version: DatasetVersion | undefined = datasetManifest?.versions.find(
     (entry) => entry.id === selectedDatasetVersionId,
   );
@@ -75,19 +85,57 @@ export function CropPickerMenu({
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) {
-      return crops;
-    }
-    return crops.filter((crop) => {
-      const haystack = [
-        cropDisplayName(crop.name),
-        ...crop.outputs.map((output) => output.displayName ?? output.id),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
+    const matches = needle
+      ? crops.filter((crop) => {
+          const haystack = [
+            cropDisplayName(crop.name),
+            ...crop.outputs.map((output) => output.displayName ?? output.id),
+          ]
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(needle);
+        })
+      : crops;
+    // Tier order, name inside a tier: the list reads as a progression.
+    return [...matches].sort((a, b) => {
+      const tierOf = (crop: RecipeSummary) =>
+        (crop.metadata as { cropsNh?: { tier?: number } } | undefined)?.cropsNh?.tier ?? 99;
+      return (
+        tierOf(a) - tierOf(b) || cropDisplayName(a.name).localeCompare(cropDisplayName(b.name))
+      );
     });
   }, [crops, search]);
+
+  // Click-away closes the picker: capture phase, because the board's own
+  // handlers stop pointer events long before they would bubble up here.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (root && event.target instanceof Node && !root.contains(event.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [onClose]);
+
+  // The menu PORTALS to the body: inside the card it lived in the node
+  // layer's stacking context, under the marching-dash canvas and every
+  // higher card. Measured once from the name bar on open; a board pan
+  // closes it anyway through the click-away.
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const [anchorAt, setAnchorAt] = useState<{ left: number; top: number }>();
+  useEffect(() => {
+    const parent = anchorRef.current?.parentElement;
+    if (parent) {
+      const rect = parent.getBoundingClientRect();
+      setAnchorAt({
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 372)),
+        top: Math.min(rect.bottom + 2, window.innerHeight - 120),
+      });
+    }
+  }, []);
 
   const handlePick = async (summary: RecipeSummary) => {
     if (!version) {
@@ -102,12 +150,14 @@ export function CropPickerMenu({
     }
   };
 
-  return (
+  const menu = anchorAt ? (
     <div
+      ref={rootRef}
+      style={{ position: "fixed", left: anchorAt.left, top: anchorAt.top }}
       // "nowheel" stops React Flow from zooming the canvas when scrolling the
       // list: its native wheel handler runs before React's synthetic one, so
       // stopPropagation alone is not enough.
-      className="nodrag nowheel absolute left-0 top-7 z-[140] w-[360px] border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1.5 shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-33),4px_4px_0_rgba(0,0,0,0.35)]"
+      className="nodrag nowheel z-[300] w-[360px] border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1.5 shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-33),4px_4px_0_rgba(0,0,0,0.35)]"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
@@ -133,68 +183,115 @@ export function CropPickerMenu({
       ) : error ? (
         <div className="px-2 py-3 text-[12px] font-bold text-[var(--mc-bad)]">{error}</div>
       ) : (
-        <div className="max-h-[380px] overflow-y-auto">
-          {filtered.map((crop) => {
-            const tier = (crop.metadata as { cropsNh?: { tier?: number } } | undefined)?.cropsNh
-              ?.tier;
-            const dropsLine = crop.outputs
-              .map((output) => {
-                const name = output.displayName ?? output.id;
-                return output.chance !== undefined && output.chance < 1
-                  ? `${name} ${Math.round(output.chance * 1000) / 10}%`
-                  : name;
-              })
-              .join(", ");
-            return (
-              <button
-                key={crop.id}
-                type="button"
-                onClick={() => void handlePick(crop)}
-                className="flex w-full items-center gap-2.5 border-2 border-transparent px-1.5 py-1.5 text-left text-[var(--mc-ink)] hover:border-[var(--mc-47)] hover:bg-[var(--mc-100)]"
-              >
-                <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden border border-[var(--mc-33)] bg-[var(--mc-55)] shadow-[inset_1px_1px_0_var(--mc-85),inset_-1px_-1px_0_var(--mc-25)]">
-                  {crop.outputs[0] ? (
-                    <ResourceIcon
-                      // Hide the chance badge here: chances are spelled out in
-                      // the drops line below instead.
-                      resource={{ ...crop.outputs[0], chance: undefined }}
-                      bare
-                      tooltip={false}
-                      showAmount={false}
-                      showConsumedState={false}
-                      // The default md size (h-12 w-12) must exactly match the
-                      // cell above: the sprite draws at 200% of the box and the
-                      // box crops the rendered padding away, so a size mismatch
-                      // shows up as an off-center, shrunken icon. The extra
-                      // scale zooms the art without growing the cell; beyond
-                      // ~1.2 isometric block sprites start losing their
-                      // corners to the cell edges, which is acceptable here.
-                      size="md"
-                      className="scale-[1.4]"
-                    />
+        <div className="grid max-h-[420px] grid-cols-5 overflow-y-auto">
+          {filtered.map((crop, index) => {
+            const tierOf = (entry: RecipeSummary) =>
+              (entry.metadata as { cropsNh?: { tier?: number } } | undefined)?.cropsNh?.tier;
+            const tier = tierOf(crop);
+            const machineOnly =
+              (crop.metadata as { cropsNh?: { machineOnly?: boolean } } | undefined)?.cropsNh
+                ?.machineOnly === true;
+            const name = cropDisplayName(crop.name);
+            // The hover is the crop's harvest, drawn: each drop with its
+            // icon, name and roll chance, in the tiles' own style.
+            const hover = (
+              <div className="min-w-[170px]">
+                <p className="text-[14px] font-bold leading-4 text-white">
+                  {name}
+                  {tier ? (
+                    <span className="text-[11px] font-normal text-slate-400"> · Tier {tier}</span>
                   ) : null}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-bold leading-4">
-                    {cropDisplayName(crop.name)}
+                </p>
+                <div className="mt-1.5 space-y-1">
+                  {crop.outputs.map((output) => (
+                    <div key={output.id} className="flex items-center gap-1.5">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden [filter:drop-shadow(1px_1px_1px_rgba(0,0,0,0.55))]">
+                        <ResourceIcon
+                          resource={{ ...output, chance: undefined }}
+                          bare
+                          tooltip={false}
+                          showAmount={false}
+                          showConsumedState={false}
+                          size="sm"
+                        />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] leading-4 text-slate-100">
+                        {output.displayName ?? output.id}
+                      </span>
+                      {output.chance !== undefined && output.chance < 1 ? (
+                        <span className="shrink-0 text-[12px] tabular-nums text-slate-400">
+                          {Math.round(output.chance * 1000) / 10}%
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+                {machineOnly ? (
+                  <p className="mt-1.5 text-[12px] leading-4 text-slate-400">
+                    Only works in an Industrial Farm.
+                  </p>
+                ) : null}
+              </div>
+            );
+            // The list is tier-sorted, so a tier's first crop opens its
+            // section with a full-width TIER N rule.
+            const previous = index > 0 ? filtered[index - 1] : undefined;
+            const opensTier = tier !== undefined && (!previous || tierOf(previous) !== tier);
+            return (
+              <Fragment key={crop.id}>
+                {opensTier ? (
+                  <div className="col-span-5 flex items-center gap-1.5 px-0.5 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-[var(--mc-ink-muted)]">
+                    <span className="shrink-0">Tier {tier}</span>
+                    <span className="h-px min-w-0 flex-1 bg-[var(--mc-56)]" />
+                  </div>
+                ) : null}
+                <MinecraftTooltip content={hover}>
+                <button
+                  type="button"
+                  onClick={() => void handlePick(crop)}
+                  // The left item shelf's language: a bare icon over its
+                  // name, no box of its own, a quiet hover wash.
+                  className={[
+                    "flex flex-col items-center gap-0.5 p-0.5 pb-1 text-[var(--mc-ink)] hover:bg-[var(--mc-85)]",
+                    machineOnly && !onIndustrialFarm ? "opacity-35 saturate-50" : "",
+                  ].join(" ")}
+                >
+                  <span className="grid h-12 w-12 place-items-center overflow-hidden [filter:drop-shadow(1px_2px_2px_rgba(0,0,0,0.55))]">
+                    {crop.outputs[0] ? (
+                      <ResourceIcon
+                        // Chance badges are spelled out in the hover instead.
+                        resource={{ ...crop.outputs[0], chance: undefined }}
+                        bare
+                        tooltip={false}
+                        showAmount={false}
+                        showConsumedState={false}
+                        size="md"
+                        className="scale-[1.4]"
+                      />
+                    ) : null}
                   </span>
-                  <span className="block truncate text-[10px] leading-4 text-[var(--mc-ink-muted)]">
-                    {dropsLine}
+                  <span className="w-full overflow-hidden text-center text-[8px] font-bold leading-[9px]">
+                    {name}
                   </span>
-                </span>
-                <span className="shrink-0 text-[10px] font-bold uppercase text-[var(--mc-ink-muted)]">
-                  {tier ? `T${tier}` : ""}
-                </span>
-              </button>
+                </button>
+                </MinecraftTooltip>
+              </Fragment>
             );
           })}
           {filtered.length === 0 ? (
-            <div className="px-2 py-3 text-[12px] font-bold text-[var(--mc-ink-muted)]">
+            <div className="col-span-5 px-2 py-3 text-[12px] font-bold text-[var(--mc-ink-muted)]">
               No crops match.
             </div>
           ) : null}
         </div>
       )}
     </div>
+  ) : null;
+
+  return (
+    <>
+      <span ref={anchorRef} className="hidden" />
+      {menu ? createPortal(menu, document.body) : null}
+    </>
   );
 }

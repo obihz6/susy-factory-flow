@@ -31,14 +31,23 @@ export const CROP_IF_FERTILIZER_UNIT_CONTROL_ID = "cropIfFertilizerUnits";
 export const CROP_IF_HARVEST_UNIT_CONTROL_ID = "cropIfHarvestUnits";
 export const CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID = "cropIfEnvironmentUnits";
 export const CROP_IF_OVERCLOCK_CONTROL_ID = "cropIfOverclocks";
+/**
+ * Whether the farm is fed fertilizer fluid. The +10 fertilizer food is an
+ * OPTIONAL input (`SIMULATED_FERTILIZER_STORAGE_WHEN_FERTILIZER_NOT_PROVIDED
+ * = 0`); a Fertilization Unit forces enriched fertilizer and therefore fed.
+ */
+export const CROP_IF_FERTILIZED_CONTROL_ID = "cropIfFertilized";
 
 export const CROP_HARVESTER_MANAGER_ID = "crop-manager";
 export const CROP_HARVESTER_INDUSTRIAL_FARM_ID = "crop-industrial-farm";
-/** Manager tier key for sticks nobody automates: you walk over and pick them. */
+/**
+ * LEGACY manager tier key: plans saved while a by-hand rung existed carry
+ * "none", which now loads as the LV machine. The option is no longer offered.
+ */
 export const CROP_NO_MANAGER_KEY = "none";
-const NO_MANAGER_TIER_INDEX = -1;
 
 export const BEE_FRAME_SLOT_CONTROL_PREFIX = "beeFrameSlot";
+export const BEE_SPEED_GENE_CONTROL_ID = "beeSpeedGene";
 export const BEE_ENVIRONMENT_CONTROL_ID = "beeEnvironment";
 export const BEE_MAGIC_AURA_CONTROL_ID = "beeMagicAura";
 export const BEE_ALVEARY_FRAME_HOUSING_CONTROL_ID = "beeAlvearyFrameHousing";
@@ -77,9 +86,11 @@ const CROP_CONTROL_IDS = new Set([
   CROP_IF_HARVEST_UNIT_CONTROL_ID,
   CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID,
   CROP_IF_OVERCLOCK_CONTROL_ID,
+  CROP_IF_FERTILIZED_CONTROL_ID,
 ]);
 
 const BEE_CONTROL_IDS = new Set([
+  BEE_SPEED_GENE_CONTROL_ID,
   BEE_ENVIRONMENT_CONTROL_ID,
   BEE_MAGIC_AURA_CONTROL_ID,
   BEE_ALVEARY_FRAME_HOUSING_CONTROL_ID,
@@ -126,6 +137,12 @@ export interface CropsNhStats {
   growthCycleTicks: number;
   growthMultiplier: number;
   machineOnly?: boolean;
+  /**
+   * `getMinSeedBedTier`: the Industrial Farm refuses this seed below this
+   * bed tier (`CHECK_RECIPE_RESULT_SEED_BED_TIER_TOO_LOW`), so the crop's
+   * seed bed ladder starts here.
+   */
+  minSeedBedTier?: number;
   drops: Array<{ id: string; stackSize: number; weight: number }>;
 }
 
@@ -136,6 +153,13 @@ export interface CropsNhEnvironment {
   fertilizer: number;
   sky: boolean;
   biomeBonus: number;
+  /**
+   * How many of the crop's liked biome tags the biome really has, when the
+   * biome dropdown said. The humid option's +14 is a SIMULATED tag
+   * (`HIGH_HUMIDITY_BONUS`), so it carries 0 here: the Industrial Farm's
+   * biome cards stack with real tags but never with the humidity substitute.
+   */
+  biomeTags?: number;
 }
 
 /**
@@ -181,6 +205,7 @@ export function getCropsNhStats(
     growthCycleTicks: toPositiveNumber(meta.growthCycleTicks) ?? 256,
     growthMultiplier: toPositiveNumber(meta.growthMultiplier) ?? 1,
     machineOnly: meta.machineOnly === true ? true : undefined,
+    minSeedBedTier: toPositiveNumber(meta.minSeedBedTier),
     drops,
   };
 }
@@ -223,10 +248,25 @@ export function cropsNhExpectedDrop(
   return rounds * (drop.weight / 10000) * (drop.stackSize + (clampedGain + 1) / 100);
 }
 
+// The humidity substitute is a GRADIENT, not a switch:
+// floor(clamp((rainfall - 0.5) / 0.3, 0, 1) * 14), so a 60% biome is +4 and
+// a 70% one +9 on the way to the full +14 at 80%.
 const CROP_BIOME_BONUS_BY_KEY: Record<string, number> = {
   "two-tags": 28,
   "one-tag": 14,
   humid: 14,
+  "humid-70": 9,
+  "humid-60": 4,
+  none: 0,
+};
+
+/** Real liked tags behind each biome option - the humidity rungs simulate. */
+const CROP_BIOME_TAGS_BY_KEY: Record<string, number> = {
+  "two-tags": 2,
+  "one-tag": 1,
+  humid: 0,
+  "humid-70": 0,
+  "humid-60": 0,
   none: 0,
 };
 
@@ -247,6 +287,8 @@ export function cropsNhEnvironmentFromTiers(
     fertilizer: Number.isFinite(fertilizer) ? fertilizer : reference.fertilizer,
     sky: sky === undefined ? reference.sky : sky === "yes",
     biomeBonus: biome === undefined ? reference.biomeBonus : (CROP_BIOME_BONUS_BY_KEY[biome] ?? 0),
+    biomeTags:
+      biome === undefined ? 2 : (CROP_BIOME_TAGS_BY_KEY[biome] ?? 0),
   };
 }
 
@@ -285,6 +327,14 @@ const MAX_ADVANCED_HARVESTING_UNITS = 2;
 const MAX_ENVIRONMENTAL_UNITS = 2;
 /** `BlockFertilizerUnit.MAX_UPGRADE_COUNT` = 1. */
 const MAX_FERTILIZER_UNITS = 1;
+/**
+ * `MTEIndustrialFarm.getPowerUsage`: each installed unit adds a fraction of
+ * the seed bed's base EU/t (`BASE_POWER_INCREASE` on each unit block).
+ */
+const ENVIRONMENTAL_UNIT_POWER_INCREASE = 0.5;
+const GROWTH_UNIT_POWER_INCREASE = 1.25;
+const FERTILIZER_UNIT_POWER_INCREASE = 0.5;
+const HARVEST_UNIT_POWER_INCREASE = 0.5;
 /** `MTEIndustrialFarm.SIMULATED_WATER_STORAGE` / `..._FERTILIZER_...PROVIDED`. */
 const INDUSTRIAL_FARM_SIMULATED_STORAGE = 200;
 /** `TileEntityCropSticks.MAX_LIKED_BIOME_TAG_COUNT` = 2, each worth 14. */
@@ -302,6 +352,18 @@ const MAX_OVERCLOCKS = 6;
 const VOLTAGE_TIER_NAMES = [
   "ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "UEV", "UIV", "UMV", "UXV",
 ];
+
+/** `cropsnh_tooltip.cropManager.name.<tier>` from the mod's lang file. */
+const CROP_MANAGER_ITEM_NAMES: Record<string, string> = {
+  LV: "Basic Crop Manager",
+  MV: "Advanced Crop Manager",
+  HV: "Advanced Crop Manager II",
+  EV: "Advanced Crop Manager III",
+  IV: "Advanced Crop Manager IV",
+  LuV: "Elite Crop Manager",
+  ZPM: "Elite Crop Manager II",
+  UV: "Ultimate Crop Manager",
+};
 
 export type CropHarvesterId =
   | typeof CROP_HARVESTER_MANAGER_ID
@@ -321,6 +383,11 @@ export interface CropHarvesterSetup {
   harvestUnits: number;
   environmentUnits: number;
   overclocks: number;
+  /**
+   * Whether the farm's optional fertilizer fluid is supplied (+10 food). A
+   * Fertilization Unit runs on enriched fertilizer, so it forces this on.
+   */
+  fertilized: boolean;
 }
 
 /**
@@ -334,7 +401,11 @@ export function cropsNhSquarePerTier(tierIndex: number): number {
   return side * side;
 }
 
-/** True when the crop grows on sticks with nothing automating the harvest. */
+/**
+ * True when the crop grows on sticks with nothing automating the harvest.
+ * The by-hand rung was removed from the manager ladder (legacy "none" loads
+ * as LV), so this survives only as dead-path safety for callers.
+ */
 export function cropsNhIsHandPicked(setup: CropHarvesterSetup): boolean {
   return setup.id === CROP_HARVESTER_MANAGER_ID && setup.tierIndex < 0;
 }
@@ -379,9 +450,14 @@ export function getNodeMachineBuildCount(
   node: Pick<FactoryNode, "machineCount"> &
     Partial<Pick<FactoryNode, "machineConfigTiers" | "machineHandlerId">>,
 ): number {
-  if (recipe && getCropsNhStats(recipe)) {
+  const cropStats = recipe ? getCropsNhStats(recipe) : undefined;
+  if (recipe && cropStats) {
     return cropsNhHarvesterMachineCount(
-      cropsNhHarvesterFromTiers(node.machineConfigTiers, node.machineHandlerId),
+      cropsNhHarvesterFromTiers(
+        node.machineConfigTiers,
+        node.machineHandlerId,
+        cropStats.minSeedBedTier,
+      ),
       Math.round(node.machineCount),
     );
   }
@@ -399,6 +475,12 @@ export function cropsNhUpgradeSlots(tierIndex: number): number {
 export function cropsNhHarvesterFromTiers(
   tiers: Record<string, string | undefined> | undefined,
   handlerId: string | undefined,
+  /**
+   * The crop's own seed bed floor (`CropsNhStats.minSeedBedTier`): the game
+   * refuses the seed below it, so a stored lower tier clamps UP to it -
+   * exactly what the control's raised minimum shows.
+   */
+  minSeedBedTier?: number,
 ): CropHarvesterSetup {
   const id: CropHarvesterId =
     handlerId === CROP_HARVESTER_INDUSTRIAL_FARM_ID
@@ -408,45 +490,82 @@ export function cropsNhHarvesterFromTiers(
     const parsed = Number.parseInt(tiers?.[controlId] ?? "", 10);
     return Number.isFinite(parsed) ? parsed : fallback;
   };
-  // An unset or "none" manager tier parses to nothing, which is exactly the
-  // hand-picked default every card starts on.
+  const seedBedFloor = clampInt(
+    Math.max(SEED_BED_MIN_TIER_INDEX, minSeedBedTier ?? SEED_BED_MIN_TIER_INDEX),
+    SEED_BED_MIN_TIER_INDEX,
+    SEED_BED_MAX_TIER_INDEX,
+  );
+  // There is no by-hand mode any more: an unset or legacy "none" manager
+  // tier parses to nothing and lands on the LV machine.
   const tierIndex =
     id === CROP_HARVESTER_MANAGER_ID
       ? clampInt(
-          read(CROP_MANAGER_TIER_CONTROL_ID, NO_MANAGER_TIER_INDEX),
-          NO_MANAGER_TIER_INDEX,
+          read(CROP_MANAGER_TIER_CONTROL_ID, CROP_MANAGER_MIN_TIER_INDEX),
+          CROP_MANAGER_MIN_TIER_INDEX,
           CROP_MANAGER_MAX_TIER_INDEX,
         )
-      : clampInt(read(CROP_SEED_BED_TIER_CONTROL_ID, SEED_BED_MIN_TIER_INDEX), SEED_BED_MIN_TIER_INDEX, SEED_BED_MAX_TIER_INDEX);
+      : clampInt(read(CROP_SEED_BED_TIER_CONTROL_ID, seedBedFloor), seedBedFloor, SEED_BED_MAX_TIER_INDEX);
+  // Every unit type competes for the same slots (one 'U' position per farm
+  // slice in `MTEIndustrialFarm`), so the shared budget squeezes ALL of them,
+  // not just growth units. The order is the degrade order when a saved plan's
+  // seed bed tier drops: the Overclocked unit first (it is one block whatever
+  // its overclock count, and the most tier-gated), then the small-cap units,
+  // and plain growth units soak up whatever is left. The Overclocked unit and
+  // plain Growth Acceleration units are mutually exclusive
+  // (`SE_OCGAU_EXCLUSIVITY`).
   const slots = cropsNhUpgradeSlots(tierIndex);
-  const fertilizerUnits = clampInt(read(CROP_IF_FERTILIZER_UNIT_CONTROL_ID, 0), 0, MAX_FERTILIZER_UNITS);
-  const harvestUnits = clampInt(read(CROP_IF_HARVEST_UNIT_CONTROL_ID, 0), 0, MAX_ADVANCED_HARVESTING_UNITS);
-  const environmentUnits = clampInt(read(CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID, 0), 0, MAX_ENVIRONMENTAL_UNITS);
-  const overclocks =
+  let remaining = slots;
+  const take = (want: number) => {
+    const got = Math.max(0, Math.min(want, remaining));
+    remaining -= got;
+    return got;
+  };
+  const overclocksWanted =
     tierIndex >= OVERCLOCK_UNIT_MIN_TIER_INDEX
       ? clampInt(read(CROP_IF_OVERCLOCK_CONTROL_ID, 0), 0, MAX_OVERCLOCKS)
       : 0;
-  // The Overclocked unit and plain Growth Acceleration units are mutually
-  // exclusive (`SE_OCGAU_EXCLUSIVITY`), and every unit competes for the same
-  // slots, so a card can never claim more upgrades than the structure allows.
-  const requestedGrowth = overclocks > 0 ? 0 : clampInt(read(CROP_IF_GROWTH_UNIT_CONTROL_ID, 0), 0, slots);
-  const usedByOthers = fertilizerUnits + harvestUnits + environmentUnits + (overclocks > 0 ? 1 : 0);
+  const overclocks = overclocksWanted > 0 && take(1) === 1 ? overclocksWanted : 0;
+  const fertilizerUnits = take(clampInt(read(CROP_IF_FERTILIZER_UNIT_CONTROL_ID, 0), 0, MAX_FERTILIZER_UNITS));
+  const harvestUnits = take(clampInt(read(CROP_IF_HARVEST_UNIT_CONTROL_ID, 0), 0, MAX_ADVANCED_HARVESTING_UNITS));
+  const environmentUnits = take(clampInt(read(CROP_IF_ENVIRONMENT_UNIT_CONTROL_ID, 0), 0, MAX_ENVIRONMENTAL_UNITS));
+  const growthUnits =
+    overclocks > 0 ? 0 : take(clampInt(read(CROP_IF_GROWTH_UNIT_CONTROL_ID, 0), 0, slots));
+  const fertilized =
+    fertilizerUnits > 0 || tiers?.[CROP_IF_FERTILIZED_CONTROL_ID] !== "no";
   return {
     id,
     tierIndex,
-    growthUnits: Math.max(0, Math.min(requestedGrowth, slots - usedByOthers)),
+    growthUnits,
     fertilizerUnits,
     harvestUnits,
     environmentUnits,
     overclocks,
+    fertilized,
   };
+}
+
+/** How many of the farm's upgrade slots this setup occupies. */
+export function cropsNhUnitSlotsUsed(setup: CropHarvesterSetup): number {
+  return (
+    setup.growthUnits +
+    setup.fertilizerUnits +
+    setup.harvestUnits +
+    setup.environmentUnits +
+    (setup.overclocks > 0 ? 1 : 0)
+  );
 }
 
 /**
  * The Industrial Farm does not read the world: `getNutrientScore` feeds
- * `getNutrientsPerCycle` a fixed water and fertilizer storage of 200 and
- * `SIMULATED_CAN_SEE_SKY = true`. Only the biome still varies, and each
- * Environmental Enhancement Unit adds a liked biome tag on top of it.
+ * `getNutrientsPerCycle` a fixed water storage of 200 and
+ * `SIMULATED_CAN_SEE_SKY = true` (fertilizer counts as long as the farm is
+ * fed fertilizer or carries a Fertilizer Unit; the planner assumes it is
+ * fed, exactly like a Crop Manager's own supplies). Each Environmental
+ * Enhancement Unit holds a module that ADDS ONE LIKED BIOME TAG to the
+ * biome's own set, so cards stack with the biome's real tags up to the
+ * two-tag cap - while the 80%-humidity substitute only ever simulates one
+ * tag and never stacks with anything (`getNutrientsPerCycle` takes
+ * max(humidity bonus, tags * 14)).
  */
 export function cropsNhHarvesterEnvironment(
   setup: CropHarvesterSetup,
@@ -455,12 +574,21 @@ export function cropsNhHarvesterEnvironment(
   if (setup.id !== CROP_HARVESTER_INDUSTRIAL_FARM_ID) {
     return base;
   }
+  // The biome option's two ingredients: real liked tags stack with the
+  // cards' added tags up to the two-tag cap; the humid substitute is
+  // whatever bonus is left when the tags are taken away, and joins through
+  // the game's max().
+  const baseTags = base.biomeTags ?? Math.round(base.biomeBonus / CROP_BIOME_BONUS_PER_TAG);
+  const humiditySimulated = baseTags > 0 ? 0 : base.biomeBonus;
+  const tags = Math.min(2, baseTags + setup.environmentUnits);
   return {
     ...base,
     water: INDUSTRIAL_FARM_SIMULATED_STORAGE,
-    fertilizer: INDUSTRIAL_FARM_SIMULATED_STORAGE,
+    // The +10 fertilizer food only exists while fertilizer fluid is fed:
+    // `SIMULATED_FERTILIZER_STORAGE_WHEN_FERTILIZER_NOT_PROVIDED = 0`.
+    fertilizer: setup.fertilized ? INDUSTRIAL_FARM_SIMULATED_STORAGE : 0,
     sky: true,
-    biomeBonus: Math.max(base.biomeBonus, setup.environmentUnits * CROP_BIOME_BONUS_PER_TAG),
+    biomeBonus: Math.max(humiditySimulated, tags * CROP_BIOME_BONUS_PER_TAG),
   };
 }
 
@@ -496,18 +624,38 @@ export function cropsNhHarvestRoundMultiplier(setup: CropHarvesterSetup): number
 }
 
 /**
- * Continuous draw per crop. The farm runs on `BlockSeedBed.getBaseEUt`, which
- * is `GTValues.VP[tier]` (= V[tier] * 30 / 32), doubled per overclock, spread
- * over every seed in the bed. The Crop Manager instead spends
- * `maxEUInput() / 8` once per crop harvested, so its cost belongs to the
- * harvest rather than to the tick; `cropsNhManagerEuPerHarvest` reports that.
+ * Continuous draw per crop. `MTEIndustrialFarm.getPowerUsage`: the farm runs
+ * on `BlockSeedBed.getBaseEUt` = `GTValues.VP[tier]` (= V[tier] * 30 / 32),
+ * plus each installed unit's `BASE_POWER_INCREASE` fraction of that base.
+ * With an Overclocked unit the total goes through `OverclockCalculator`,
+ * which QUADRUPLES consumption per overclock while production only doubles
+ * (`getGrowthSpeedMultiplier` is the 2^OC half). Spread over every seed in
+ * the bed. The Crop Manager instead spends `maxEUInput() / 8` once per crop
+ * harvested, so its cost belongs to the harvest rather than to the tick;
+ * `cropsNhManagerEuPerHarvest` reports that.
  */
 export function cropsNhEutPerCrop(setup: CropHarvesterSetup): number {
   if (setup.id !== CROP_HARVESTER_INDUSTRIAL_FARM_ID) {
     return 0;
   }
-  const practicalVoltage = Math.floor((gtVoltage(setup.tierIndex) * 30) / 32);
-  return (practicalVoltage * 2 ** setup.overclocks) / cropsNhSquarePerTier(setup.tierIndex);
+  const base = Math.floor((gtVoltage(setup.tierIndex) * 30) / 32);
+  const withUnits =
+    base +
+    base *
+      (setup.environmentUnits * ENVIRONMENTAL_UNIT_POWER_INCREASE +
+        setup.growthUnits * GROWTH_UNIT_POWER_INCREASE +
+        setup.fertilizerUnits * FERTILIZER_UNIT_POWER_INCREASE +
+        setup.harvestUnits * HARVEST_UNIT_POWER_INCREASE);
+  return (withUnits * 4 ** setup.overclocks) / cropsNhSquarePerTier(setup.tierIndex);
+}
+
+/**
+ * One WHOLE farm's draw: a farm burns its full `getPowerUsage` however many
+ * seeds it holds, so billing rides the farm count, never the seed count - a
+ * half-filled farm is not half a bill.
+ */
+export function cropsNhFarmEut(setup: CropHarvesterSetup): number {
+  return cropsNhEutPerCrop(setup) * cropsNhSquarePerTier(setup.tierIndex);
 }
 
 export function cropsNhManagerEuPerHarvest(setup: CropHarvesterSetup): number {
@@ -736,7 +884,7 @@ function enrichCropProductionRecipe(recipe: Recipe): Recipe {
     eut: 0,
     // Only the analytic CropsNH cards get harvesters: the legacy IC2 crop
     // approximation has no Crop Manager or Industrial Farm behind it.
-    machineHandlers: analyticStats ? cropHarvesterHandlers() : [],
+    machineHandlers: analyticStats ? cropHarvesterHandlers(analyticStats) : [],
     machineConfigControls,
     notes: withPassiveProductionNote(
       recipe.notes,
@@ -755,15 +903,13 @@ function enrichCropProductionRecipe(recipe: Recipe): Recipe {
  * therefore cannot change.
  */
 function cropsNhAnalyticControls(mode: "world" | "farm" = "world"): MachineConfigControl[] {
-  const statTiers = (controlId: string, statLabel: string) =>
+  // Real dataset items wear the row's face; without one the icon square can
+  // only draw a lettered fallback. Shipped to the client by
+  // `isCropHarvesterComponent` in dataset-query.ts - extend both together.
+  const statTiers = (controlId: string, itemName: string) =>
     Array.from({ length: 31 }, (_unused, index) => {
       const value = index + 1;
-      return option(
-        String(value),
-        String(value),
-        `${controlId}_${value}`,
-        `${statLabel} ${value}`,
-      );
+      return option(String(value), String(value), controlId, itemName);
     });
 
   const worldOnly = new Set([
@@ -777,42 +923,42 @@ function cropsNhAnalyticControls(mode: "world" | "farm" = "world"): MachineConfi
       label: "Growth",
       minimumKey: "1",
       defaultKey: "31",
-      tiers: statTiers(CROP_GROWTH_STAT_CONTROL_ID, "Growth"),
+      tiers: statTiers(CROP_GROWTH_STAT_CONTROL_ID, "Crop Sticks"),
     },
     {
       id: CROP_GAIN_STAT_CONTROL_ID,
       label: "Gain",
       minimumKey: "1",
       defaultKey: "31",
-      tiers: statTiers(CROP_GAIN_STAT_CONTROL_ID, "Gain"),
+      tiers: statTiers(CROP_GAIN_STAT_CONTROL_ID, "Plant Lens"),
     },
     selectControl({
       id: CROP_WATER_CONTROL_ID,
       label: "Water",
       defaultKey: "100",
       tiers: [
-        option("0", "Dry", "crop_water_0", "No Water (+0)"),
-        option("50", "Partial", "crop_water_50", "Water 50 (+5)"),
-        option("100", "Full", "crop_water_100", "Water 100 (+10)"),
+        option("0", "Dry", CROP_WATER_CONTROL_ID, "Water Bucket"),
+        option("50", "Half", CROP_WATER_CONTROL_ID, "Water Bucket"),
+        option("100", "Full", CROP_WATER_CONTROL_ID, "Water Bucket"),
       ],
     }),
     selectControl({
       id: CROP_FERTILIZER_CONTROL_ID,
-      label: "Fertilizer",
+      label: "Fert",
       defaultKey: "100",
       tiers: [
-        option("0", "None", "crop_fertilizer_0", "No Fertilizer (+0)"),
-        option("50", "Partial", "crop_fertilizer_50", "Fertilizer 50 (+5)"),
-        option("100", "Full", "crop_fertilizer_100", "Fertilizer 100 (+10)"),
+        option("0", "None", CROP_FERTILIZER_CONTROL_ID, "Fertilizer"),
+        option("50", "Half", CROP_FERTILIZER_CONTROL_ID, "Fertilizer"),
+        option("100", "Full", CROP_FERTILIZER_CONTROL_ID, "Fertilizer"),
       ],
     }),
     selectControl({
       id: CROP_SKY_CONTROL_ID,
-      label: "Sky Access",
+      label: "Sky",
       defaultKey: "yes",
       tiers: [
-        option("no", "Covered", "crop_sky_no", "No Sky Access (+0)"),
-        option("yes", "Open Sky", "crop_sky_yes", "Sky Access (+2)"),
+        option("no", "Covered", CROP_SKY_CONTROL_ID, "Daylight Detector"),
+        option("yes", "Open", CROP_SKY_CONTROL_ID, "Daylight Detector"),
       ],
     }),
     selectControl({
@@ -820,10 +966,17 @@ function cropsNhAnalyticControls(mode: "world" | "farm" = "world"): MachineConfi
       label: "Biome",
       defaultKey: "two-tags",
       tiers: [
-        option("none", "No Bonus", "crop_biome_none", "No Biome Bonus (+0)"),
-        option("humid", "Humid", "crop_biome_humid", "80%+ Humidity Biome (+14)"),
-        option("one-tag", "1 Tag", "crop_biome_one_tag", "One Preferred Biome Tag (+14)"),
-        option("two-tags", "2 Tags", "crop_biome_two_tags", "Both Preferred Biome Tags (+28)"),
+        option("none", "None", CROP_BIOME_CONTROL_ID, "Grass Block"),
+        // Humidity rungs, bare percentages: the four-across crop row's wells
+        // clip anything longer ("80% Wet" showed as "80% We"). The hover
+        // explains what the percent is.
+        option("humid-60", "60%", CROP_BIOME_CONTROL_ID, "Grass Block"),
+        option("humid-70", "70%", CROP_BIOME_CONTROL_ID, "Grass Block"),
+        option("humid", "80%", CROP_BIOME_CONTROL_ID, "Grass Block"),
+        // Labels stay one short word each: the four-across crop row's wells
+        // are narrow.
+        option("one-tag", "1 Tag", CROP_BIOME_CONTROL_ID, "Grass Block"),
+        option("two-tags", "2 Tags", CROP_BIOME_CONTROL_ID, "Grass Block"),
       ],
     }),
   ];
@@ -839,6 +992,7 @@ function voltageTierControl({
   maxTierIndex,
   defaultKey,
   noneLabel,
+  itemName,
 }: {
   id: string;
   label: string;
@@ -847,6 +1001,11 @@ function voltageTierControl({
   defaultKey: string;
   /** When given, the tier list opens with a "no machine at all" option. */
   noneLabel?: string;
+  /**
+   * Real dataset item name per tier ("Seed Bed (MV)"), so the config icon
+   * resolves to the game's own block art instead of a blank square.
+   */
+  itemName?: (tierName: string) => string;
 }): MachineConfigControl {
   const tiers = [
     ...(noneLabel
@@ -859,7 +1018,7 @@ function voltageTierControl({
         String(tierIndex),
         name,
         `crop_voltage_${name.toLowerCase()}`,
-        `${label}: ${name}`,
+        itemName ? itemName(name) : `${label}: ${name}`,
       );
     }),
   ];
@@ -873,12 +1032,15 @@ function countControl({
   max,
   resourceId,
   describe,
+  itemName,
 }: {
   id: string;
   label: string;
   max: number;
   resourceId: string;
   describe: (count: number) => string;
+  /** Real dataset item name so the config icon resolves to the block art. */
+  itemName?: string;
 }): MachineConfigControl {
   return {
     id,
@@ -886,7 +1048,7 @@ function countControl({
     minimumKey: "0",
     defaultKey: "0",
     tiers: Array.from({ length: max + 1 }, (_unused, count) =>
-      option(String(count), String(count), `${resourceId}_${count}`, describe(count)),
+      option(String(count), String(count), itemName ? resourceId : `${resourceId}_${count}`, itemName ?? describe(count)),
     ),
   };
 }
@@ -898,7 +1060,14 @@ function countControl({
  * rather than a tab of its own. Sticks come first, so a card with nothing
  * chosen behaves exactly as it did before harvesters existed.
  */
-function cropHarvesterHandlers(): MachineHandler[] {
+function cropHarvesterHandlers(stats?: CropsNhStats): MachineHandler[] {
+  // The crop's own seed bed floor: the game refuses the seed below it, so
+  // the ladder simply starts there.
+  const seedBedMin = clampInt(
+    Math.max(SEED_BED_MIN_TIER_INDEX, stats?.minSeedBedTier ?? SEED_BED_MIN_TIER_INDEX),
+    SEED_BED_MIN_TIER_INDEX,
+    SEED_BED_MAX_TIER_INDEX,
+  );
   return [
     {
       id: CROP_HARVESTER_MANAGER_ID,
@@ -914,8 +1083,14 @@ function cropHarvesterHandlers(): MachineHandler[] {
           label: "Manager",
           minTierIndex: CROP_MANAGER_MIN_TIER_INDEX,
           maxTierIndex: CROP_MANAGER_MAX_TIER_INDEX,
-          defaultKey: CROP_NO_MANAGER_KEY,
-          noneLabel: "By Hand",
+          // No by-hand rung (Jack, 2026-09-01): a planned crop board is an
+          // automated one, so the ladder starts at the LV machine and a
+          // legacy stored "none" loads as LV.
+          defaultKey: String(CROP_MANAGER_MIN_TIER_INDEX),
+          // The tiered machine names from the mod's own lang file, so the
+          // config icon shows the actual machine ("Basic Crop Manager" is
+          // the LV one).
+          itemName: (tierName) => CROP_MANAGER_ITEM_NAMES[tierName] ?? "Basic Crop Manager",
         }),
       ],
     },
@@ -931,33 +1106,46 @@ function cropHarvesterHandlers(): MachineHandler[] {
         voltageTierControl({
           id: CROP_SEED_BED_TIER_CONTROL_ID,
           label: "Seed Bed",
-          minTierIndex: SEED_BED_MIN_TIER_INDEX,
+          minTierIndex: seedBedMin,
           maxTierIndex: SEED_BED_MAX_TIER_INDEX,
-          defaultKey: String(SEED_BED_MIN_TIER_INDEX),
+          defaultKey: String(seedBedMin),
+          itemName: (tierName) => `Seed Bed (${tierName})`,
         }),
         countControl({
           id: CROP_IF_GROWTH_UNIT_CONTROL_ID,
           label: "Growth Units",
           max: 1 + SEED_BED_MAX_TIER_INDEX - SEED_BED_MIN_TIER_INDEX,
           resourceId: "crop_if_growth_unit",
+          itemName: "Growth Acceleration Unit (MV)",
           describe: (count) =>
             count === 0
               ? "No Growth Acceleration Units"
               : `${count} Growth Acceleration Unit${count > 1 ? "s" : ""} (+${count * 100}% speed)`,
         }),
+        selectControl({
+          id: CROP_IF_FERTILIZED_CONTROL_ID,
+          label: "Fert",
+          defaultKey: "yes",
+          tiers: [
+            option("no", "None", CROP_IF_FERTILIZED_CONTROL_ID, "Fertilizer"),
+            option("yes", "Fed", CROP_IF_FERTILIZED_CONTROL_ID, "Fertilizer"),
+          ],
+        }),
         countControl({
           id: CROP_IF_FERTILIZER_UNIT_CONTROL_ID,
-          label: "Fertilizer Unit",
+          label: "Fert Unit",
           max: MAX_FERTILIZER_UNITS,
           resourceId: "crop_if_fertilizer_unit",
+          itemName: "Fertilization Unit (MV)",
           describe: (count) =>
             count === 0 ? "No Fertilizer Unit" : "Fertilizer Unit (x1.5 speed, +0.5 drop rounds)",
         }),
         countControl({
           id: CROP_IF_HARVEST_UNIT_CONTROL_ID,
-          label: "Harvest Units",
+          label: "Harvesting",
           max: MAX_ADVANCED_HARVESTING_UNITS,
           resourceId: "crop_if_harvest_unit",
+          itemName: "Advanced Harvesting Unit (MV)",
           describe: (count) =>
             count === 0
               ? "No Advanced Harvesting Units"
@@ -968,6 +1156,7 @@ function cropHarvesterHandlers(): MachineHandler[] {
           label: "Biome Cards",
           max: MAX_ENVIRONMENTAL_UNITS,
           resourceId: "crop_if_environment_unit",
+          itemName: "Environmental Enhancement Unit (MV)",
           describe: (count) =>
             count === 0
               ? "No Environmental Enhancement Units"
@@ -978,6 +1167,7 @@ function cropHarvesterHandlers(): MachineHandler[] {
           label: "Overclocks",
           max: MAX_OVERCLOCKS,
           resourceId: "crop_if_overclock",
+          itemName: "Overclocked Growth Acceleration Unit (ZPM)",
           describe: (count) =>
             count === 0
               ? "No Overclocked Growth Acceleration Unit"
@@ -1114,6 +1304,7 @@ function cropStatsControl(recipe: PassiveProductionRecipeLabel): MachineConfigCo
 
 function apiaryProductionControls(): MachineConfigControl[] {
   return [
+    beeSpeedGeneControl(),
     beeFrameSlotControl(1),
     beeFrameSlotControl(2),
     beeFrameSlotControl(3),
@@ -1161,6 +1352,7 @@ function withoutTooltipLines(
 
 function magicApiaryProductionControls(): MachineConfigControl[] {
   return [
+    beeSpeedGeneControl(),
     beeFrameSlotControl(1),
     beeFrameSlotControl(2),
     beeFrameSlotControl(3),
@@ -1184,6 +1376,7 @@ function magicApiaryProductionControls(): MachineConfigControl[] {
 
 function alvearyProductionControls(): MachineConfigControl[] {
   return [
+    beeSpeedGeneControl(),
     selectControl({
       id: BEE_ALVEARY_FRAME_HOUSING_CONTROL_ID,
       label: "Frame Housings",
@@ -1228,6 +1421,7 @@ function alvearyProductionControls(): MachineConfigControl[] {
 
 function industrialApiaryControls(): MachineConfigControl[] {
   return [
+    beeSpeedGeneControl(),
     selectControl({
       id: BEE_INDUSTRIAL_SPEED_CONTROL_ID,
       label: "Acceleration",
@@ -1284,6 +1478,7 @@ function industrialApiaryControls(): MachineConfigControl[] {
 
 function megaApiaryControls(): MachineConfigControl[] {
   return [
+    beeSpeedGeneControl(),
     selectControl({
       id: BEE_MEGA_ROYAL_JELLY_CONTROL_ID,
       label: "Royal Jelly",
@@ -1299,6 +1494,41 @@ function megaApiaryControls(): MachineConfigControl[] {
       ],
     }),
   ];
+}
+
+/**
+ * Every speed allele in the pack: Forestry `EnumAllele.Speed` (0.3 to 1.7)
+ * plus MagicBees' Blinding (2.0). GTNH Forestry's `Bee.getFinalChance` is
+ * `2.8 * chance^0.52 * (prodMod + t)^0.52 * speed^0.37 / 100`, so the gene is
+ * a plain output factor independent of the housing and the product, and the
+ * dataset bakes every chance at speed 1 (Normal).
+ */
+const BEE_SPEED_GENES: Array<{ key: string; label: string; value: number }> = [
+  { key: "slowest", label: "Slowest", value: 0.3 },
+  { key: "slower", label: "Slower", value: 0.6 },
+  { key: "slow", label: "Slow", value: 0.8 },
+  { key: "normal", label: "Normal", value: 1 },
+  { key: "fast", label: "Fast", value: 1.2 },
+  { key: "faster", label: "Faster", value: 1.4 },
+  { key: "fastest", label: "Fastest", value: 1.7 },
+  { key: "blinding", label: "Blinding", value: 2 },
+];
+
+function beeSpeedGeneControl(): MachineConfigControl {
+  return selectControl({
+    id: BEE_SPEED_GENE_CONTROL_ID,
+    label: "Speed Gene",
+    defaultKey: "normal",
+    tiers: BEE_SPEED_GENES.map((gene) =>
+      option(
+        gene.key,
+        gene.label,
+        `bee_speed_${gene.key}`,
+        `${gene.label} Speed Gene (${gene.value})`,
+        { outputMultiplier: gene.value ** 0.37 },
+      ),
+    ),
+  });
 }
 
 function beeEnvironmentControl(): MachineConfigControl {

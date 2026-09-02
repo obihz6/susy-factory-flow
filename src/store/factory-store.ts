@@ -9,11 +9,20 @@ import {
   findDuplicateEdge,
 } from "@/lib/model/edge-identity";
 import { normalizeLoadedProject } from "@/lib/model/project-normalize";
-import { setActiveRateUnit, type RateUnit } from "@/lib/model/rate-unit";
-import { calculateThroughput } from "@/lib/solver";
+import { playBoardSound, quietBoardSoundsFor, suppressBoardSound } from "@/lib/board-sounds";
+import { GT_VOLTAGE_TIERS } from "@/lib/model/tiers";
+import {
+  setActivePowerDisplayUnit,
+  setActiveRateUnit,
+  type PowerDisplayUnit,
+  type RateUnit,
+} from "@/lib/model/rate-unit";
+import { registerBooksSink, solveBooks } from "./solve-books";
 import { applyRecipeInputOverrides, inputOverrideAmount } from "@/lib/model/recipe-input-overrides";
 import type { AlternativeCycleFace } from "@/lib/nei/alternative-cycle";
 import { createCropFarmPlaceholderRecipe, isCropFarmRecipe } from "@/lib/model/passive-production";
+import { buildPowerRecipe, isPowerRecipe } from "@/lib/power/power-recipe";
+import { POWER_EU_CLAUSE_ID } from "@/lib/power/power-search";
 import {
   createCustomRatePlaceholderRecipe,
   getCustomRateDial,
@@ -67,6 +76,7 @@ import type {
   StorageDrainMode,
   MachineTier,
   Recipe,
+  RecipeInput,
   ResourceAmount,
   ResourceKind,
   TargetRate,
@@ -157,6 +167,12 @@ interface FactoryStore {
   recipeBrowserSeed?: RecipeSeedClause[];
   /** Set while the search is a REFACTOR: the add replaces this node in place. */
   recipeBrowserRefactorNodeId?: string;
+  /**
+   * Bumped by every refactor press, so each one is a FRESH browse: the
+   * card's settings may have changed since last time, and stencil edits
+   * keyed to the previous press must not resurrect over the new seed.
+   */
+  recipeBrowserSeedNonce: number;
   recipeResourceHistory: RecipeBrowserResource[];
   /**
    * Recipes the plus button promised to the board whose full bodies are still
@@ -195,6 +211,9 @@ interface FactoryStore {
   /** Board-wide display unit for rates: per tick / second / minute / hour. */
   rateUnit: RateUnit;
   setRateUnit: (unit: RateUnit) => void;
+  /** EU/t, or amps of a chosen tier - the board-wide power display dial. */
+  powerDisplayUnit: PowerDisplayUnit;
+  setPowerDisplayUnit: (unit: PowerDisplayUnit) => void;
   setProject: (project: FactoryProject) => void;
   markHydratedProject: (project: FactoryProject) => void;
   undo: () => void;
@@ -266,6 +285,32 @@ interface FactoryStore {
   updateNode: (nodeId: string, patch: Partial<FactoryNode>) => void;
   /** Drops an empty crop source node; a crop is picked on the node itself. */
   addCropFarmNode: () => void;
+  /** The power source picker overlay (src/lib/power). */
+  powerMenuOpen: boolean;
+  openPowerMenu: () => void;
+  closePowerMenu: () => void;
+  /**
+   * Places a power card: a node owning a synthesized generator recipe. The
+   * picker passes `settings` when the search matched through a fuel or
+   * product, so the card lands already dialed to what was searched for.
+   */
+  addPowerSourceNode: (sourceId: string, settings?: Record<string, string>) => void;
+  /**
+   * The refactor's power landing: swaps the card onto a generator in place,
+   * settings dialed, wires re-docking where the resources still match -
+   * exactly what refactoring to a recipe does.
+   */
+  refactorNodeToPowerSource: (
+    nodeId: string,
+    sourceId: string,
+    settings?: Record<string, string>,
+  ) => void;
+  /**
+   * Writes one power card setting and rebuilds its owned recipe in the same
+   * step, so the knobs, the slots and the books never disagree. Wires whose
+   * resource left the card (a fuel change) are pruned like any edit.
+   */
+  setPowerSetting: (nodeId: string, settingId: string, value: string) => void;
   /** A dial-a-rate source/sink node; adopts its resource from the first wire. */
   addCustomRateNode: () => void;
   /** Rate stored per second. Flipping the mode reverses direction and drops wires. */
@@ -328,8 +373,13 @@ interface FactoryStore {
   ) => void;
   /** Drains only: flip between pulling the feeder flat out and catching the extra. */
   setStorageDrainMode: (storageId: string, drainMode: StorageDrainMode) => void;
+  /** Solve mode's requirement on a product drawer; undefined clears it. */
+  setStorageTarget: (storageId: string, targetPerSecond: number | undefined) => void;
   /** Free inputs and free outputs: what the board does off its own edges. */
   setSetupRules: (rules: Partial<SetupRules>) => void;
+  /** Plan mode counts machines and reports flows; solve mode takes the
+   * product drawers' typed amounts and reports machine counts. */
+  setSolveMode: (solveMode: boolean) => void;
   deleteStorage: (storageId: string) => void;
   /** Clone a node (same recipe/config, no wires) beside the original. */
   duplicateNode: (nodeId: string) => void;
@@ -699,7 +749,9 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   recipeBrowserMode: "recipes",
   recipeBrowserSeed: undefined,
   recipeBrowserRefactorNodeId: undefined,
+  recipeBrowserSeedNonce: 0,
   recipeResourceHistory: [],
+  powerMenuOpen: false,
   pendingRecipeAdds: [],
   pendingResourceConnection: undefined,
   nodeColorPaintMode: undefined,
@@ -716,16 +768,26 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   placedBoardToken: 0,
   selectedBoardIds: [],
   boardFocusRequest: undefined,
-  lastResult: calculateThroughput(initialProject),
+  lastResult: solveBooks(initialProject),
   rateUnit: "second",
   setRateUnit: (unit) => {
     // The formatters read a module singleton; recomputing the result gives
     // every rate surface a fresh identity so nothing shows a stale unit.
     setActiveRateUnit(unit);
     const { project } = get();
-    set({ rateUnit: unit, lastResult: calculateThroughput(project) });
+    set({ rateUnit: unit, lastResult: solveBooks(project) });
+  },
+  powerDisplayUnit: "eu",
+  setPowerDisplayUnit: (unit) => {
+    // Same singleton trick as the rate unit above, for the same reason.
+    setActivePowerDisplayUnit(unit);
+    const { project } = get();
+    set({ powerDisplayUnit: unit, lastResult: solveBooks(project) });
   },
   setProject: (project) => {
+    // A plan ARRIVING (import, tab switch, setup open) is not an action;
+    // its writes must not be mistaken for a giant paste and swept audibly.
+    quietBoardSoundsFor(1500);
     const nextProject = touchProject(normalizeLoadedProject(project));
     set({
       project: nextProject,
@@ -733,12 +795,13 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       selectedRecipeId: nextProject.nodes[0]?.recipeId ?? nextProject.recipes[0]?.id,
       pendingBoardSelectionIds: undefined,
       selectedBoardIds: [],
-      lastResult: calculateThroughput(nextProject),
+      lastResult: solveBooks(nextProject),
       undoHistory: [],
       redoHistory: [],
     });
   },
   markHydratedProject: (project) => {
+    quietBoardSoundsFor(1500);
     const nextProject = normalizeLoadedProject(project);
     set({
       project: nextProject,
@@ -746,7 +809,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       selectedRecipeId: nextProject.nodes[0]?.recipeId ?? nextProject.recipes[0]?.id,
       pendingBoardSelectionIds: undefined,
       selectedBoardIds: [],
-      lastResult: calculateThroughput(nextProject),
+      lastResult: solveBooks(nextProject),
       undoHistory: [],
       redoHistory: [],
     });
@@ -853,7 +916,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       };
     });
   },
@@ -962,11 +1025,27 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       for (const output of effectiveRecipe.outputs) {
         push("makes", output);
       }
+      // A generator's product IS power: refactoring one asks for other
+      // things that make power, through the stencil's own EU condition.
+      if (isPowerRecipe(effectiveRecipe) && effectiveRecipe.power.euPerTick > 0) {
+        seed.push({
+          role: "makes",
+          kind: "fluid",
+          id: POWER_EU_CLAUSE_ID,
+          displayName: "Power (EU)",
+          dominantColor: "#d99a2b",
+        });
+      }
       if (seed.length === 0) {
         return state;
       }
 
-      const primary = seed.find((clause) => clause.role === "makes") ?? seed[0];
+      // The EU pseudo condition never leads: it is not a dataset resource,
+      // and the legacy resource slot it would fill drives real queries.
+      const primary =
+        seed.find((clause) => clause.role === "makes" && clause.id !== POWER_EU_CLAUSE_ID) ??
+        seed.find((clause) => clause.id !== POWER_EU_CLAUSE_ID) ??
+        seed[0];
       return {
         recipeBrowserResource: {
           kind: primary.kind,
@@ -980,6 +1059,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         recipeBrowserMode: "recipes" as const,
         recipeBrowserSeed: seed,
         recipeBrowserRefactorNodeId: nodeId,
+        recipeBrowserSeedNonce: state.recipeBrowserSeedNonce + 1,
         selectedNodeId: nodeId,
       };
     });
@@ -1020,7 +1100,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         pendingResourceConnection: undefined,
         selectedNodeId: undefined,
         selectedRecipeId: state.dataset?.recipes[0]?.id,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1084,7 +1164,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
           project,
           pendingResourceConnection: undefined,
           selectedNodeId: slot.nodeId,
-          lastResult: calculateThroughput(project),
+          lastResult: solveBooks(project),
         });
       }
 
@@ -1110,7 +1190,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         project,
         pendingResourceConnection: undefined,
         selectedNodeId: slot.nodeId,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1145,7 +1225,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   recalculate: () => {
     const { project } = get();
-    set({ lastResult: calculateThroughput(project) });
+    set({ lastResult: solveBooks(project) });
   },
   selectNode: (nodeId) => {
     const node = get().project.nodes.find((entry) => entry.id === nodeId);
@@ -1198,7 +1278,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       );
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1210,6 +1290,162 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         colorTag: "green",
       }),
     );
+  },
+  openPowerMenu: () => set({ powerMenuOpen: true }),
+  closePowerMenu: () => set({ powerMenuOpen: false }),
+  addPowerSourceNode: (sourceId, settings) => {
+    set((state) => {
+      // Each power card owns its recipe, custom-rate style; settings are
+      // defaults until the card's knobs write machineConfigTiers.
+      const recipe = buildPowerRecipe(sourceId, settings, createId("recipe"));
+      if (!recipe) {
+        return state;
+      }
+      return {
+        ...addRecipeNodeToState(state, recipe, undefined, {
+          focusCamera: true,
+          machineConfigTiers: settings,
+        }),
+        powerMenuOpen: false,
+      };
+    });
+  },
+  refactorNodeToPowerSource: (nodeId, sourceId, settings) => {
+    set((state) => {
+      const recipe = buildPowerRecipe(sourceId, settings, createId("recipe"));
+      if (!recipe) {
+        return state;
+      }
+      return refactorNodeToState(state, nodeId, recipe, { machineConfigTiers: settings });
+    });
+  },
+  setPowerSetting: (nodeId, settingId, value) => {
+    set((state) => {
+      const node = state.project.nodes.find((entry) => entry.id === nodeId);
+      const recipe = node
+        ? state.project.recipes.find((entry) => entry.id === node.recipeId)
+        : undefined;
+      if (!node || !recipe || !isPowerRecipe(recipe)) {
+        return state;
+      }
+      const nextSettings = { ...(node.machineConfigTiers ?? {}), [settingId]: value };
+      // A generator setting whose VALUE is a voltage tier (the turbines'
+      // and singleblocks' tier knob) speaks the board's one tier voice -
+      // the power dial's ladder at that tier's rung. Any other setting
+      // keeps the watcher's ordinary adjust tap.
+      const tierRung = GT_VOLTAGE_TIERS.findIndex((entry) => entry.tier === value);
+      if (tierRung >= 0) {
+        playBoardSound("dialPower", { step: tierRung + 1 });
+        suppressBoardSound("adjust", 150);
+      }
+      // A recipe another node still shares (a clone made before clones
+      // reminted) must not be rewritten under that other card: this node
+      // takes its own copy and the knob turns only here.
+      const sharedWithAnotherNode = state.project.nodes.some(
+        (entry) => entry.id !== nodeId && entry.recipeId === recipe.id,
+      );
+      const nextRecipeId = sharedWithAnotherNode ? createId("recipe") : recipe.id;
+      const nextRecipe = buildPowerRecipe(recipe.power.sourceId, nextSettings, nextRecipeId);
+      if (!nextRecipe) {
+        return state;
+      }
+
+      // A wire whose slot the setting just swapped out: a MACHINE at the far
+      // end loses the wire (the prune below), but a drawer serving only this
+      // card FOLLOWS the change - swap benzene for nitrobenzene and your
+      // source drawer becomes a nitrobenzene drawer on the same wire. Only
+      // when exactly one same-kind slot replaced the old one, and only when
+      // the drawer has no other wires to honour.
+      const slotKey = (slot: { kind: string; id: string }) => `${slot.kind}:${slot.id}`;
+      const oldInputKeys = new Set(recipe.inputs.map(slotKey));
+      const oldOutputKeys = new Set(recipe.outputs.map(slotKey));
+      const addedInputs = nextRecipe.inputs.filter((slot) => !oldInputKeys.has(slotKey(slot)));
+      const addedOutputs = nextRecipe.outputs.filter((slot) => !oldOutputKeys.has(slotKey(slot)));
+      const storagesById = new Map(
+        (state.project.storages ?? []).map((storage) => [storage.id, storage]),
+      );
+      const storageLinkCounts = new Map<string, number>();
+      for (const edge of state.project.edges) {
+        for (const end of [edge.source, edge.target]) {
+          if (storagesById.has(end)) {
+            storageLinkCounts.set(end, (storageLinkCounts.get(end) ?? 0) + 1);
+          }
+        }
+      }
+      const storagePatches = new Map<string, RecipeInput>();
+      const edges = state.project.edges.map((edge) => {
+        const intoCard = edge.target === nodeId;
+        const outOfCard = edge.source === nodeId;
+        if (!intoCard && !outOfCard) {
+          return edge;
+        }
+        const slots = intoCard ? nextRecipe.inputs : nextRecipe.outputs;
+        if (slots.some((slot) => slot.kind === edge.resourceKind && slot.id === edge.resourceId)) {
+          return edge;
+        }
+        const farId = intoCard ? edge.source : edge.target;
+        const storage = storagesById.get(farId);
+        const added = intoCard ? addedInputs : addedOutputs;
+        const replacement =
+          added.length === 1 && added[0].kind === edge.resourceKind ? added[0] : undefined;
+        if (!storage || !replacement || (storageLinkCounts.get(farId) ?? 0) > 1) {
+          return edge;
+        }
+        storagePatches.set(storage.id, replacement);
+        return {
+          ...edge,
+          resourceKind: replacement.kind,
+          resourceId: replacement.id,
+          label: replacement.displayName ?? edge.label,
+          sourceHandle: edge.sourceHandle
+            ? makeResourceHandleId("output", replacement)
+            : edge.sourceHandle,
+          targetHandle: edge.targetHandle
+            ? makeResourceHandleId("input", replacement)
+            : edge.targetHandle,
+        };
+      });
+      const storages = (state.project.storages ?? []).map((storage) => {
+        const patch = storagePatches.get(storage.id);
+        return patch
+          ? {
+              ...storage,
+              kind: patch.kind,
+              resourceId: patch.id,
+              displayName: patch.displayName,
+              iconPath: patch.iconPath,
+              iconAtlas: patch.iconAtlas,
+              dominantColor: patch.dominantColor,
+            }
+          : storage;
+      });
+
+      const project = touchProject(
+        // Whatever the retarget could not honestly follow drops here.
+        pruneInvalidEdgesAndOrphanStorages({
+          ...state.project,
+          nodes: state.project.nodes.map((entry) =>
+            entry.id === nodeId
+              ? {
+                  ...entry,
+                  recipeId: nextRecipeId,
+                  machineConfigTiers: nextSettings,
+                  // Overrides stamped by old builds outlive their wire and
+                  // would repaint the rebuilt slots; a power card never
+                  // legitimately carries one.
+                  recipeInputOverrides: undefined,
+                }
+              : entry,
+          ),
+          recipes: sharedWithAnotherNode
+            ? [...state.project.recipes, nextRecipe]
+            : state.project.recipes.map((entry) => (entry.id === recipe.id ? nextRecipe : entry)),
+          edges,
+          storages,
+        }),
+      );
+      return withProjectHistory(state, { project, lastResult: solveBooks(project) });
+    });
   },
   addCustomRateNode: () => {
     // Each custom rate node owns its recipe (the rate lives on it). No paint
@@ -1256,7 +1492,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
           ? state.project.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId)
           : state.project.edges,
       });
-      return withProjectHistory(state, { project, lastResult: calculateThroughput(project) });
+      return withProjectHistory(state, { project, lastResult: solveBooks(project) });
     });
   },
   connectCustomRate: (customNodeId, customSide, machine, resource) => {
@@ -1324,7 +1560,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       return withProjectHistory(state, {
         project,
         selectedNodeId: customNodeId,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1374,7 +1610,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1394,19 +1630,29 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
                 entry.id === recipe.id ? mergeRecipe(entry, recipe) : entry,
               )
             : [...state.project.recipes, recipe],
-          nodes: state.project.nodes.map((entry) =>
-            entry.id === nodeId
-              ? {
-                  ...entry,
-                  recipeId: recipe.id,
-                  overclockTier: recipe.minimumTier,
-                  machineConfigTiers: undefined,
-                  machineHandlerId: undefined,
-                  coilTier: undefined,
-                  recipeInputOverrides: undefined,
-                }
-              : entry,
-          ),
+          nodes: state.project.nodes.map((entry) => {
+            if (entry.id !== nodeId) {
+              return entry;
+            }
+            // Swapping the CROP keeps the FARM: the harvester tab and its
+            // knobs (seed bed, units, feeding) describe the machine the
+            // player built, not the plant in it, and every crop card offers
+            // the same two handlers with the same controls.
+            const keepHarvester =
+              entry.machineHandlerId !== undefined &&
+              (recipe.machineHandlers ?? []).some(
+                (handler) => handler.id === entry.machineHandlerId,
+              );
+            return {
+              ...entry,
+              recipeId: recipe.id,
+              overclockTier: recipe.minimumTier,
+              machineConfigTiers: keepHarvester ? entry.machineConfigTiers : undefined,
+              machineHandlerId: keepHarvester ? entry.machineHandlerId : undefined,
+              coilTier: undefined,
+              recipeInputOverrides: undefined,
+            };
+          }),
           // The old recipe's resources no longer exist on this node.
           edges: state.project.edges.filter(
             (edge) => edge.source !== nodeId && edge.target !== nodeId,
@@ -1418,7 +1664,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         project,
         selectedNodeId: nodeId,
         selectedRecipeId: recipe.id,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1441,7 +1687,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
             : state.pendingResourceConnection,
         selectedNodeId: project.nodes[0]?.id,
         selectedRecipeId: project.nodes[0]?.recipeId ?? state.selectedRecipeId,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1468,7 +1714,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       return withProjectHistory(state, {
         project,
         selectedNodeId: undefined,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1579,7 +1825,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ...(placed
           ? { placedBoardIds: [storage.id], placedBoardToken: state.placedBoardToken + 1 }
           : undefined),
-        lastResult: calculateThroughput(finalProject),
+        lastResult: solveBooks(finalProject),
       });
     });
   },
@@ -1594,7 +1840,35 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
+      });
+    });
+  },
+  setStorageTarget: (storageId, targetPerSecond) => {
+    set((state) => {
+      const project = touchProject({
+        ...state.project,
+        storages: (state.project.storages ?? []).map((storage) =>
+          storage.id === storageId ? { ...storage, targetPerSecond } : storage,
+        ),
+      });
+
+      return withProjectHistory(state, {
+        project,
+        lastResult: solveBooks(project),
+      });
+    });
+  },
+  setSolveMode: (solveMode) => {
+    set((state) => {
+      const project = touchProject({
+        ...state.project,
+        solveMode: solveMode ? true : undefined,
+      });
+
+      return withProjectHistory(state, {
+        project,
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1614,7 +1888,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
           state.pendingResourceConnection?.nodeId === storageId
             ? undefined
             : state.pendingResourceConnection,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1631,11 +1905,13 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         x: node.position.x + CLONE_OFFSET,
         y: node.position.y + CLONE_OFFSET,
       });
-      // Custom rate nodes own their recipe (the dialed rate lives on it), so
-      // the clone gets its own copy — otherwise both nodes share one dial.
+      // Custom rate AND power nodes own their recipe (the dialed rate or
+      // the baked settings live on it), so the clone gets its own copy -
+      // otherwise both nodes share one dial, and a rotor change on one
+      // turbine rewrote the other's output too.
       const recipe = state.project.recipes.find((entry) => entry.id === node.recipeId);
       let clonedRecipe: Recipe | undefined;
-      if (recipe && isCustomRateRecipe(recipe)) {
+      if (recipe && (isCustomRateRecipe(recipe) || isPowerRecipe(recipe))) {
         clonedRecipe = { ...structuredClone(recipe), id: createId("recipe") };
         clone.recipeId = clonedRecipe.id;
       }
@@ -1648,7 +1924,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         project,
         selectedNodeId: clone.id,
         selectedRecipeId: clone.recipeId,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1670,7 +1946,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1711,7 +1987,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -1726,7 +2002,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -2124,7 +2400,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
           state.selectedNodeId && doomedItems.has(state.selectedNodeId)
             ? undefined
             : state.selectedNodeId,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -2273,7 +2549,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         project,
         selectedNodeId: lastPastedNode?.id ?? state.selectedNodeId,
         selectedRecipeId: lastPastedNode?.recipeId ?? state.selectedRecipeId,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
     return pastedIds;
@@ -3000,7 +3276,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       const finalProject = touchProject(removedAny ? pruneOrphanStorages(project) : project);
       return withProjectHistory(state, {
         project: finalProject,
-        lastResult: calculateThroughput(finalProject),
+        lastResult: solveBooks(finalProject),
       });
     });
   },
@@ -3029,7 +3305,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project: finalProject,
-        lastResult: calculateThroughput(finalProject),
+        lastResult: solveBooks(finalProject),
       });
     });
   },
@@ -3080,7 +3356,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         const project = touchProject(pruneOrphanStorages(projectWithoutOld));
         return withProjectHistory(state, {
           project,
-          lastResult: calculateThroughput(project),
+          lastResult: solveBooks(project),
         });
       }
 
@@ -3101,7 +3377,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3116,7 +3392,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3162,7 +3438,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3186,7 +3462,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project: touchedProject,
-        lastResult: calculateThroughput(touchedProject),
+        lastResult: solveBooks(touchedProject),
       });
     });
   },
@@ -3214,7 +3490,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       const touchedProject = touchProject(project);
       return withProjectHistory(state, {
         project: touchedProject,
-        lastResult: calculateThroughput(touchedProject),
+        lastResult: solveBooks(touchedProject),
       });
     });
   },
@@ -3229,7 +3505,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       );
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3241,7 +3517,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3254,7 +3530,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3266,7 +3542,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
       return withProjectHistory(state, {
         project,
-        lastResult: calculateThroughput(project),
+        lastResult: solveBooks(project),
       });
     });
   },
@@ -3323,7 +3599,7 @@ function restoreProjectState(
       selectedRecipe?.id ??
       project.nodes[0]?.recipeId ??
       project.recipes[0]?.id,
-    lastResult: calculateThroughput(project),
+    lastResult: solveBooks(project),
   };
 }
 
@@ -3365,6 +3641,8 @@ function addRecipeNodeToState(
     machineHandlerId?: string;
     inputPicks?: RecipeInputPicks;
     focusCamera?: boolean;
+    /** Power cards: the settings the picker dialed in before placing. */
+    machineConfigTiers?: Record<string, string>;
   },
 ): Partial<FactoryStore> {
   const index = state.project.nodes.length;
@@ -3399,6 +3677,7 @@ function addRecipeNodeToState(
     machineCount: 1,
     parallel: 1,
     machineHandlerId: spawnHandler?.id,
+    machineConfigTiers: options?.machineConfigTiers,
     overclockTier: spawnHandler?.minimumTier ?? recipe.minimumTier,
     recipeInputOverrides: mergeRecipeInputOverrides(
       resource ? buildRecipeInputOverrides(recipe, resource) : undefined,
@@ -3438,7 +3717,7 @@ function addRecipeNodeToState(
           },
         }
       : {}),
-    lastResult: calculateThroughput(project),
+    lastResult: solveBooks(project),
   });
 }
 
@@ -3547,7 +3826,7 @@ function addConnectedRecipeNodeToState(
       nodeIds: [nextNode.id],
       token: (state.boardFocusRequest?.token ?? 0) + 1,
     },
-    lastResult: calculateThroughput(project),
+    lastResult: solveBooks(project),
   });
 }
 
@@ -3673,7 +3952,7 @@ function refactorNodeToState(
   state: FactoryStore,
   nodeId: string,
   recipe: Recipe,
-  options?: { machineHandlerId?: string },
+  options?: { machineHandlerId?: string; machineConfigTiers?: Record<string, string> },
 ): Partial<FactoryStore> {
   const node = state.project.nodes.find((entry) => entry.id === nodeId);
   if (!node) {
@@ -3741,7 +4020,9 @@ function refactorNodeToState(
             recipeId: recipe.id,
             machineHandlerId: spawnHandler?.id,
             overclockTier: spawnHandler?.minimumTier ?? recipe.minimumTier,
-            machineConfigTiers: undefined,
+            // A power pick carries its dialed settings into the swap; every
+            // other refactor resets the knobs as before.
+            machineConfigTiers: options?.machineConfigTiers,
             coilTier: undefined,
             recipeInputOverrides: undefined,
           }
@@ -3752,6 +4033,15 @@ function refactorNodeToState(
       ...carried,
     ],
   };
+  // A power card OWNS its recipe; swapping away from one would strand it.
+  const oldRecipe = state.project.recipes.find((entry) => entry.id === node.recipeId);
+  if (
+    oldRecipe &&
+    isPowerRecipe(oldRecipe) &&
+    !projectBase.nodes.some((entry) => entry.recipeId === oldRecipe.id)
+  ) {
+    projectBase.recipes = projectBase.recipes.filter((entry) => entry.id !== oldRecipe.id);
+  }
   const project = touchProject(
     pruneOrphanStorages(applyEdgeInputOverrides(projectBase, carried)),
   );
@@ -3767,7 +4057,7 @@ function refactorNodeToState(
       nodeIds: [nodeId],
       token: (state.boardFocusRequest?.token ?? 0) + 1,
     },
-    lastResult: calculateThroughput(project),
+    lastResult: solveBooks(project),
   });
 }
 
@@ -3951,6 +4241,13 @@ function applyEdgeInputOverride(
   const targetNode = project.nodes.find((node) => node.id === edge.target);
   const targetRecipe = project.recipes.find((recipe) => recipe.id === targetNode?.recipeId);
   if (!targetNode || !targetRecipe) {
+    return project;
+  }
+  // Power cards: never stamp an input override. Their slots are exact (no
+  // oredict, no alternatives), and a stamped override OUTLIVES the wire -
+  // wiring benzene once left the slot benzene through every later fuel
+  // switch, because the override repainted whatever the rebuilt recipe said.
+  if (targetRecipe.power) {
     return project;
   }
 
@@ -4438,6 +4735,85 @@ function hasDuplicateEdge(edges: FactoryEdge[], edge: FactoryEdge): boolean {
   return Boolean(findDuplicateEdge(edges, edge));
 }
 
+/**
+ * The edge a connect gesture would TOGGLE AWAY, if any: drawing a wire that
+ * already exists deletes it (connectNodesBatch), and the drag preview turns
+ * the doomed wire red before the release commits. Same construction the
+ * release will run, asked hypothetically.
+ */
+export function findToggleDuplicateEdge(
+  project: FactoryProject,
+  sourceNodeId: string,
+  targetNodeId: string,
+  resource?: Parameters<typeof buildEdgeBetweenNodes>[3],
+): FactoryEdge | undefined {
+  const edge = buildEdgeBetweenNodes(project, sourceNodeId, targetNodeId, resource);
+  return edge ? findDuplicateEdge(project.edges, edge) : undefined;
+}
+
+/**
+ * Would releasing this wire drag into the VOID leave something on the board?
+ * The exact refusal logic of `addStorageForConnection`, run against a
+ * hypothetical drawer and committed nowhere: a spawn survives when at least
+ * one edge wires, or when nothing wired but nothing CONFLICTED either (a
+ * plain build failure keeps the unwired drawer). Only a storage endpoint
+ * conflict - this port row already has its drawer for this resource -
+ * prunes the spawn into a no-op. The connection line asks this to color
+ * the drag before the release commits to anything.
+ */
+export function wouldConnectionStorageSpawn(
+  project: FactoryProject,
+  resource: Pick<ResourceAmount, "kind" | "id">,
+  nodeId: string | string[],
+  side: "input" | "output",
+  handleId: string,
+): boolean {
+  const nodeIds = Array.isArray(nodeId) ? nodeId : [nodeId];
+  const storage: FactoryStorage = {
+    id: "__hypothetical-spawn__",
+    kind: resource.kind,
+    resourceId: resource.id,
+    position: { x: 0, y: 0 },
+  };
+  let hypothetical: FactoryProject = {
+    ...project,
+    storages: [...(project.storages ?? []), storage],
+  };
+  const selectedResource = {
+    kind: resource.kind,
+    id: resource.id,
+    sourceHandle:
+      side === "output"
+        ? handleId
+        : makeResourceHandleId("output", { kind: resource.kind, id: resource.id }),
+    targetHandle:
+      side === "input"
+        ? handleId
+        : makeResourceHandleId("input", { kind: resource.kind, id: resource.id }),
+  };
+  let wired = 0;
+  let conflicted = false;
+  for (const anchorId of nodeIds) {
+    const edge =
+      side === "output"
+        ? buildEdgeBetweenNodes(hypothetical, anchorId, storage.id, selectedResource)
+        : buildEdgeBetweenNodes(hypothetical, storage.id, anchorId, selectedResource);
+    if (!edge) {
+      continue;
+    }
+    if (findDuplicateEdge(hypothetical.edges, edge)) {
+      continue;
+    }
+    if (hasStorageEndpointConflict(hypothetical, edge)) {
+      conflicted = true;
+      continue;
+    }
+    hypothetical = { ...hypothetical, edges: [...hypothetical.edges, edge] };
+    wired += 1;
+  }
+  return wired > 0 || !conflicted;
+}
+
 function hasStorageEndpointConflict(project: FactoryProject, edge: FactoryEdge): boolean {
   if (!findEdgeStorage(project, edge)) {
     return false;
@@ -4815,3 +5191,10 @@ function createId(prefix: string): string {
 
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+
+// A big board's solve finishes off the main thread; the finished books land
+// here and replace the stale placeholder solveBooks handed out. See
+// src/store/solve-books.ts.
+registerBooksSink((result) => {
+  useFactoryStore.setState({ lastResult: result });
+});

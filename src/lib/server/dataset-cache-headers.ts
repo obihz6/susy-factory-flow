@@ -13,6 +13,13 @@
  * described once the dataset is republished.
  */
 export function datasetCacheHeaders(request: Request): Record<string, string> {
+  // In dev the server code behind these responses changes all day; a
+  // year-long immutable cache serves yesterday's catalog through every
+  // reload and made "the fix is in but the browser will not show it" a
+  // recurring mystery. Only production earns the immutable header.
+  if (process.env.NODE_ENV !== "production") {
+    return { "Cache-Control": "no-store" };
+  }
   const fingerprinted = new URL(request.url).searchParams.has("datasetHash");
   return {
     "Cache-Control": fingerprinted ? "public, max-age=31536000, immutable" : "no-store",

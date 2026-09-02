@@ -1,5 +1,4 @@
 import {
-  Anchor,
   Box,
   Cable,
   Download,
@@ -8,16 +7,12 @@ import {
   Gauge,
   Grid3x3,
   Magnet,
-  Network,
   Paintbrush,
   Play,
-  Presentation,
   RotateCcw,
   Search,
   Share2,
   Square,
-  Tag,
-  Trash,
   Trash2,
   TriangleAlert,
   Undo2,
@@ -169,10 +164,8 @@ const CALLOUTS: Array<{
     // plate that places cards, then the tidy-up.
     rows: [
       { icon: Undo2, text: "Undo and redo" },
-      { chip: "/s", text: "Rates per tick, second, minute or hour" },
-      { icon: Trash, text: "Place *farm*, *trash can*, *custom rate*" },
-      { icon: SlidersHorizontal, text: "*Setup rules*: free inputs and free outputs" },
-      { icon: Network, text: "*Auto-arrange* the whole board" },
+      { chip: "/s", text: "*Rate unit*: click to change" },
+      { icon: Gauge, text: "Place a *custom rate* card" },
     ],
   },
   {
@@ -184,7 +177,7 @@ const CALLOUTS: Array<{
     title: "Paint and notes",
     rows: [
       { icon: Paintbrush, text: "Paint cards" },
-      { icon: Square, text: "Box, zone, arrow, note, image" },
+      { icon: Square, text: "*Draw*: box, zone, arrow, note under one button" },
       { text: "Select a box for border and fill styles" },
       { icon: Trash2, text: "*Bin*: delete anything" },
     ],
@@ -194,17 +187,14 @@ const CALLOUTS: Array<{
     side: "below",
     align: "end",
     title: "View options",
-    // Seven rows, not nine: at the minimum glance window this card's tail
-    // reached the Plan totals card, so the wire pair and the motion pair
-    // each share a line.
+    // One button now: the nine toggles live in its sheet, each with a name
+    // and a line of its own, so the card only has to say what is inside.
     rows: [
-      { text: "View only, *never the plan*" },
+      { text: "One button, one sheet: *view only*, never the plan" },
       { icon: Grid3x3, text: "Background style and pattern" },
-      { icon: Cable, text: "Thicker lines and faster dashes, *by volume*" },
-      { icon: Tag, text: "Rate labels on the lines" },
-      { icon: Anchor, text: "Free or fixed wire ends" },
-      { icon: Presentation, text: "Calm colours" },
-      { icon: Magnet, text: "*Motion*: cards glide, numbers ease" },
+      { icon: Cable, text: "Wire thickness, dashes, labels, docking" },
+      { icon: Magnet, text: "*Motion*: cards and numbers move smoothly" },
+      { icon: SlidersHorizontal, text: "Beside it: *setup rules* and *auto-arrange*" },
     ],
   },
   {

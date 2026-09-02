@@ -105,7 +105,11 @@ function CropSourceStatsContent({
   // Live math with the node's current knob settings (defaults when unset),
   // as reshaped by whichever harvester is picked: an Industrial Farm fixes
   // water, fertilizer and sky itself and speeds the crop up with its upgrades.
-  const setup = cropsNhHarvesterFromTiers(node?.machineConfigTiers, handler?.id);
+  const setup = cropsNhHarvesterFromTiers(
+    node?.machineConfigTiers,
+    handler?.id,
+    stats.minSeedBedTier,
+  );
   const speedMultiplier = cropsNhGrowthSpeedMultiplier(setup);
   const roundMultiplier = cropsNhHarvestRoundMultiplier(setup);
   const cropsPerMachine = cropsNhCropsPerMachine(setup);
@@ -289,7 +293,7 @@ function CropSourceStatsContent({
                 <span style={{ color: BONUS_COLOR }}>
                   {formatNumber((roundMultiplier - 1) * 100, 0)}% more
                 </span>{" "}
-                than picking by hand, and spends{" "}
+                than bare crop sticks would drop, and spends{" "}
                 {formatNumber(cropsNhManagerEuPerHarvest(setup), 0)} EU on every crop it picks.
               </>
             ) : (

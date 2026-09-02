@@ -160,7 +160,9 @@ export function resourceToPositionedStack({
   return {
     resource,
     side,
-    kind: resource.kind,
+    // Power never reaches an NEI surface (it is app-synthesized, not a
+    // dataset stack); the narrowing is for the types alone.
+    kind: resource.kind === "power" ? "special" : resource.kind,
     x,
     y,
     width: NEI_ITEM_SLOT_SIZE,

@@ -6,10 +6,9 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   Factory,
-  LayoutGrid,
-  List,
   Search,
   X,
+  Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { PointerEvent, RefObject, WheelEvent } from "react";
@@ -39,6 +38,9 @@ import {
   type SearchPhase,
 } from "@/lib/search";
 import { useFactoryStore } from "@/store/factory-store";
+import { POWER_EU_CLAUSE_ID } from "@/lib/power/power-search";
+import { useDesignStore } from "@/store/design-store";
+import { leaveWelcomeTab, readWelcomeTabState } from "@/lib/tour/welcome-tab";
 import type { RecipeInputPicks, TierFilter } from "@/store/factory-store";
 import type { Recipe, ResourceAmount } from "@/lib/model/types";
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value";
@@ -53,7 +55,7 @@ import { ChevronIcon } from "./PanelDrawer";
 import { BlueprintPanel } from "./BlueprintPanel";
 import { SetupsPanel } from "./SetupsPanel";
 import { MinecraftTooltip } from "./nei/MinecraftTooltip";
-import { ResourceIcon } from "./nei/ResourceIcon";
+import { isSwatchFluid, ResourceIcon, spriteArtPixels } from "./nei/ResourceIcon";
 import {
   RecipeSearchOverlay,
   type RecipeMapChip,
@@ -71,8 +73,21 @@ export {
 const RECIPE_QUERY_LIMIT = 120;
 
 const RESOURCE_DEFAULT_PAGE_SIZE = 6;
-const RESOURCE_ROW_HEIGHT = 40;
-const RESOURCE_ROW_GAP = 2;
+/**
+ * The one way results are drawn: a dense grid of tiles, the icon on top and a
+ * quiet gray name under it. It replaced a list view (name plus a mod/recipe-
+ * count line nobody asked for, one item per row) and a bare grid view (no
+ * names at all) - as many items as the column holds without losing the name
+ * (Jack, 2026-08-31). Four columns in the standard panel; two short lines of
+ * name, then the hover tooltip carries the rest.
+ */
+// The height is exactly what the tile holds - a 44px icon cell + two 10px
+// name lines + borders - so a wrapped second line is never clipped. Fluid art
+// deliberately stays at the previous 40px size inside the bigger cell: a
+// solid square at full cell size out-shouts every item around it.
+const RESOURCE_TILE_HEIGHT = 66;
+const RESOURCE_TILE_MIN_WIDTH = 58;
+const RESOURCE_TILE_GAP = 2;
 const RESOURCE_GRID_CELL = 56;
 const RESOURCE_GRID_GAP = 4;
 /**
@@ -89,7 +104,9 @@ const RESOURCE_GRID_GAP = 4;
  * here; that is the trade, and much past this even ordinary items start to clip.
  */
 const RESOURCE_GRID_ART = "!h-full !w-full scale-[1.4]";
-const RESOURCE_PAGER_HEIGHT = 40;
+// The pager measures 28px (24 + 4 margin); the extra is slack so a fractional
+// device pixel can never clip the last row of tiles.
+const RESOURCE_PAGER_HEIGHT = 31;
 /** One mouse notch is 100 on most platforms, so one notch is one page. */
 const RESOURCE_WHEEL_PAGE_DELTA = 80;
 const RESOURCE_VIEW_STORAGE_KEY = "susy-factory-flow.resource-view.v1";
@@ -98,8 +115,7 @@ const RESOURCE_FILTERS_STORAGE_KEY = "susy-factory-flow.resource-filters.v1";
 /** The machine chips' multi-select: which maps' recipes the search shows. */
 const MAP_SELECTION_STORAGE_KEY = "susy-factory-flow.machine-map-selection.v1";
 
-type ResourceSortMode = "relevance" | "name" | "mod" | "made" | "uses";
-type ResourceViewMode = "list" | "grid";
+type ResourceSortMode = "relevance" | "popular" | "name" | "mod" | "made" | "uses";
 
 /**
  * The one question the list is answering.
@@ -161,11 +177,37 @@ function resourceTooltipLines(resource: IndexedResource): string[] {
 
 /** Mod is the id prefix ("gregtech:..."); bare fluid ids group as "fluids". */
 function getResourceModLabel(resource: { id: string; kind: string }): string {
+  if (resource.id === POWER_EU_CLAUSE_ID) {
+    return "generators";
+  }
   const colon = resource.id.indexOf(":");
   if (colon > 0) {
     return resource.id.slice(0, colon);
   }
   return resource.kind === "fluid" ? "fluids" : "other";
+}
+
+/**
+ * The item search's power row: typing "power", "energy" or "eu" puts
+ * Power (EU) first in the list. Left click asks who makes it (every
+ * generator), right click who takes it (the parasitic machines) - the same
+ * two questions every item row answers.
+ */
+function powerSearchRow(query: string): IndexedResource | undefined {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length < 2) {
+    return undefined;
+  }
+  if (!("power".startsWith(trimmed) || "energy".startsWith(trimmed) || trimmed === "eu")) {
+    return undefined;
+  }
+  return {
+    kind: "fluid",
+    id: POWER_EU_CLAUSE_ID,
+    displayName: "Power (EU)",
+    recipeCount: 0,
+    dominantColor: "#d99a2b",
+  } as IndexedResource;
 }
 const RECIPE_QUERY_CACHE_TTL_MS = 90_000;
 const RESOURCE_QUERY_CACHE_TTL_MS = 90_000;
@@ -189,6 +231,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   const browserMode = useFactoryStore((state) => state.recipeBrowserMode);
   const browserSeed = useFactoryStore((state) => state.recipeBrowserSeed);
   const refactorNodeId = useFactoryStore((state) => state.recipeBrowserRefactorNodeId);
+  const seedNonce = useFactoryStore((state) => state.recipeBrowserSeedNonce);
   const selectedRecipeId = useFactoryStore((state) => state.selectedRecipeId);
   const setRecipeSearch = useFactoryStore((state) => state.setRecipeSearch);
   const setHighlightSearch = useFactoryStore((state) => state.setHighlightSearch);
@@ -215,8 +258,10 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   const [resourceResults, setResourceResults] = useState<IndexedResource[]>([]);
   const [resourceTotal, setResourceTotal] = useState(0);
   const [resourceMod, setResourceMod] = useState("");
-  const [resourceSort, setResourceSort] = useState<ResourceSortMode>("relevance");
-  const [resourceView, setResourceView] = useState<ResourceViewMode>("list");
+  // Popular is the resting default: with nothing typed it shows what players
+  // actually build. A typed query still ranks name relevance first server-side,
+  // so the sort only decides the untyped list and ties.
+  const [resourceSort, setResourceSort] = useState<ResourceSortMode>("popular");
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [resourceFilter, setResourceFilter] = useState<ResourceFilterMode>("all");
   // The machine chips' selection. Absent means everything is selected (the
@@ -275,7 +320,15 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
     offset: resourcePage * resourcePageSize,
     limit: resourcePageSize,
   });
-  const displayedResources = onBoard ? boardResults.resources : resourceResults;
+  const powerRow =
+    !onBoard && resourceFilter === "all" && resourcePage === 0
+      ? powerSearchRow(debouncedRecipeSearch)
+      : undefined;
+  const displayedResources = onBoard
+    ? boardResults.resources
+    : powerRow
+      ? [powerRow, ...resourceResults]
+      : resourceResults;
   const displayedTotal = onBoard ? boardResults.total : resourceTotal;
   const displayedMods = onBoard ? boardResults.mods : resourceMods;
   const displayedOutcome = onBoard ? boardResults.outcome : resourceSearchOutcome;
@@ -386,7 +439,10 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
   // made after that carry the browse's key and win while it stays open.
   const browseKey = browserResource
     ? [
-        refactorNodeId ? `refactor:${refactorNodeId}` : "",
+        // The nonce makes every refactor press a fresh browse: the card's
+        // settings may have changed, and old stencil edits must not
+        // resurrect over the new seed.
+        refactorNodeId ? `refactor:${refactorNodeId}:${seedNonce}` : "",
         browserResource.kind,
         browserResource.id,
         browserMode,
@@ -521,22 +577,8 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
     ],
   );
 
-  // The saved view preference is applied after mount (deferred) so the SSR
-  // markup and first client render agree.
-  useEffect(() => {
-    const stored = window.localStorage.getItem(RESOURCE_VIEW_STORAGE_KEY);
-    if (stored === "grid") {
-      return deferStateUpdate(() => setResourceView("grid"));
-    }
-    return undefined;
-  }, []);
-
-  const changeResourceView = useCallback((view: ResourceViewMode) => {
-    setResourceView(view);
-    window.localStorage.setItem(RESOURCE_VIEW_STORAGE_KEY, view);
-  }, []);
-
-  // Same deal for the filter fold: folded is the saved state, never the default,
+  // The filter fold's saved state is applied after mount (deferred) so the SSR
+  // markup and first client render agree. Folded is the saved state, never the default,
   // so nobody meets this column with its filters already hidden.
   useEffect(() => {
     if (window.localStorage.getItem(RESOURCE_FILTERS_STORAGE_KEY) === "folded") {
@@ -710,8 +752,21 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       const currentMode = currentState.recipeBrowserResource
         ? currentState.recipeBrowserMode
         : browserMode;
-      const currentRefactorNodeId = currentState.recipeBrowserRefactorNodeId;
-      const anchorNodeId = currentResource?.anchorNodeId;
+      // A pick made while Welcome covers the board would land on whatever tab
+      // is hidden underneath it, unseen. It gets a fresh blank tab instead, so
+      // the card arrives on a board the player is actually looking at. Anchor
+      // and refactor targets are cards of the covered plan, so they are
+      // dropped along with it - on a blank board there is nothing to wire to
+      // or replace.
+      const welcomeCovered = readWelcomeTabState().active;
+      if (welcomeCovered) {
+        await useDesignStore.getState().addDesign();
+        leaveWelcomeTab();
+      }
+      const currentRefactorNodeId = welcomeCovered
+        ? undefined
+        : currentState.recipeBrowserRefactorNodeId;
+      const anchorNodeId = welcomeCovered ? undefined : currentResource?.anchorNodeId;
       const contextResource = getRecipeAddContextResource(
         currentResource,
         currentMode,
@@ -1180,21 +1235,6 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
                 </button>
               ) : null}
             </label>
-            {/* How the results are drawn, not which ones: it belongs with the box
-                they come out of rather than in the row of filters. */}
-            <button
-              type="button"
-              onClick={() => changeResourceView(resourceView === "list" ? "grid" : "list")}
-              title={resourceView === "list" ? "Switch to grid view" : "Switch to list view"}
-              aria-label={resourceView === "list" ? "Switch to grid view" : "Switch to list view"}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border border-neutral-700 bg-[#17191d] text-neutral-400 hover:text-neutral-200"
-            >
-              {resourceView === "list" ? (
-                <LayoutGrid className="h-4 w-4" />
-              ) : (
-                <List className="h-4 w-4" />
-              )}
-            </button>
             {/* Folds everything below it away. Six filters and two dropdowns are
                 worth their space when you are narrowing a search down and worth
                 none of it when you are not, which on a phone is most of a screen
@@ -1234,7 +1274,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           {/* Two rows of three rather than six across: the column has no room to
               print "Fluids" and "Plants" six abreast, and squeezing them was how
               the labels started clipping. Still one group with one answer on. */}
-          <div className={filtersOpen ? "mt-2 grid grid-cols-3 gap-1" : "hidden"}>
+          <div className={filtersOpen ? "mt-1 grid grid-cols-3 gap-1" : "hidden"}>
             {RESOURCE_FILTER_CHOICES.map((choice) => (
               <button
                 key={choice.mode}
@@ -1243,7 +1283,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
                 title={choice.title}
                 aria-pressed={resourceFilter === choice.mode}
                 className={[
-                  "h-7 min-w-0 truncate rounded-[4px] border text-xs font-medium",
+                  "h-6 min-w-0 truncate rounded-[4px] border text-[11px] font-medium",
                   resourceFilter === choice.mode
                     ? "border-cyan-500 bg-cyan-500/15 text-cyan-300"
                     : "border-neutral-700 bg-[#17191d] text-neutral-400 hover:text-neutral-200",
@@ -1254,13 +1294,13 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
             ))}
           </div>
 
-          <div className={filtersOpen ? "mt-2 grid grid-cols-2 gap-1.5" : "hidden"}>
+          <div className={filtersOpen ? "mt-1 grid grid-cols-2 gap-1" : "hidden"}>
             <select
               value={resourceMod}
               onChange={(event) => setResourceMod(event.target.value)}
               title="Filter by mod"
               aria-label="Filter by mod"
-              className="h-7 min-w-0 rounded-[4px] border border-neutral-700 bg-[#17191d] px-1.5 text-xs text-neutral-100 outline-none"
+              className="h-6 min-w-0 rounded-[4px] border border-neutral-700 bg-[#17191d] px-1.5 text-[11px] text-neutral-100 outline-none"
             >
               <option value="">All mods</option>
               {displayedMods.map((mod) => (
@@ -1274,8 +1314,9 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
               onChange={(event) => setResourceSort(event.target.value as ResourceSortMode)}
               title="Sort results"
               aria-label="Sort results"
-              className="h-7 min-w-0 rounded-[4px] border border-neutral-700 bg-[#17191d] px-1.5 text-xs text-neutral-100 outline-none"
+              className="h-6 min-w-0 rounded-[4px] border border-neutral-700 bg-[#17191d] px-1.5 text-[11px] text-neutral-100 outline-none"
             >
+              <option value="popular">Most popular</option>
               <option value="relevance">Best match</option>
               <option value="name">Name A–Z</option>
               <option value="mod">By mod</option>
@@ -1285,7 +1326,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
           </div>
         </ControlsCard>
 
-        <div className="min-h-0 flex-1 overflow-hidden p-3">
+        <div className="min-h-0 flex-1 overflow-hidden px-2 pb-1 pt-2">
           {!dataset && isDatasetLoading ? (
             <div className="rounded border border-dashed border-neutral-600 p-4 text-sm text-neutral-300">
               Loading recipe index...
@@ -1311,7 +1352,6 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
                       : undefined
               }
               activeResource={activeResource}
-              view={resourceView}
               onPageChange={setResourcePage}
               onPageSizeChange={setResourcePageSize}
               onBrowse={browseResource}
@@ -1384,11 +1424,10 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
 
 function useResourcePageSize(
   containerRef: RefObject<HTMLDivElement | null>,
-  view: ResourceViewMode,
   onPageSizeChange: (pageSize: number) => void,
 ) {
   const [pageSize, setPageSize] = useState(RESOURCE_DEFAULT_PAGE_SIZE);
-  const [gridColumns, setGridColumns] = useState(6);
+  const [gridColumns, setGridColumns] = useState(2);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1397,27 +1436,20 @@ function useResourcePageSize(
     }
 
     const updatePageSize = () => {
-      const availableHeight = Math.max(RESOURCE_ROW_HEIGHT, container.clientHeight);
-      const listHeight = Math.max(RESOURCE_ROW_HEIGHT, availableHeight - RESOURCE_PAGER_HEIGHT);
-      let nextPageSize: number;
-      let nextColumns = 6;
-      if (view === "grid") {
-        const width = Math.max(RESOURCE_GRID_CELL, container.clientWidth);
-        nextColumns = Math.max(
-          1,
-          Math.floor((width + RESOURCE_GRID_GAP) / (RESOURCE_GRID_CELL + RESOURCE_GRID_GAP)),
-        );
-        const rows = Math.max(
-          1,
-          Math.floor((listHeight + RESOURCE_GRID_GAP) / (RESOURCE_GRID_CELL + RESOURCE_GRID_GAP)),
-        );
-        nextPageSize = nextColumns * rows;
-      } else {
-        nextPageSize = Math.max(
-          1,
-          Math.floor((listHeight + RESOURCE_ROW_GAP) / (RESOURCE_ROW_HEIGHT + RESOURCE_ROW_GAP)),
-        );
-      }
+      const availableHeight = Math.max(RESOURCE_TILE_HEIGHT, container.clientHeight);
+      const listHeight = Math.max(RESOURCE_TILE_HEIGHT, availableHeight - RESOURCE_PAGER_HEIGHT);
+      const width = Math.max(RESOURCE_TILE_MIN_WIDTH, container.clientWidth);
+      const nextColumns = Math.max(
+        1,
+        Math.floor(
+          (width + RESOURCE_TILE_GAP) / (RESOURCE_TILE_MIN_WIDTH + RESOURCE_TILE_GAP),
+        ),
+      );
+      const rows = Math.max(
+        1,
+        Math.floor((listHeight + RESOURCE_TILE_GAP) / (RESOURCE_TILE_HEIGHT + RESOURCE_TILE_GAP)),
+      );
+      const nextPageSize = nextColumns * rows;
 
       setPageSize((current) => (current === nextPageSize ? current : nextPageSize));
       setGridColumns((current) => (current === nextColumns ? current : nextColumns));
@@ -1428,7 +1460,7 @@ function useResourcePageSize(
     const observer = new ResizeObserver(updatePageSize);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [containerRef, onPageSizeChange, view]);
+  }, [containerRef, onPageSizeChange]);
 
   return { pageSize, gridColumns };
 }
@@ -1639,12 +1671,12 @@ interface ResourceQueryCacheEntry {
  * The list itself is the store's browse history, which every panel on the board
  * already writes to - so an item opened from a card's slot lands here too.
  */
-const RECENT_STRIP_ROWS = 3;
-/** One row on a phone: the shelf was eating a third of a screen of results. */
+// One small row everywhere (Jack, 2026-08-31): the shelf is a shortcut, and
+// every pixel it holds is a pixel the results above it lose.
+const RECENT_STRIP_ROWS = 1;
 const RECENT_STRIP_ROWS_COMPACT = 1;
-/** And a smaller cell in that row, so the one row still holds a useful handful. */
-const RECENT_STRIP_CELL_COMPACT = 44;
-/** More than three rows of the widest column could ever show. */
+const RECENT_STRIP_CELL = 36;
+/** More than one row of the widest column could ever show. */
 const RECENT_STRIP_LIMIT = 24;
 
 function RecentResourceStrip({
@@ -1657,7 +1689,7 @@ function RecentResourceStrip({
   const activeResource = useFactoryStore((state) => state.recipeBrowserResource);
   const isCompact = useIsCompactViewport();
   const rows = isCompact ? RECENT_STRIP_ROWS_COMPACT : RECENT_STRIP_ROWS;
-  const cell = isCompact ? RECENT_STRIP_CELL_COMPACT : RESOURCE_GRID_CELL;
+  const cell = RECENT_STRIP_CELL;
   const recent = history.slice(0, RECENT_STRIP_LIMIT);
   const rowBrowse = useResourceBrowseMenu(onBrowse);
 
@@ -1669,26 +1701,22 @@ function RecentResourceStrip({
     // A card of its own, like the controls at the top of the column: bare, a shelf
     // of loose icons at the foot of a list of icons read as more of the list. The
     // bottom margin keeps it off the very edge of the window.
-    <div className="mx-2 mb-3 compact:mb-2 shrink-0 rounded-[6px] border border-neutral-700 bg-[#2a2d33] p-2 compact:p-1.5">
-      <div className="mb-1.5 compact:mb-1 flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+    <div className="mx-2 mb-1.5 shrink-0 rounded-[6px] border border-neutral-700 bg-[#2a2d33] p-1">
+      <div className="mb-0.5 flex items-center justify-between px-0.5">
+        <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-500">
           Recent
         </span>
         <button
           type="button"
           onClick={clearResourceHistory}
           title="Clear recent items"
-          className="text-[10px] font-medium text-neutral-500 hover:text-neutral-200"
+          className="text-[9px] font-medium text-neutral-600 hover:text-neutral-200"
         >
           Clear
         </button>
       </div>
-      {/* The same cells the grid view uses, so a recent item is as easy to hit and
-          as easy to recognise as one in the list above it. auto-fill picks the
-          column count from the width, and the height stops it at three rows.
-          A phone gets one row of smaller cells: three rows of 56px was a third of
-          the screen given to what you looked at last rather than what you are
-          looking for, and the cells past the first row were only ever clipped. */}
+      {/* auto-fill picks the column count from the width, and the height stops
+          it at one row: a shelf, not a second list. */}
       <div
         className="grid gap-1 overflow-hidden"
         style={{
@@ -1762,7 +1790,6 @@ function VirtualResourceResultList({
   error,
   emptyLabel,
   activeResource,
-  view,
   onPageChange,
   onPageSizeChange,
   onBrowse,
@@ -1775,13 +1802,12 @@ function VirtualResourceResultList({
   /** What "nothing here" means under the current filter. */
   emptyLabel?: string;
   activeResource?: IndexedResource;
-  view: ResourceViewMode;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   onBrowse: (resource: IndexedResource, mode: "recipes" | "uses") => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const { pageSize, gridColumns } = useResourcePageSize(containerRef, view, onPageSizeChange);
+  const { pageSize, gridColumns } = useResourcePageSize(containerRef, onPageSizeChange);
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const handlePreviousPage = useCallback(() => {
     onPageChange(Math.max(0, currentPage - 1));
@@ -1797,7 +1823,7 @@ function VirtualResourceResultList({
           {error}
         </div>
       ) : isLoading && resources.length === 0 ? (
-        <ResourceResultSkeleton view={view} pageSize={pageSize} gridColumns={gridColumns} />
+        <ResourceResultSkeleton pageSize={pageSize} gridColumns={gridColumns} />
       ) : resources.length === 0 ? (
         <div className="rounded border border-dashed border-neutral-600 p-4 text-sm text-neutral-300">
           {emptyLabel ?? "No matching resource."}
@@ -1806,7 +1832,6 @@ function VirtualResourceResultList({
         <ResourceResultPage
           resources={resources}
           activeResource={activeResource}
-          view={view}
           gridColumns={gridColumns}
           isRefreshing={isLoading}
           onBrowseResource={onBrowse}
@@ -1824,39 +1849,28 @@ function VirtualResourceResultList({
 
 /** Pulsing placeholders shaped like the results, instead of a text box. */
 function ResourceResultSkeleton({
-  view,
   pageSize,
   gridColumns,
 }: {
-  view: ResourceViewMode;
   pageSize: number;
   gridColumns: number;
 }) {
   const count = Math.max(3, Math.min(pageSize, 60));
-  if (view === "grid") {
-    return (
-      <div
-        className="grid min-h-0 flex-1 content-start gap-1 overflow-hidden"
-        style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}
-        aria-label="Loading resources"
-      >
-        {Array.from({ length: count }, (_, index) => (
-          <div
-            key={index}
-            className="aspect-square animate-pulse rounded-[4px] bg-neutral-800/70"
-          />
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-hidden" aria-label="Loading resources">
+    <div
+      className="grid min-h-0 flex-1 content-start gap-0.5 overflow-hidden"
+      style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}
+      aria-label="Loading resources"
+    >
       {Array.from({ length: count }, (_, index) => (
-        <div key={index} className="flex h-10 shrink-0 items-center gap-2.5 px-1.5">
-          <div className="h-8 w-8 animate-pulse rounded-[4px] bg-neutral-800/70" />
+        <div
+          key={index}
+          className="flex shrink-0 flex-col items-center gap-1 pt-1"
+          style={{ height: RESOURCE_TILE_HEIGHT }}
+        >
+          <div className="h-11 w-11 shrink-0 animate-pulse rounded-[4px] bg-neutral-800/70" />
           <div
-            className="h-3 animate-pulse rounded bg-neutral-800/70"
+            className="h-2.5 animate-pulse rounded bg-neutral-800/70"
             style={{ width: `${45 + ((index * 17) % 40)}%` }}
           />
         </div>
@@ -1877,25 +1891,25 @@ function ResourcePager({
   onNextPage: () => void;
 }) {
   return (
-    <div className="mt-1.5 flex h-8 w-full min-w-0 shrink-0 items-center gap-1">
+    <div className="mt-1 flex h-6 w-full min-w-0 shrink-0 items-center gap-1">
       <button
         type="button"
         onClick={onPreviousPage}
         disabled={currentPage === 0}
-        className="flex h-7 w-8 items-center justify-center rounded-[4px] border border-neutral-700 bg-[#17191d] text-neutral-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+        className="flex h-6 w-7 items-center justify-center rounded-[4px] border border-neutral-700 bg-[#17191d] text-neutral-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
         aria-label="Previous resource page"
         title="Previous page"
       >
         <ChevronLeft className="h-3.5 w-3.5" />
       </button>
-      <div className="min-w-0 flex-1 truncate text-center text-xs text-neutral-400">
+      <div className="min-w-0 flex-1 truncate text-center text-[11px] text-neutral-400">
         Page {Math.min(currentPage + 1, pageCount)} of {pageCount}
       </div>
       <button
         type="button"
         onClick={onNextPage}
         disabled={currentPage >= pageCount - 1}
-        className="flex h-7 w-8 items-center justify-center rounded-[4px] border border-neutral-700 bg-[#17191d] text-neutral-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+        className="flex h-6 w-7 items-center justify-center rounded-[4px] border border-neutral-700 bg-[#17191d] text-neutral-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
         aria-label="Next resource page"
         title="Next page"
       >
@@ -1971,14 +1985,12 @@ function useResourceBrowseMenu(
 function ResourceResultPage({
   resources,
   activeResource,
-  view,
   gridColumns,
   isRefreshing,
   onBrowseResource,
 }: {
   resources: IndexedResource[];
   activeResource?: IndexedResource;
-  view: ResourceViewMode;
   gridColumns: number;
   isRefreshing: boolean;
   onBrowseResource: (resource: IndexedResource, mode: "recipes" | "uses") => void;
@@ -1993,78 +2005,13 @@ function ResourceResultPage({
   );
   const rowBrowse = useResourceBrowseMenu(browse);
 
-  if (view === "grid") {
-    return (
-      <div
-        className={[
-          "grid min-h-0 flex-1 content-start gap-1 overflow-hidden",
-          isRefreshing ? "opacity-60" : "",
-        ].join(" ")}
-        style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}
-        aria-label="Resource results"
-        role="listbox"
-      >
-        {resources.map((resource) => {
-          const active =
-            activeResource?.kind === resource.kind && activeResource.id === resource.id;
-          return (
-            // A grid cell is art and nothing else, so the name and the line under
-            // it in list view are only ever a hover away. The icon's own tooltip
-            // is off: the nearest tooltip to the pointer wins, and this one knows
-            // more than the icon does.
-            <MinecraftTooltip
-              key={`${resource.kind}:${resource.id}`}
-              label={resourceTooltipLines(resource)}
-            >
-              <button
-                type="button"
-                onClick={(event) => {
-                  if (rowBrowse.claimedByMenu(event) || rowBrowse.openOnTap(event)) {
-                    return;
-                  }
-                  browse(resource, "recipes");
-                }}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  if (rowBrowse.claimedByMenu(event)) {
-                    return;
-                  }
-                  browse(resource, "uses");
-                }}
-                {...rowBrowse.pressProps(resource)}
-                aria-label={resourceLabel(resource)}
-                className={[
-                  "minecraft-pixel-art flex aspect-square items-center justify-center overflow-hidden rounded-[4px] border",
-                  active
-                    ? "border-cyan-400 bg-cyan-500/10"
-                    : "border-transparent hover:border-neutral-500 hover:bg-white/5",
-                ].join(" ")}
-                role="option"
-                aria-selected={active}
-              >
-                <ResourceIcon
-                  resource={{ ...resource, amount: 1 }}
-                  size="md"
-                  bare
-                  showAmount={false}
-                  tooltip={false}
-                  className={RESOURCE_GRID_ART}
-                />
-              </button>
-            </MinecraftTooltip>
-          );
-        })}
-        {rowBrowse.menu}
-      </div>
-    );
-  }
-
   return (
     <div
       className={[
-        "flex min-h-0 flex-1 flex-col justify-start gap-0.5 overflow-hidden",
+        "grid min-h-0 flex-1 content-start gap-0.5 overflow-hidden",
         isRefreshing ? "opacity-60" : "",
       ].join(" ")}
+      style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}
       aria-label="Resource results"
       role="listbox"
     >
@@ -2072,54 +2019,69 @@ function ResourceResultPage({
         const active = activeResource?.kind === resource.kind && activeResource.id === resource.id;
 
         return (
+          // No hover tooltip: the tile already says what it is, and a tooltip
+          // over every cell of a dense grid is a flicker, not a help.
           <button
-            key={`${resource.kind}:${resource.id}`}
-            type="button"
-            onClick={(event) => {
-              if (rowBrowse.claimedByMenu(event) || rowBrowse.openOnTap(event)) {
-                return;
-              }
-              browse(resource, "recipes");
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              if (rowBrowse.claimedByMenu(event)) {
-                return;
-              }
-              browse(resource, "uses");
-            }}
-            {...rowBrowse.pressProps(resource)}
-            title={resourceLabel(resource)}
-            className={[
-              "flex h-10 w-full shrink-0 items-center gap-2.5 overflow-hidden rounded-[4px] border px-1.5 text-left text-sm text-neutral-50",
-              active
-                ? "border-cyan-400 bg-cyan-500/10"
-                : "border-transparent hover:bg-white/5",
-            ].join(" ")}
-            role="option"
-            aria-selected={active}
-          >
-            <span className="minecraft-pixel-art flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden">
-              <ResourceIcon
-                resource={{ ...resource, amount: 1 }}
-                size="sm"
-                bare
-                showAmount={false}
-                tooltip={false}
-                // Zoom the art without growing the cell (see crop picker);
-                // the wrapper crops the overflow at the 32px cell.
-                className="!h-8 !w-8 scale-[1.5]"
-              />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate leading-tight [text-shadow:1px_1px_0_#000]">
-                {resourceLabel(resource)}
+              key={`${resource.kind}:${resource.id}`}
+              type="button"
+              onClick={(event) => {
+                if (rowBrowse.claimedByMenu(event) || rowBrowse.openOnTap(event)) {
+                  return;
+                }
+                browse(resource, "recipes");
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                if (rowBrowse.claimedByMenu(event)) {
+                  return;
+                }
+                browse(resource, "uses");
+              }}
+              {...rowBrowse.pressProps(resource)}
+              aria-label={resourceLabel(resource)}
+              className={[
+                "flex min-w-0 flex-col items-center overflow-hidden rounded-[4px] border px-0.5",
+                // The power tile's own whisper of amber; selection still wins.
+                !active && resource.id === POWER_EU_CLAUSE_ID ? "bg-amber-400/[0.07]" : "",
+                active
+                  ? "border-cyan-400 bg-cyan-500/10"
+                  : "border-transparent hover:border-neutral-600 hover:bg-white/5",
+              ].join(" ")}
+              style={{ height: RESOURCE_TILE_HEIGHT }}
+              role="option"
+              aria-selected={active}
+            >
+              <span className="minecraft-pixel-art flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden drop-shadow-[0_2px_3px_rgba(0,0,0,0.5)]">
+                {resource.id === POWER_EU_CLAUSE_ID ? (
+                  <span className="flex h-full w-full items-center justify-center bg-amber-400/10">
+                    <Zap className="h-5 w-5 fill-current text-amber-400" aria-hidden />
+                  </span>
+                ) : (
+                  <ResourceIcon
+                    resource={{ ...resource, amount: 1 }}
+                    size="sm"
+                    bare
+                    showAmount={false}
+                    tooltip={false}
+                    // Items zoom-crop (the sprite ships transparent padding);
+                    // fluids are measured to the same visual size as their
+                    // item neighbours instead of the usual 78% inset.
+                    iconPixelSize={
+                      resource.kind === "fluid"
+                        ? isSwatchFluid(resource)
+                          ? 56
+                          : spriteArtPixels(40)
+                        : undefined
+                    }
+                    className={
+                      resource.kind === "fluid" ? "!h-11 !w-11" : "!h-11 !w-11 scale-[1.5]"
+                    }
+                  />
+                )}
               </span>
-              <span className="block truncate text-[10px] leading-tight text-neutral-500">
-                {getResourceModLabel(resource)}
-                {resource.recipeCount > 0 ? ` · ${resource.recipeCount} recipes` : ""}
+              <span className="line-clamp-2 w-full break-words text-center text-[9px] leading-[10px] text-neutral-400">
+                {resource.id === POWER_EU_CLAUSE_ID ? "Power (EU/t)" : resourceLabel(resource)}
               </span>
-            </span>
           </button>
         );
       })}

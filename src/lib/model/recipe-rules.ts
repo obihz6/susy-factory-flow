@@ -17,6 +17,13 @@ export interface MachineConfigTierControl {
   minimum: MachineConfigTierOption;
   current: MachineConfigTierOption;
   tiers: MachineConfigTierOption[];
+  /**
+   * Position of `minimum` in the control's FULL ladder. `tiers` starts at the
+   * minimum, so formulas that read a tier's position on the whole ladder (4
+   * parallels per field restriction coil tier) add this to the index within
+   * `tiers`.
+   */
+  minimumIndex: number;
   resource: MachineConfigTierOption["resource"];
 }
 
@@ -164,6 +171,13 @@ export function applyMachineHandlerToRecipe(
   recipe: Recipe,
   node: Pick<FactoryNode, "machineHandlerId">,
 ): Recipe {
+  // Power cards (src/lib/power) bake their whole model into the synthesized
+  // recipe; no handler math may touch them. Without this, a generator named
+  // "... Steam Turbine" matched the steam-singleblock pattern and ran at
+  // bronze-machine half speed.
+  if (recipe.power) {
+    return recipe;
+  }
   const handlers = getRecipeMachineHandlers(recipe);
   const handler = handlers.find((entry) => entry.id === node.machineHandlerId) ?? handlers[0];
   const machineConfigControls = handler.machineConfigControls ?? recipe.machineConfigControls;
@@ -249,7 +263,10 @@ export function getRecipeMachineConfigTierControls(
   return controls
     .filter((control) => control.id !== "heatingCoil")
     .map((control) =>
-      resolveMachineConfigTierControl(control, node.machineConfigTiers?.[control.id]),
+      resolveMachineConfigTierControl(
+        applyControlRecipeMinimum(control, recipe),
+        node.machineConfigTiers?.[control.id],
+      ),
     )
     .filter((control): control is MachineConfigTierControl => Boolean(control));
 }
@@ -326,6 +343,27 @@ function findMachineConfigControl(
   return recipe.machineConfigControls?.find((control) => control.id === id);
 }
 
+/**
+ * A control whose minimum tier is the recipe's own special value: the recipe
+ * says which rung of the ladder it starts at (an NFR recipe's minimum field
+ * restriction coil), so the control's static `minimumKey` is replaced with
+ * that tier before resolution hides the rungs below it.
+ */
+function applyControlRecipeMinimum(
+  control: MachineConfigControl,
+  recipe: Pick<Recipe, "nei">,
+): MachineConfigControl {
+  if (!control.minimumFromSpecialValue) {
+    return control;
+  }
+  const specialValue = getRecipeSpecialValue(recipe);
+  if (specialValue === undefined || specialValue < 1) {
+    return control;
+  }
+  const minimum = control.tiers[Math.min(control.tiers.length, Math.floor(specialValue)) - 1];
+  return minimum ? { ...control, minimumKey: minimum.key } : control;
+}
+
 function resolveMachineConfigTierControl(
   control: MachineConfigControl,
   selectedKey: string | undefined,
@@ -335,8 +373,11 @@ function resolveMachineConfigTierControl(
     return undefined;
   }
 
-  const minimumIndex = control.tiers.findIndex((tier) => tier.key === minimum.key);
-  const tiers = control.tiers.slice(Math.max(0, minimumIndex));
+  const minimumIndex = Math.max(
+    0,
+    control.tiers.findIndex((tier) => tier.key === minimum.key),
+  );
+  const tiers = control.tiers.slice(minimumIndex);
   const selected = tiers.find((tier) => tier.key === selectedKey);
   const defaultTier = tiers.find((tier) => tier.key === control.defaultKey);
   const current = selected ?? defaultTier ?? minimum;
@@ -347,6 +388,7 @@ function resolveMachineConfigTierControl(
     minimum,
     current,
     tiers,
+    minimumIndex,
     resource: current.resource,
   };
 }

@@ -495,48 +495,10 @@ textarea {
   }
 }
 
-/*
- * Just landed. A card added to a plan of two hundred is indistinguishable from
- * the other hundred and ninety-nine, and on a phone it arrives behind whichever
- * drawer you added it from — so it says where it is, twice, and then stops.
- *
- * An outline and a filter on the wrapper: no layout, no repaint of the card's
- * contents, and nothing that could be confused with the board's own signals. The
- * amber glow means "this carries the resource you are pointing at" and cyan means
- * "this is selected" (which a new card also is); white belongs to neither.
- */
-.board-card-placed {
-  /* Half a second before the first pulse: the card has just appeared and the
-     panel that placed it is still sliding away, and a flash underneath all that
-     is one more thing happening at the same time. It waits until the eye is
-     free. Then four slow pulses, which reads as a beacon rather than a glitch. */
-  outline: 4px solid transparent;
-  outline-offset: 4px;
-  animation: board-card-placed 620ms ease-in-out 500ms 4;
-}
-
-/* Not just a frame. On a board of framed cards an outline alone is another frame;
-   the wash is what carries at a glance, the same trick the hovered-resource glow
-   uses. Opacity on one absolutely positioned layer, so the card's own contents
-   are never repainted. */
-.board-card-placed::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: #ffffff;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 3;
-  animation: board-card-placed-wash 620ms ease-in-out 500ms 4;
-}
-
-@keyframes board-card-placed {
-  50% {
-    outline-color: rgba(255, 255, 255, 0.95);
-    filter: brightness(1.28);
-  }
-}
+/* The white placed-flash beacon (four pulses, white outline and wash on a
+   fresh card) used to live here. Removed by request 2026-08-28: the landing
+   thump and the arrive pop carry the moment, and the flash read as noise on
+   a polished board. */
 
 /* The chip the recipe book leaves behind while a pressed plus button's recipe
    is still on the wire. The animation delay is the point: an add answered
@@ -550,19 +512,6 @@ textarea {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes board-card-placed-wash {
-  50% {
-    opacity: 0.26;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .board-card-placed,
-  .board-card-placed::after {
-    animation: none;
   }
 }
 
@@ -729,6 +678,120 @@ textarea {
 @keyframes board-card-arrive-pop {
   from {
     transform: scale(0.92);
+  }
+}
+
+/* The dev-menu build timelapse (board-timelapse.ts): every card and wire
+   MOUNTS on the beat it is revealed, so the arrival dress rides the board
+   class instead of a per-card one. Same split as the arrive pop above:
+   opacity on the wrapper (its transform is React Flow's positioning and
+   must not be animated), the scale-up on the card root inside it. Wires
+   fade in a touch slower, landing after the card they plug into. */
+.factory-flow-board--timelapse .react-flow__node {
+  animation: board-card-arrive var(--timelapse-pop, 260ms) cubic-bezier(0.25, 1, 0.5, 1)
+    backwards;
+}
+
+.factory-flow-board--timelapse .react-flow__node > * {
+  animation: board-card-arrive-pop calc(var(--timelapse-pop, 260ms) * 1.15)
+    cubic-bezier(0.3, 1.4, 0.5, 1) backwards;
+}
+
+/* PENDING: mounted so its wire can render and draw toward it, but held at
+   nothing until its pop beat. The release is a TRANSITION, not the mount
+   keyframe - the node mounted invisible beats ago - so dropping the class
+   fades and grows it over the same pop duration. */
+.factory-flow-board--timelapse .react-flow__node {
+  transition: opacity var(--timelapse-pop, 260ms) ease-out;
+}
+
+.factory-flow-board--timelapse .react-flow__node > * {
+  transition: scale var(--timelapse-pop, 260ms) cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+.factory-flow-board--timelapse .react-flow__node.timelapse-pending {
+  animation: none;
+  opacity: 0;
+}
+
+.factory-flow-board--timelapse .react-flow__node.timelapse-pending > * {
+  animation: none;
+  scale: 0.6;
+}
+
+/* A wire DRAWS itself from source to target when it mounts mid-show: a
+   long dash slid in by its offset, so the ink travels the route the way a
+   pen would. The dash length is a generous ceiling over real wire lengths
+   - shorter wires just finish their stroke early inside the same window.
+   The duration variable comes from the board (the dev menu's wire-draw
+   slider over the playback speed), and the beat scheduler waits the same
+   number, so the next thing happens after the ink is dry. Dashed channel
+   wires render solid for the run's duration; their pattern returns with
+   the class's exit. */
+.factory-flow-board--timelapse .react-flow__edge path.react-flow__edge-path {
+  /* Against pathLength=1 (set on exactly these BaseEdge paths during a
+     run), so the stroke covers ANY route exactly and every wire spends
+     the full duration drawing. The first cut used a big pixel dash
+     instead, and a short wire completed inside the first few percent of
+     the window - which read as no animation at all. Scoped to the
+     BaseEdge class: a unit dash on a path WITHOUT the normalized length
+     renders as one-pixel dots. */
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: timelapse-wire-draw var(--timelapse-wire-draw, 450ms)
+    cubic-bezier(0.3, 0.55, 0.4, 1) forwards;
+}
+
+@keyframes timelapse-wire-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* The demo-card tilt (board-tilt.ts): the whole canvas leans like a
+   product page showing off a card, with a slow breathing drift on the
+   inner renderer so it feels held rather than pinned. Angles ride CSS
+   variables from the board container, so the dev menu's sliders apply
+   live; the cover scale keeps the leaning plane's corners under the 2D
+   chrome (a rotated plane's projection shrinks toward the centre, and
+   the canvas edges peeked out from behind the toolbars without it).
+   Only the visual layer tilts - React Flow's own viewport transform
+   stays 2D, so the camera math never knows. The transition lives on the
+   base class so putting the tilt on and taking it off both ease; the
+   timelapse finale takes it off by dropping the class for the wide
+   reveal (the drift rides a separate element, so killing its animation
+   mid-swing costs at most a couple of degrees under a moving camera). */
+.factory-flow-board .react-flow {
+  transition: transform 1200ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.factory-flow-board--tilted {
+  perspective: 1600px;
+}
+
+.factory-flow-board--tilted .react-flow {
+  /* The breathe variables are the timelapse follower's: written straight
+     onto the board element per frame from the camera's velocity, additive
+     over the dev menu's base angles, never touched by React. The
+     transition above is what turns per-frame writes into a lean. */
+  transform: rotateX(
+      calc(var(--board-tilt-pitch, 7deg) + var(--board-tilt-breathe-pitch, 0deg))
+    )
+    rotateY(calc(var(--board-tilt-yaw, -3deg) + var(--board-tilt-breathe-yaw, 0deg)))
+    scale(var(--board-tilt-cover, 1.12));
+  transform-style: preserve-3d;
+}
+
+.factory-flow-board--tilted-drift .react-flow__renderer {
+  animation: timelapse-tilt-drift 9s ease-in-out infinite alternate;
+}
+
+@keyframes timelapse-tilt-drift {
+  from {
+    transform: rotateY(-2deg);
+  }
+  to {
+    transform: rotateY(2.5deg);
   }
 }
 
@@ -1067,6 +1130,49 @@ textarea {
 .minecraft-pixel-art * {
   image-rendering: crisp-edges;
   image-rendering: pixelated;
+}
+
+/*
+ * The item tiles' playing-card hover. The tile's pointermove handler writes
+ * the cursor's position into these vars directly on the element (no React
+ * involved), and the tile tilts a few degrees toward the cursor while a soft
+ * gleam follows it. Subtle on purpose: the tilt caps at ~5deg and the gleam
+ * is a faint white radial, not a shine sweep.
+ */
+/*
+ * ONE transform, on the tile: the art and the name grow together at the same
+ * rate and can never step on each other, and since the tile paints no box of
+ * its own, what the eye sees growing is just the item and its name.
+ */
+.resource-tile {
+  position: relative;
+  transform: perspective(340px) rotateX(var(--tile-rx, 0deg)) rotateY(var(--tile-ry, 0deg));
+  transition: transform 140ms ease-out;
+}
+.resource-tile:hover {
+  transform: perspective(340px) rotateX(var(--tile-rx, 0deg)) rotateY(var(--tile-ry, 0deg))
+    scale(1.45);
+  /* The grown tile spills over its neighbours; it goes over, not under. */
+  z-index: 10;
+}
+/*
+ * The shimmer is filters, not an overlay: sprites are mostly transparent, and
+ * a painted gradient lit up the empty pixels too. brightness() and
+ * drop-shadow() both respect the alpha channel, so the white glow hugs the
+ * item's actual silhouette.
+ */
+.resource-tile-art {
+  transition: filter 140ms ease-out;
+}
+.resource-tile:hover .resource-tile-art {
+  filter: brightness(1.22) drop-shadow(0 0 4px rgba(255, 255, 255, 0.35))
+    drop-shadow(0 5px 8px rgba(0, 0, 0, 0.6));
+}
+.resource-tile-name {
+  transition: color 140ms ease-out;
+}
+.resource-tile:hover .resource-tile-name {
+  color: #e5e5e5;
 }
 
 /*
@@ -2473,3 +2579,50 @@ img {
 }
 
 
+
+/* The connection line's SNAPPED state: white marching dots riding the green
+   pipe toward the slot it caught. Class-gated so reduced motion simply
+   leaves the dots parked. */
+@keyframes connection-march {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+.connection-march {
+  animation: connection-march 0.45s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .connection-march {
+    animation: none;
+  }
+}
+
+/* A wire whose pair is snapped by the CURRENT drag - releasing would toggle
+   it away. Dashed, red, breathing: "this is what gets deleted". Applied
+   imperatively to the one edge element by the snap loop. */
+@keyframes edge-doomed-flash {
+  from {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px #ef4444) drop-shadow(0 0 10px rgba(239, 68, 68, 0.8));
+  }
+  to {
+    opacity: 0.3;
+    filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.5));
+  }
+}
+.edge-doomed path {
+  stroke: #ff5555 !important;
+  stroke-width: 7px !important;
+  stroke-dasharray: 10 8 !important;
+  stroke-linecap: round;
+}
+.edge-doomed {
+  animation: edge-doomed-flash 0.35s linear infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .edge-doomed {
+    animation: none;
+    opacity: 0.8;
+    filter: drop-shadow(0 0 5px #ef4444);
+  }
+}

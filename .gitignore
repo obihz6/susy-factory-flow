@@ -49,6 +49,8 @@ dev-server*.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+public/highs.wasm
+public/highs.js
 
 # susy-factory-flow working area (never committed)
 /temp/

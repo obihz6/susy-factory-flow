@@ -3,7 +3,8 @@ import { makeResourceKey } from "@/lib/model/resources";
 import { getStorageRoles } from "@/lib/model/storage-role";
 import { collectTrashNodeIds } from "@/lib/model/trash";
 import { getCompatibleOutputFlow, getEdgeTargetDemandKey } from "./equilibrium";
-import { solveLp, type LinearProgram, type LpSolution } from "./simplex";
+import { type LinearProgram, type LpSolution } from "./simplex";
+import { solveLpAuto } from "./lp-engine";
 
 /**
  * The board's steady state as equations, solved directly: the BOOKS half of
@@ -94,7 +95,9 @@ export interface EquationsDiagnosis {
 export function solveEquationsCore(
   project: FactoryProject,
   nodes: Record<string, NodeThroughputResult>,
-  solve: (lp: LinearProgram) => LpSolution = solveLp,
+  // solveLpAuto is the engine switchboard: HiGHS where initLpEngine has run
+  // (the solve worker), the homegrown simplex everywhere else.
+  solve: (lp: LinearProgram) => LpSolution = solveLpAuto,
   diagnosis?: EquationsDiagnosis,
   options?: EquationsCoreOptions,
 ): EquationsCoreResult {
@@ -281,6 +284,14 @@ export function solveEquationsCore(
     }
     for (const rows of [inputRows, outputRows]) {
       for (const [key, port] of rows) {
+        // POWER is the one output the closed-plan rule waives: EU that goes
+        // nowhere just dissipates (in game an unwired generator still runs
+        // and the energy is simply not banked), so a bare EU port neither
+        // pins its generator nor needs a row. Wired, it is an ordinary
+        // port: the row below is what gives the wire its flow.
+        if (rows === outputRows && port.vars.length === 0 && key.startsWith("power:")) {
+          continue;
+        }
         if (port.vars.length === 0) {
           pinnedZero.add(id);
         }

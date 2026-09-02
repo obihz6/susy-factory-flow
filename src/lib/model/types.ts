@@ -5,7 +5,12 @@ export type ItemId = string;
 export type FluidId = string;
 export type AspectId = string;
 export type ResourceId = ItemId | FluidId | AspectId;
-export type ResourceKind = "item" | "fluid" | "aspect";
+/**
+ * `power` is EU as a resource: one canonical id (`eu`), produced by
+ * generator cards' synthesized recipes and consumed by nothing - drawers
+ * only. Its flows are per-second like every flow; display is always EU/t.
+ */
+export type ResourceKind = "item" | "fluid" | "aspect" | "power";
 export type ResourceKey = `${ResourceKind}:${string}`;
 
 export interface ResourceIconAtlasRef {
@@ -198,6 +203,13 @@ export interface MachineConfigControl {
   label: string;
   minimumKey: string;
   defaultKey?: string;
+  /**
+   * The recipe's own special value is a 1-based minimum tier on this ladder
+   * (the Naquadah Fuel Refinery's field restriction coils), so `minimumKey`
+   * is overridden per recipe to `tiers[specialValue - 1]`. Declared by
+   * curated machine-table controls only; the dataset never emits it.
+   */
+  minimumFromSpecialValue?: boolean;
   tiers: MachineConfigTierOption[];
 }
 
@@ -227,6 +239,17 @@ export interface Recipe {
   machineProfile?: MachineProfile;
   machineHandlers?: MachineHandler[];
   machineConfigControls?: MachineConfigControl[];
+  /**
+   * Power cards only (src/lib/power): the generator this synthesized recipe
+   * was built from and its net EU/t at the baked settings. Presence of this
+   * field is what marks a recipe as a power card.
+   */
+  power?: {
+    sourceId: string;
+    euPerTick: number;
+    stats: Array<{ label: string; value: string }>;
+    warnings?: string[];
+  };
   runtimeCalculation?: RuntimeCalculation;
   isDemo?: boolean;
   source?: {
@@ -319,6 +342,12 @@ export interface FactoryNode {
   /** Settings panel folded shut. A view choice, kept so it survives a reload. */
   settingsCollapsed?: boolean;
   recipeInputOverrides?: Record<string, RecipeInput>;
+  /**
+   * Solve mode's pin: run EXACTLY this many machines, and solve the rest of
+   * the line around it ("I want 20 LGTs; what feeds them"). Absent means the
+   * count is the solver's to choose. Ignored in plan mode.
+   */
+  solvePin?: number;
   targetOutput?: TargetRate;
   enabled: boolean;
   /** The pocket dimension this card lives in; absent = the root board. */
@@ -363,6 +392,13 @@ export interface FactoryStorage {
   resourceId: ResourceId;
   /** Drains only; absent means `product`. See StorageDrainMode. */
   drainMode?: StorageDrainMode;
+  /**
+   * Solve mode's question, typed on a PRODUCT drawer: make at least this much
+   * per second. Ignored in plan mode and on other drawer roles; a product with
+   * no number is unconstrained (byproduct-shaped) so flipping the mode never
+   * errors a board.
+   */
+  targetPerSecond?: number;
   /** Buffers only; absent means `overflow`. See StorageBufferMode. */
   bufferMode?: StorageBufferMode;
   colorTag?: FactoryNodeColorTag;
@@ -597,7 +633,7 @@ export interface PlanViewState {
   /** Historical: older plans carry it, nothing applies it. The smart view is
    * personal, and opening a setup always starts on the identity view. */
   glanceMode?: string;
-  rateUnit?: "tick" | "second" | "minute" | "hour";
+  rateUnit?: "tick" | "second" | "minute" | "hour" | "eu";
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
   showHiddenResources?: boolean;
@@ -652,6 +688,15 @@ export interface FactoryProject {
   targetRate?: TargetRate;
   /** How the board treats what it cannot feed or shift. See SetupRules. */
   setupRules?: SetupRules;
+  /**
+   * SOLVE MODE: machine counts become the answer instead of the question.
+   * Product drawers' typed amounts (`FactoryStorage.targetPerSecond`) are the
+   * constraints, and every card reports the fractional machine count the
+   * targets require (`theoreticalMachinesRequired`) in place of usage and
+   * verdicts. Part of the plan JSON so a shared setup opens in the mode it
+   * was authored in.
+   */
+  solveMode?: boolean;
   /**
    * LEGACY sketch mode, read on load and rewritten as both board rules.
    * Plans saved before the rules existed still carry it; nothing writes it.
@@ -796,6 +841,10 @@ export interface StorageThroughputResult {
   consumedPerSecond: number;
   netPerSecond: number;
   status: "filling" | "draining" | "balanced" | "empty";
+  /** Solve mode: the typed requirement this drawer carried into the solve. */
+  targetPerSecond?: number;
+  /** Solve mode: no chain can reach the typed amount at any machine scale. */
+  targetUnreachable?: boolean;
 }
 
 export interface ResourceBalance {
@@ -861,4 +910,10 @@ export interface ThroughputResult {
   externalInputs: ResourceBalance[];
   unconsumedOutputs: ResourceBalance[];
   generatedAt: string;
+  /**
+   * These books do not describe the current plan yet: a big board's solve
+   * runs off the main thread and the real result replaces them when it
+   * lands. See `src/store/solve-books.ts`.
+   */
+  stale?: boolean;
 }

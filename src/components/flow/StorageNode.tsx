@@ -1,8 +1,8 @@
 "use client";
 
 import { Handle, Position, useStoreApi, type Node, type NodeProps } from "@xyflow/react";
-import { memo, type CSSProperties, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowLeftRight } from "lucide-react";
+import { memo, useState, type CSSProperties, type ReactNode } from "react";
+import { ArrowDownToLine, ArrowLeftRight, Pencil } from "lucide-react";
 import type {
   FactoryStorage,
   StorageDrainMode,
@@ -10,7 +10,12 @@ import type {
 } from "@/lib/model/types";
 import { formatCompact, makeResourceKey, trimTrailingDecimalZeros } from "@/lib/model";
 import { isDrainRole, type StorageRole } from "@/lib/model/storage-role";
-import { rateUnitMultiplier, rateUnitPrecisionScale, rateUnitSuffix } from "@/lib/model/rate-unit";
+import {
+  rateMultiplierForKind,
+  rateSuffixForKind,
+  rateUnitMultiplier,
+  rateUnitPrecisionScale,
+} from "@/lib/model/rate-unit";
 import { FLUID_ICON_SCALE, fluidArtPixels, ResourceIcon } from "@/components/nei/ResourceIcon";
 import { NodeGlanceIcon } from "./NodeGlance";
 import { isWiringConnection } from "./connection-drag";
@@ -20,9 +25,11 @@ import { useBoardView } from "./board-view";
 import { MotionNumberText } from "./board-motion";
 import { formatSlotRate } from "./flow-explainers";
 import { makeResourceHandleId } from "./resource-handles";
+import { useRenderedHandles } from "./use-rendered-handles";
 import { canonicalizeResourceHandleId } from "@/lib/model/edge-identity";
 import { GT_NODE_COLORS } from "./node-colors";
 import { getPaintBrushCursor } from "./paint-cursor";
+import { hasAnySolveNumbers } from "@/lib/solver/throughput";
 
 /**
  * The flow neighbourhood a drawer hover lights up: every wire ON this drawer,
@@ -131,6 +138,24 @@ const STRICT_BUFFER_LINE = "Passes on what is pulled. Extra backs up the machine
  * that buffers are; idle is dimmer still - a drawer mid-drag has nothing to
  * announce.
  */
+/**
+ * POWER drawers wear their own tint whatever the role: EU is not a material
+ * and its tile must not read as one more green product. A somber burnt
+ * amber - vibrant but deliberately NOT the bright wire amber, so the tile
+ * is ground and the lightning stays the light. Paint still wins.
+ */
+const POWER_STORAGE_TINT = "#c07c17";
+
+function storageTint(storage: Pick<FactoryStorage, "kind" | "colorTag">, role: StorageRole): string {
+  if (storage.colorTag) {
+    return GT_NODE_COLORS[storage.colorTag].swatch;
+  }
+  if (storage.kind === "power") {
+    return POWER_STORAGE_TINT;
+  }
+  return ROLE_TINTS[role];
+}
+
 const ROLE_TINTS: Record<StorageRole, string> = {
   source: "#ef4444",
   product: "#10b981",
@@ -262,6 +287,7 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
         ? "source"
         : "idle";
   });
+  const solveMode = useFactoryStore((state) => state.project.solveMode === true);
   const resourceKey = makeResourceKey(storage.kind, storage.resourceId);
   // Lit when a hovered port/label/drawer pulls this buffer into its flow scope.
   const isFlowScopeLit = useFactoryStore((state) =>
@@ -306,9 +332,7 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
   // plumbing. The item's own colour lives in its icon; painting the frame
   // with it too said the same thing twice and left the four jobs looking
   // alike. Paint (colorTag) still wins when the player chose one.
-  const tint =
-    (storage.colorTag ? GT_NODE_COLORS[storage.colorTag].swatch : undefined) ??
-    ROLE_TINTS[role];
+  const tint = storageTint(storage, role);
   const borderColor = `color-mix(in srgb, ${tint} 55%, #262b34)`;
   const inputHandleId = makeResourceHandleId("input", {
     kind: storage.kind,
@@ -318,6 +342,11 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
     kind: storage.kind,
     id: storage.resourceId,
   });
+  // A drawer's handles are named after its resource, and a power card's fuel
+  // switch can RETARGET the drawer (setPowerSetting): without a re-measure,
+  // React Flow keeps the old handle bounds and silently drops the rewired
+  // edge from the screen until the next reload.
+  useRenderedHandles(storage.id, [inputHandleId, outputHandleId]);
 
   return (
     <div
@@ -569,10 +598,77 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
                 className="!h-[36px] !w-[36px]"
               />
             </div>
-            <NetLine net={net} kind={storage.kind} role={role} />
+            {solveMode && role === "product" ? (
+              <TargetLine storage={storage} result={result} />
+            ) : (
+              <NetLine net={net} kind={storage.kind} role={role} />
+            )}
           </div>
         </div>
         </MinecraftTooltip>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The tile's LOOK alone - silhouette, role tint, header, icon, net line -
+ * for anything that must show a drawer that is not (yet) a node: the
+ * void-drop ghost previews the exact drawer a release would spawn with it.
+ * Built from the same parts as the real card (StorageHeader, NetLine,
+ * ResourceIcon, the storage-shape layers), so the preview can never drift
+ * from the thing it predicts. No handles, no glance, no tooltip, no washes:
+ * those belong to the node.
+ */
+export function StorageTileFace({
+  storage,
+  role,
+  net = 0,
+}: {
+  storage: FactoryStorage;
+  role: StorageRole;
+  net?: number;
+}) {
+  const isTank = storage.kind === "fluid";
+  const isPlainFluid = isTank && !storage.iconPath && !storage.iconAtlas;
+  const tint = storageTint(storage, role);
+  const borderColor = `color-mix(in srgb, ${tint} 55%, #262b34)`;
+  return (
+    <div className="storage-node-card relative flex h-[80px] w-[100px] flex-col p-1 text-[#e8e9ee]">
+      <span
+        aria-hidden
+        data-storage-shape={role}
+        className="storage-shape pointer-events-none absolute inset-0"
+        style={{ background: borderColor }}
+      >
+        <span
+          className="storage-shape-fill absolute inset-[2px]"
+          style={{
+            background: `color-mix(in srgb, ${tint} 24%, #101318)`,
+            boxShadow: "inset 2px 2px 0 rgba(255,255,255,0.08), inset -2px -2px 0 rgba(0,0,0,0.45)",
+          }}
+        />
+      </span>
+      <div
+        data-storage-shape={role}
+        className="storage-shape-content relative z-10 flex min-h-0 flex-1 flex-col"
+      >
+        <StorageHeader storage={storage} isTank={isTank} tint={tint} role={role} />
+        <div className="relative mx-auto flex min-h-0 w-full flex-1 flex-col">
+          <div className="grid min-h-0 w-full flex-1 place-items-center">
+            <ResourceIcon
+              resource={{ ...storage, id: storage.resourceId, amount: 1 }}
+              showAmount={false}
+              bare
+              iconPixelSize={storageIconPixelSize(
+                isPlainFluid ? CARD_ICON_PX - FLUID_BREATHE_PX : CARD_ICON_PX,
+                storage,
+              )}
+              className="!h-[36px] !w-[36px]"
+            />
+          </div>
+          <NetLine net={net} kind={storage.kind} role={role} />
+        </div>
       </div>
     </div>
   );
@@ -658,6 +754,184 @@ function NetLine({ net, kind, role }: { net: number; kind: string; role: Storage
   );
 }
 
+/**
+ * "2.5k" is a number: metric shorthand for the rate field, k / m / g for
+ * thousand, million, billion, either case, spaces and commas forgiven.
+ * Anything else is not a number and the caller falls back rather than guess.
+ */
+/** The mirror: a committed value is SHOWN in the same shorthand it was
+ * typed in - 10000 reads back as 10k, never expanded under your cursor. */
+function formatAmountWithSuffix(value: number): string {
+  if (value >= 1e9) {
+    return `${trimTrailingDecimalZeros((value / 1e9).toFixed(2))}g`;
+  }
+  if (value >= 1e6) {
+    return `${trimTrailingDecimalZeros((value / 1e6).toFixed(2))}m`;
+  }
+  if (value >= 1e3) {
+    return `${trimTrailingDecimalZeros((value / 1e3).toFixed(2))}k`;
+  }
+  return trimTrailingDecimalZeros(value.toFixed(4));
+}
+
+function parseAmountWithSuffix(text: string): number | undefined {
+  const match = text
+    .trim()
+    .toLowerCase()
+    .replace(/,/g, "")
+    .match(/^([0-9]*\.?[0-9]+)\s*([kmg]?)$/);
+  if (!match) {
+    return undefined;
+  }
+  const multiplier = match[2] === "k" ? 1e3 : match[2] === "m" ? 1e6 : match[2] === "g" ? 1e9 : 1;
+  return Number.parseFloat(match[1]!) * multiplier;
+}
+
+/**
+ * Solve mode's question, asked on the tile itself: how much should this
+ * product make per second. The number typed here is the constraint the whole
+ * solve answers; empty means "whatever falls out" (the drawer behaves like a
+ * byproduct until a number lands). Red when no chain can reach the number at
+ * any machine scale.
+ */
+function TargetLine({
+  storage,
+  result,
+}: {
+  storage: FactoryStorage;
+  result: StorageThroughputResult | undefined;
+}) {
+  const setStorageTarget = useFactoryStore((state) => state.setStorageTarget);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const target = storage.targetPerSecond;
+  const unreachable = result?.targetUnreachable === true;
+  // While the solver has NOTHING to solve for - no amount, no pin, anywhere -
+  // every empty rate line blinks the ask, in step with the board's notice.
+  const askBlink = useFactoryStore((state) => !hasAnySolveNumbers(state.project));
+  const beginEdit = () => {
+    setDraft(
+      target !== undefined && target > 0
+        ? formatAmountWithSuffix(target * rateMultiplierForKind(storage.kind))
+        : "",
+    );
+    setEditing(true);
+  };
+  // Typed figures are read in the BOARD'S rate unit and stored per second,
+  // converted at the edges, so the number always matches the board around it.
+  const commit = () => {
+    setEditing(false);
+    if (draft.trim() === "") {
+      setStorageTarget(storage.id, undefined);
+      return;
+    }
+    const value = parseAmountWithSuffix(draft);
+    if (value === undefined || !Number.isFinite(value) || value <= 0) {
+      // Not a number: the field falls back to what it held.
+      return;
+    }
+    setStorageTarget(storage.id, value / rateMultiplierForKind(storage.kind));
+  };
+
+  if (!editing) {
+    return (
+      // The resting face IS the net line - the same component every other
+      // tile draws, wrapped only to be clickable (z-40, over the wire
+      // handles that blanket the well at z-30). Unreachable overrides the
+      // line's own green with red from outside.
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(event) => {
+          event.stopPropagation();
+          beginEdit();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            beginEdit();
+          }
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        title={
+          unreachable
+            ? "No chain on the board can make this much at any machine count. Click to change it."
+            : "Make at least this much. Click to type an amount; shorthand like 2.5k works."
+        }
+        aria-label="Required amount"
+        className={[
+          "nodrag group/target relative z-40 flex cursor-pointer justify-center hover:brightness-125",
+          unreachable ? "[&_div]:!text-[#ff9191]" : "",
+        ].join(" ")}
+      >
+        {/* Two marks say "this line takes typing", both attached to the
+            NUMBER rather than parked at the tile's edge: a dotted
+            underline in the value's own colour - the editable-value
+            idiom - and a pencil riding the text's right shoulder. */}
+        {/* Nudged up a couple of pixels so the dotted underline clears the
+            tile's bottom edge instead of merging with it. */}
+        <div className="relative -translate-y-[2px] underline decoration-dotted decoration-[1.5px] underline-offset-[3px]">
+          {target !== undefined && target > 0 ? (
+            <NetLine net={target} kind={storage.kind} role="product" />
+          ) : (
+            <div
+              className={[
+                "storage-net-line relative h-4 whitespace-nowrap text-center text-[12px] font-bold leading-4 tabular-nums",
+                askBlink ? "animate-pulse text-[#a8afbb]" : "text-[#6b7280]",
+              ].join(" ")}
+            >
+              rate?
+            </div>
+          )}
+          <Pencil
+            aria-hidden
+            // Centred on the ink-and-underline block, not the line's box:
+            // the glyphs sit low in it, so dead-centre floated the pencil.
+            className="absolute left-full top-[calc(50%+2px)] ml-[2px] h-[11px] w-[11px] -translate-y-1/2 fill-current text-[#a8afbb] group-hover/target:text-white"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="storage-net-line relative z-40 flex h-4 items-center justify-center whitespace-nowrap text-center leading-none">
+      <input
+        autoFocus
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+          if (event.key === "Escape") {
+            setEditing(false);
+          }
+          event.stopPropagation();
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onTouchStart={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        inputMode="decimal"
+        placeholder="rate"
+        aria-label="Required amount"
+        className={[
+          "nodrag h-4 w-[60px] border px-[3px] text-center text-[9px] font-bold tabular-nums outline-none",
+          "bg-[#14171d] shadow-[inset_1px_1px_0_rgba(255,255,255,0.08),inset_-1px_-1px_0_rgba(0,0,0,0.5)]",
+          "placeholder:font-normal placeholder:text-[#6b7280]",
+          "focus:bg-[#1a1e26] focus:ring-1 focus:ring-cyan-400",
+          "border-[#3a4150] text-[#e8e9ee] focus:border-cyan-700",
+        ].join(" ")}
+      />
+    </div>
+  );
+}
+
 function StorageHeader({
   storage,
   isTank,
@@ -717,7 +991,9 @@ function StorageHeader({
       >
         {word}
       </div>
-      {isDrainRole(role) ? <DrainModeSwap storageId={storageId} role={role} /> : null}
+      {isDrainRole(role) ? (
+        <DrainModeSwap storageId={storageId} role={role} kind={storage.kind} />
+      ) : null}
       {role === "buffer" ? <BufferModeSwap storageId={storageId} strict={strict} /> : null}
     </div>
   );
@@ -762,12 +1038,28 @@ function BufferModeSwap({ storageId, strict }: { storageId: string; strict: bool
  * A three-way cycle since 2026-08-23: product, byproduct, trash. The trash
  * step is what replaced the toolbar's separate trash can node.
  */
-function DrainModeSwap({ storageId, role }: { storageId: string; role: StorageRole }) {
+function DrainModeSwap({
+  storageId,
+  role,
+  kind,
+}: {
+  storageId: string;
+  role: StorageRole;
+  kind: FactoryStorage["kind"];
+}) {
   const setStorageDrainMode = useFactoryStore((state) => state.setStorageDrainMode);
   // Always the cycle arrows: the button is the CONTROL, and the tile's word
   // and silhouette already say which state it is in.
+  // POWER cannot be trashed - there is no bin for electricity - so its
+  // cycle is two states: product and byproduct.
   const next: StorageDrainMode =
-    role === "product" ? "byproduct" : role === "byproduct" ? "trash" : "product";
+    role === "product"
+      ? "byproduct"
+      : role === "byproduct"
+        ? kind === "power"
+          ? "product"
+          : "trash"
+        : "product";
 
   return (
     <button
@@ -780,7 +1072,9 @@ function DrainModeSwap({ storageId, role }: { storageId: string; role: StorageRo
         role === "product"
           ? "Product: pulls the machine flat out. Click to make it a byproduct."
           : role === "byproduct"
-            ? "Byproduct: catches what is left over. Click to make it a trash bin."
+            ? kind === "power"
+              ? "Byproduct: catches what is left over. Click to make it a product."
+              : "Byproduct: catches what is left over. Click to make it a trash bin."
             : "Trash: voids what arrives. Click to make it a product."
       }
       aria-label={`Switch to ${next}`}
@@ -870,14 +1164,15 @@ function storageMatchesSearch(storage: FactoryStorage, query: string) {
 }
 
 function formatCompactRate(value: number, kind: string): string {
-  const scaled = value * rateUnitMultiplier();
-  const unit = rateUnitSuffix(kind === "fluid").trimStart();
+  const scaled = value * rateMultiplierForKind(kind);
+  const unit = rateSuffixForKind(kind).trimStart();
   const abs = Math.abs(scaled);
 
   // The floor is written per second and scaled with the unit, so "balanced"
   // still reads as a flat 0 while a real trickle keeps its digits per tick.
+  const spaced = unit.startsWith("L") || unit.startsWith("EU") || unit.startsWith("A ");
   if (!Number.isFinite(scaled) || abs < 0.005 * rateUnitPrecisionScale()) {
-    return `0${unit.startsWith("L") ? ` ${unit}` : unit}`;
+    return `0${spaced ? ` ${unit}` : unit}`;
   }
   const body =
     abs >= 1_000_000
@@ -890,7 +1185,7 @@ function formatCompactRate(value: number, kind: string): string {
           abs >= 1
           ? trimFlow(scaled)
           : formatCompact(scaled);
-  return unit.startsWith("L") ? `${body} ${unit}` : `${body}${unit}`;
+  return spaced ? `${body} ${unit}` : `${body}${unit}`;
 }
 
 function trimFlow(value: number) {

@@ -1,4 +1,4 @@
-import type { FactoryProject } from "@/lib/model/types";
+import type { EntryIcon, FactoryProject } from "@/lib/model/types";
 
 /** Tab-strip metadata: everything needed to draw the tabs without loading plans. */
 export interface DesignSummary {
@@ -6,6 +6,17 @@ export interface DesignSummary {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Hand-picked place in the strip, stamped by drag-reordering. Absent until
+   * the first reorder; designs without one sort after those with one, so a
+   * fresh tab lands at the end either way.
+   */
+  order?: number;
+  /**
+   * The plan's own one-item face, copied out so the strip can draw it without
+   * loading plans. Kept in step wherever the record is written.
+   */
+  icon?: EntryIcon;
 }
 
 /** A saved design: its metadata plus the plan itself. */
@@ -112,16 +123,52 @@ export function updateDesignProject(
 }
 
 /**
- * Tab order is creation order, oldest first.
+ * Tab order is the hand-picked `order` where one has been stamped, and
+ * creation order (oldest first) everywhere else.
  *
  * Ordering by recency would reshuffle the strip under the pointer every time a
- * plan is edited, so tabs would never be where they were a moment ago.
+ * plan is edited, so tabs would never be where they were a moment ago. A tab
+ * without an `order` sorts after every tab with one, which puts new designs at
+ * the end of a strip that has been rearranged.
  */
 export function sortDesigns<T extends DesignSummary>(records: T[]): T[] {
   return [...records].sort((left, right) => {
+    const byOrder =
+      (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
+    if (byOrder !== 0) {
+      return byOrder;
+    }
     const byCreated = left.createdAt.localeCompare(right.createdAt);
     return byCreated !== 0 ? byCreated : left.id.localeCompare(right.id);
   });
+}
+
+/**
+ * Restamps every summary's `order` to match `orderedIds`.
+ *
+ * Ids the strip does not know are ignored; summaries the id list misses keep
+ * their relative place after the ordered ones, so a design created mid-drag by
+ * another tab of the app is appended rather than lost.
+ */
+export function stampDesignOrder<T extends DesignSummary>(
+  summaries: T[],
+  orderedIds: string[],
+): T[] {
+  const byId = new Map(summaries.map((summary) => [summary.id, summary]));
+  const ordered: T[] = [];
+  for (const id of orderedIds) {
+    const summary = byId.get(id);
+    if (summary) {
+      ordered.push(summary);
+      byId.delete(id);
+    }
+  }
+  for (const summary of summaries) {
+    if (byId.has(summary.id)) {
+      ordered.push(summary);
+    }
+  }
+  return ordered.map((summary, index) => ({ ...summary, order: index }));
 }
 
 export function toDesignSummary(record: DesignRecord): DesignSummary {
@@ -130,6 +177,8 @@ export function toDesignSummary(record: DesignRecord): DesignSummary {
     name: record.name,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    order: record.order,
+    icon: record.project.icon,
   };
 }
 

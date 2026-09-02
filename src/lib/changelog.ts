@@ -73,6 +73,334 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.51.0",
+    date: "2026-09-02",
+    headline: "See what each item costs in EU, and big boards stop freezing",
+    notes: [
+      "The rate key and the recipe search have a gold EU setting: every output reads the EU it cost to make, per item or per litre.",
+      "In that setting the Outputs list reads what the whole board spent per unit of each product.",
+      "Wires on a large board reroute many times faster and in the background, so dragging never waits for them.",
+      "Hold Shift or the Windows key to pause the moving wires for a screenshot.",
+    ],
+  },
+  {
+    version: "2.50.1",
+    date: "2026-09-01",
+    headline: "The board toolbars stop crossing on narrow boards",
+    notes: [
+      "When the board is too narrow for both toolbar rows, the paint tools fold into one brush button.",
+      "Narrower still, the build tools fold into a hammer button too.",
+      "On the narrowest boards the brush button holds the whole right side.",
+      "Each set unfolds on the line below, so nothing sits on top of anything else.",
+    ],
+  },
+  {
+    version: "2.50.0",
+    date: "2026-09-01",
+    headline: "Farm numbers, checked against the community calculator",
+    notes: [
+      "A sprout button on the toolbar drops a crop farm card.",
+      "A Formulas strip on crop cards derives every number down to the output per second.",
+      "A farm bills its full power even when its last seed bed is not full.",
+      "The biome option knows partial humidity, and a Fertilizer knob says whether the farm is fed.",
+    ],
+  },
+  {
+    version: "2.49.0",
+    date: "2026-09-01",
+    headline: "The Industrial Farm learns its real rules",
+    notes: [
+      "A farm only fits as many upgrade units as its seed bed tier allows, and the card will not let you add more.",
+      "Crop cards show their harvester's tier top right, its power draw at the bottom, and the farm's own structure in a picture window.",
+      "The crop picker is an icon grid sorted by tier, and farm-only crops gray out where a Crop Manager would get nothing.",
+      "The By Hand option is gone: every crop card runs on a Crop Manager or an Industrial Farm.",
+    ],
+  },
+  {
+    version: "2.48.0",
+    date: "2026-09-01",
+    headline: "Eight more ways to make power",
+    notes: [
+      "The Vacuum Reactor joins the reactors, with the wiki's eight tested rod designs.",
+      "Every small boiler makes steam now: coal, lava, solar and the GT++ Advanced Boilers.",
+      "The RTG turns radioisotope pellets into steady EU for days at a time.",
+      "The Dyson Swarm beams down 10M EU/t per module at the endgame.",
+    ],
+  },
+  {
+    version: "2.47.0",
+    date: "2026-08-31",
+    headline: "The item list learns what players build",
+    notes: [
+      "Most popular is the new default sort, ranked from the community's shared setups.",
+      "Results are one dense grid of named tiles with bigger icons, in place of the list and grid views.",
+      "Tiles lift on hover like a hand of cards.",
+      "The recent shelf, filters and pager slim down so more items fit on screen.",
+    ],
+  },
+  {
+    version: "2.46.1",
+    date: "2026-08-31",
+    headline: "Every card follows the power unit",
+    notes: [
+      "The power figures on machine cards convert with the amps dial, like the ledger and the wires.",
+    ],
+  },
+  {
+    version: "2.46.0",
+    date: "2026-08-31",
+    headline: "Tier chips click, type and sing",
+    notes: [
+      "The hatch chip edits on click: type any hatch count, and the wheel walks every count then the exotic hatches.",
+      "The tier chip cycles on click and wheel, with no dropdown to open.",
+      "Every voltage tier has its own note: picking a tier sounds the same climb anywhere on the board.",
+      "Generator tier chips stop at the ends instead of looping around.",
+    ],
+  },
+  {
+    version: "2.45.0",
+    date: "2026-08-31",
+    headline: "Power is a resource now",
+    notes: [
+      "Generators have a real EU port: wire it to a drawer on a gold lightning line, with its own connect and cut sounds.",
+      "An EU product drawer takes an amount in solve mode, and the generators and their fuel solve to meet it.",
+      "A new key by the rate unit shows all power as amps of a tier you pick, in the game's tier colors.",
+      "EU left the inputs and outputs lists: the machines panel is its ledger.",
+    ],
+  },
+  {
+    version: "2.44.0",
+    date: "2026-08-31",
+    headline: "Solve mode settles in",
+    notes: [
+      "The mode switch has its own sound, and the board wears a cyan glow while solve mode is on.",
+      "With nothing asked, nothing runs: a notice counts the products missing numbers, with a Show me button.",
+      "Machines the amounts do not need read zero but keep their ports and wires.",
+      "No more dead loop or clog warnings in solve mode: a zero machine there is just not needed.",
+    ],
+  },
+  {
+    version: "2.43.0",
+    date: "2026-08-31",
+    headline: "Pin a machine count in solve mode",
+    notes: [
+      "Click the Machines figure on a card to pin it: exactly that many run, and the rest of the line solves around them.",
+      "A pin works with no product amounts at all, and the pinned count shows in gold.",
+      "Pins that cannot run together raise a notice, and an amount a pin cannot cover marks itself in red.",
+    ],
+  },
+  {
+    version: "2.42.1",
+    date: "2026-08-31",
+    headline: "Typing a product amount feels right",
+    notes: [
+      "The amount rests as a plain rate line on the drawer; the pencil marks it, click to edit.",
+      "Shorthand like 2.5k or 1m works and reads back the way you typed it.",
+      "The amount shows in the board's rate unit and converts when you switch it.",
+    ],
+  },
+  {
+    version: "2.42.0",
+    date: "2026-08-31",
+    headline: "Solve mode: type what you want, get machine counts",
+    notes: [
+      "A new switch by the setup rules turns the question around: type an amount on a product drawer and every card shows how many machines that takes.",
+      "Amounts are minimums, so recipes that make two things at once still solve.",
+      "An amount nothing on the board can make is marked in red on its drawer.",
+      "The mode travels with the plan, so a shared setup opens the way it was saved.",
+    ],
+  },
+  {
+    version: "2.41.4",
+    date: "2026-08-31",
+    headline: "Neutralization Engine fixes",
+    notes: [
+      "The acid rate is set in L per tick, as in the game, and the EU output is corrected.",
+      "The card shows average residue per tick and the margin at a full tank.",
+      "The Neutralization Engine has its structure picture.",
+    ],
+  },
+  {
+    version: "2.41.3",
+    date: "2026-08-31",
+    headline: "Copied generators keep their own settings",
+    notes: [
+      "Changing a setting on a copied generator no longer changes the original too.",
+    ],
+  },
+  {
+    version: "2.41.2",
+    date: "2026-08-31",
+    headline: "A solver fix",
+    notes: [
+      "A rare bug could leave a machine idle beside a full buffer. Fixed.",
+      "A generator card's EU figure now follows the peak and average switch.",
+    ],
+  },
+  {
+    version: "2.41.1",
+    date: "2026-08-31",
+    headline: "More generators, and a little polish",
+    notes: [
+      "New machines: Acid Generator, Geothermal Engine, Magic Energy Converter, Large Neutralization Engine.",
+      "The XL Turbo HP and SC Steam Turbines are their own machines now.",
+      "Large boiler tiers corrected to MV, HV, EV and IV.",
+      "The board edges shade gently, and the toolbars cast the cards' shadow.",
+    ],
+  },
+  {
+    version: "2.41.0",
+    date: "2026-08-30",
+    headline: "Power generation",
+    notes: [
+      "The POWER button places generators: turbines, boilers, engines, reactors, fusion.",
+      "Generators use fuel from your wires and follow their in-game settings.",
+      "The machine list totals power used, made and net.",
+      "Searching an item shows the generators that use it.",
+    ],
+  },
+  {
+    version: "2.40.0",
+    date: "2026-08-29",
+    headline: "Auto-arrange leaves your boards alone",
+    notes: [
+      "Boards you made keep their contents: auto-arrange only moves the board itself.",
+      "Loose cards are still grouped into new boards.",
+      "The arrange button now opens a small sheet with one setting: let it rearrange inside your boards too.",
+    ],
+  },
+  {
+    version: "2.39.1",
+    date: "2026-08-29",
+    headline: "The Naquadah Fuel Refinery gets its real coils",
+    notes: [
+      "Naquadah Fuel Refinery cards now offer field restriction coils instead of heating coils.",
+      "Each recipe starts at its own minimum coil tier.",
+      "Every coil tier adds 4 parallels, and each tier above the recipe's minimum is a perfect overclock.",
+    ],
+  },
+  {
+    version: "2.39.0",
+    date: "2026-08-29",
+    headline: "Watch your factory build itself",
+    notes: [
+      "A new clapperboard button by the view options replays your board being built, machine by machine, wires drawing themselves in.",
+      "Two shows to pick from: one slow shot from afar, or a camera that follows each machine up close.",
+      "Press Esc or click the board to stop it.",
+    ],
+  },
+  {
+    version: "2.38.1",
+    date: "2026-08-28",
+    headline: "Quiet loading",
+    notes: ["Opening the planner, switching tabs or loading a setup no longer makes a sound."],
+  },
+  {
+    version: "2.38.0",
+    date: "2026-08-28",
+    headline: "The board makes sound",
+    notes: [
+      "Quiet sounds mark placing, wiring, deleting and knob turns, with a volume slider in Settings and a mute button by the view options.",
+      "While you drag a wire, the line shows what letting go will do: green to connect, a ghost drawer for the void, red when nothing can happen.",
+      "Drawing a wire that already exists flashes it red first: letting go deletes it.",
+      "New cards no longer flash white when they land.",
+    ],
+  },
+  {
+    version: "2.37.0",
+    date: "2026-08-27",
+    headline: "A tidier board toolbar",
+    notes: [
+      "The view switches now live in one menu, each with its name and what it does.",
+      "The draw tools share one button that remembers your last pick.",
+      "The rate unit is one key that opens a list.",
+      "Setup rules and auto-arrange moved to the top right, and every button got a little smaller.",
+    ],
+  },
+  {
+    version: "2.36.0",
+    date: "2026-08-27",
+    headline: "Tabs you can rearrange",
+    notes: [
+      "Drag a tab left or right to reorder your designs, and the order sticks.",
+      "A plan with a saved icon shows it on its tab.",
+      "The mouse wheel scrolls the tab strip, with a little bounce at the ends.",
+      "Long tab strips fade out at the edges instead of showing arrow buttons.",
+    ],
+  },
+  {
+    version: "2.35.3",
+    date: "2026-08-26",
+    headline: "The thinking spinner moves out of the way",
+    notes: [
+      "The loading message sits at the top of the board instead of over your cards.",
+      "The tab shows a small spinner while its numbers are still computing.",
+    ],
+  },
+  {
+    version: "2.35.2",
+    date: "2026-08-26",
+    headline: "The numbers come back in about a second",
+    notes: [
+      "Boards with loops and returned byproducts calculate up to 24 times faster.",
+      "The long spinner on big plans is mostly gone: most boards finish in about a second.",
+    ],
+  },
+  {
+    version: "2.35.1",
+    date: "2026-08-26",
+    headline: "Slow boards go to the background too",
+    notes: [
+      "A board whose numbers are hard to work out no longer delays editing, whatever its size.",
+      "Plans with cell-to-fluid wires load without the long pause.",
+    ],
+  },
+  {
+    version: "2.35.0",
+    date: "2026-08-26",
+    headline: "Big boards stop freezing the browser",
+    notes: [
+      "Big plans work out their numbers in the background, with a spinner while they think.",
+      "Switching between tabs is instant, even with huge plans open.",
+    ],
+  },
+  {
+    version: "2.34.1",
+    date: "2026-08-26",
+    headline: "The site stops slowing down over the day",
+    notes: [
+      "Fixed a server memory problem that made pages take up to 30 seconds and the board feel sluggish.",
+      "Opening a shared plan no longer triggers the slowdown.",
+    ],
+  },
+  {
+    version: "2.34.0",
+    date: "2026-08-25",
+    headline: "The Welcome tab stays out of your way",
+    notes: [
+      "The resource column goes blank while the Welcome tab is up and comes back when you leave.",
+      "Adding a recipe from the Welcome tab opens a fresh design tab and places it there.",
+      "When every machine chip is unselected, the recipe search says so and offers to select them all.",
+    ],
+  },
+  {
+    version: "2.33.0",
+    date: "2026-08-25",
+    headline: "Crop machines get their faces back",
+    notes: [
+      "The Crop Manager and Industrial Farm tabs on crop cards show the machine's icon instead of a letter.",
+    ],
+  },
+  {
+    version: "2.32.0",
+    date: "2026-08-25",
+    headline: "Bee cards learn the speed gene",
+    notes: [
+      "Every bee housing has a Speed Gene setting, from Slowest to Blinding.",
+      "Output scales the way the game scales it, so Blinding bees make about 29% more than Normal.",
+    ],
+  },
+  {
     version: "2.31.0",
     date: "2026-08-23",
     headline: "Loose cell wires that actually wire",

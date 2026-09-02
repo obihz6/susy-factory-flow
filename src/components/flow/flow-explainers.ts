@@ -1,6 +1,15 @@
 import type { EdgeThroughput, FactoryProject, ThroughputResult } from "@/lib/model/types";
 import { formatCompact, formatNumberWithThousands, formatRate, makeResourceKey } from "@/lib/model";
-import { rateUnitMultiplier, rateUnitPrecisionScale, rateUnitSuffix } from "@/lib/model/rate-unit";
+import {
+  energyPerUnitDisplaySuffix,
+  energyPerUnitDisplayValue,
+  isEnergyRateUnit,
+  rateMultiplierForKind,
+  rateSuffixForKind,
+  rateUnitMultiplier,
+  rateUnitPrecisionScale,
+  rateUnitSuffix,
+} from "@/lib/model/rate-unit";
 import { describeStorage, getStorageRoles } from "@/lib/model/storage-role";
 import { parseResourceHandleId } from "./resource-handles";
 import {
@@ -67,11 +76,62 @@ const TOL = 0.005;
  * to stay visible instead of rounding to a flat 0.00.
  */
 export function formatSlotRate(value: number, kind: string): string {
-  return `${formatSlotRateBare(value)}${rateUnitSuffix(kind === "fluid")}`;
+  return `${formatCompact(value * rateMultiplierForKind(kind))}${rateSuffixForKind(kind)}`;
 }
 
-export function formatSlotRateBare(value: number): string {
-  return formatCompact(value * rateUnitMultiplier());
+export function formatSlotRateBare(value: number, kind = "item"): string {
+  return formatCompact(value * rateMultiplierForKind(kind));
+}
+
+/**
+ * The ink of an energy reading, wherever one is drawn (card ports on both
+ * sides, the panel's Inputs and Outputs, the search chips): the accent
+ * amber, sibling of the panel's red-300 and emerald-300, and it means this
+ * one thing. It is the only figure that is not a rate, so it is the only
+ * figure that does not wear the muted rate ink.
+ */
+export const ENERGY_READING_TEXT = "text-amber-300";
+
+/** "200 EU/Item" / "2.5 EU/L" - or "6.25 A LV/Item" under the amps dial: a canvas energy reading. */
+export function formatEnergyPerUnit(euPerUnit: number, kind: string): string {
+  return `${formatCompact(energyPerUnitDisplayValue(euPerUnit))}${energyPerUnitDisplaySuffix(kind)}`;
+}
+
+/**
+ * The same reading in two pieces, for surfaces that draw the unit as a
+ * smaller, greyer tail after the number: "200" and "EU/Item". The number
+ * is the reading; the unit only has to be there.
+ */
+export function formatEnergyPerUnitParts(
+  euPerUnit: number,
+  kind: string,
+): { value: string; unit: string } {
+  return {
+    value: formatCompact(energyPerUnitDisplayValue(euPerUnit)),
+    unit: energyPerUnitDisplaySuffix(kind).trim(),
+  };
+}
+
+/** The tail: a size down, in a greyed gold - the subtitle shade under the number's. */
+export const ENERGY_UNIT_TEXT = "ml-0.5 font-medium text-[#8c7d4c]";
+
+/**
+ * This port reads as energy per unit right now: the EU unit is on and the
+ * port has books behind it. Unsolved ports and EU ports keep their
+ * per-second reading whatever the unit says.
+ */
+export function portReadsEnergy(port: Pick<RailPort, "energyPerUnit">): boolean {
+  return isEnergyRateUnit() && port.energyPerUnit !== undefined;
+}
+
+/** The one line under a port's name, in whichever unit the board is read in. */
+export function formatPortRate(
+  port: Pick<RailPort, "energyPerUnit" | "kind">,
+  currentPerSecond: number,
+): string {
+  return portReadsEnergy(port)
+    ? formatEnergyPerUnit(port.energyPerUnit!, port.kind)
+    : formatSlotRate(currentPerSecond, port.kind);
 }
 
 /**

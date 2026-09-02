@@ -163,8 +163,8 @@ export interface EnergySupplyOption {
   entry?: EnergyHatchCatalogEntry;
 }
 
-/** The regular hatch counts offered; the game's common cap is two, GT++ takes more. */
-const REGULAR_COUNTS = [1, 2, 3, 4, 6, 8, 12, 16];
+/** Every whole hatch count the wheel walks; the chip's editor types any. */
+const REGULAR_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 export function energySupplyOptionsForTier(
   tier: string,
