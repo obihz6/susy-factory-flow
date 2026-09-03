@@ -14,6 +14,7 @@ import { capturePlanPreviewPng } from "@/lib/community/plan-preview-capture";
 import { sharedPlanLink } from "@/lib/community/shared-link";
 import type { CommunityPlanSummary, EntryIcon } from "@/lib/community/types";
 import { serializeFactoryProject } from "@/lib/import-export";
+import { LOGIN_ENABLED } from "@/lib/feature-toggles";
 import { capturePlanView } from "@/lib/plan-view";
 import { notifySetupsChanged, openSetupsTab } from "@/lib/setups-tab";
 import { useFactoryStore } from "@/store/factory-store";
@@ -241,12 +242,33 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
             <LoaderCircle className="h-5 w-5 animate-spin" />
           </div>
         ) : !user ? (
-          <div className="space-y-3">
-            <p className="text-sm text-fg-subtle">
-              Sharing needs an account so your posts stay yours: just a username and password.
-            </p>
-            <AuthForm onSignedIn={setUser} />
-          </div>
+          // Temporarily disabled for this fork (see feature-toggles.ts): a
+          // notice where the sign-in form would be, so Share still explains
+          // itself instead of offering a login that cannot work.
+          !LOGIN_ENABLED ? (
+            <div className="space-y-3">
+              <p className="text-sm text-fg-subtle">
+                Sharing is temporarily unavailable in this build: it needs an
+                account, and community accounts are switched off here.
+              </p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded border border-line-strong px-3 py-1.5 text-sm hover:bg-surface-raised"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-fg-subtle">
+                Sharing needs an account so your posts stay yours: just a username and password.
+              </p>
+              <AuthForm onSignedIn={setUser} />
+            </div>
+          )
         ) : (
           <div className="space-y-3">
             {/* A board that never met the auto-arrange goes out exactly as

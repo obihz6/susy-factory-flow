@@ -29,7 +29,6 @@ import {
 } from "@/lib/blueprints/types";
 import { snapPositionToGrid } from "@/lib/board-grid";
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value";
-import { useCommunityUser } from "@/components/community/auth";
 import { ControlsCard } from "@/components/ControlsCard";
 import { MinecraftTooltip } from "@/components/nei/MinecraftTooltip";
 import { EntryIconSlot, IconPicker, iconSuggestionsFromStats } from "@/components/IconPicker";
@@ -39,6 +38,8 @@ import {
   TagChips,
   TierBadge,
 } from "@/components/shelf-cards";
+import { LOGIN_ENABLED } from "@/lib/feature-toggles";
+import { useCommunityUser } from "@/components/community/auth";
 import { useBlueprintStore } from "@/store/blueprint-store";
 import { captureBoardSelection, useFactoryStore } from "@/store/factory-store";
 import type { BoardClipboardPayload } from "@/store/factory-store";
@@ -241,16 +242,18 @@ export function BlueprintPanel() {
     <div className="flex gap-1">
       <MinecraftTooltip
         label={
-          !user
-            ? "Share a pocket\nSign in (top right) first"
-            : isShareArmed
-              ? "Picking\nClick a pocket on the board, or click again to cancel"
-              : "Share a pocket\nPick one on the board; it lands on your Mine shelf"
+          !LOGIN_ENABLED
+            ? "Share a pocket\nUnavailable: community accounts are switched off in this build"
+            : !user
+              ? "Share a pocket\nSign in (top right) first"
+              : isShareArmed
+                ? "Picking\nClick a pocket on the board, or click again to cancel"
+                : "Share a pocket\nPick one on the board; it lands on your Mine shelf"
         }
       >
         <button
           type="button"
-          disabled={!user}
+          disabled={!user || !LOGIN_ENABLED}
           onClick={() => {
             setScope("mine");
             setOverwriteArmId(undefined);
@@ -498,7 +501,12 @@ function MineShelf({
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {error ? <p className="mb-1.5 px-0.5 text-[11px] text-red-400">{error}</p> : null}
 
-        {isAuthLoading ? null : !user ? (
+        {isAuthLoading ? null : !LOGIN_ENABLED ? (
+          <p className="px-0.5 pt-1 text-[11px] leading-relaxed text-neutral-500">
+            The cloud pocket library is temporarily unavailable in this build: it needs an account,
+            and community accounts are switched off here.
+          </p>
+        ) : !user ? (
           <p className="px-0.5 pt-1 text-[11px] leading-relaxed text-neutral-500">
             Sign in (top right) to keep a cloud library of sub-assemblies: hit the save button on
             any pocket card to shelve it here, publish your best to the network.

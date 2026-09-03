@@ -33,6 +33,7 @@ import { sharedPlanLink } from "@/lib/community/shared-link";
 import type { CommunityPlanSort, CommunityPlanSummary, EntryIcon } from "@/lib/community/types";
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value";
 import { parseFactoryProjectJson, serializeFactoryProject } from "@/lib/import-export";
+import { LOGIN_ENABLED } from "@/lib/feature-toggles";
 import { applyPlanView, capturePlanView } from "@/lib/plan-view";
 import {
   OPEN_SETUPS_EVENT,
@@ -177,7 +178,10 @@ export function SetupsPanel() {
 
   const isCurrent = shelf?.key === key;
   const plans = isCurrent ? shelf.plans : [];
-  const needsAccount = scope === "mine" && !username;
+  // Temporarily disabled for this fork (see feature-toggles.ts): the MINE
+  // scope needs an account, which is switched off, so MINE shows a notice
+  // instead of pointing at a sign-in button that does not exist.
+  const needsAccount = LOGIN_ENABLED && scope === "mine" && !username;
   const isLoading = !needsAccount && (!isCurrent || shelf.page !== activePage);
   const hasMore = isCurrent && shelf.plans.length < shelf.total;
   // The tag dropdown offers whatever the loaded rows wear (plus the active
@@ -526,6 +530,11 @@ export function SetupsPanel() {
           <p className="px-0.5 pt-1 text-[11px] leading-relaxed text-neutral-500">
             Sign in (top right) to see your own setups here. Share one with the board&apos;s Share
             button, then manage it from this shelf.
+          </p>
+        ) : scope === "mine" && !LOGIN_ENABLED && !isAuthLoading ? (
+          <p className="px-0.5 pt-1 text-[11px] leading-relaxed text-neutral-500">
+            Personal setups are temporarily unavailable in this build: they need an account, and
+            community accounts are switched off here. The network shelf still works.
           </p>
         ) : isLoading && plans.length === 0 ? (
           <p className="flex items-center gap-1.5 px-0.5 pt-1 text-[11px] text-neutral-500">

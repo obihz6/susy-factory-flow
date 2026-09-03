@@ -12,6 +12,7 @@ import {
   BOARD_WINDOW_MIN_WIDTH,
   BOARD_WINDOW_TITLE_HEIGHT,
 } from "@/lib/board-grid";
+import { LOGIN_ENABLED } from "@/lib/feature-toggles";
 import { captureBoardSelection, useFactoryStore } from "@/store/factory-store";
 import { useBlueprintStore } from "@/store/blueprint-store";
 import { useBoardView } from "./board-view";
@@ -676,6 +677,7 @@ function BoardNodeComponent({
                 }}
               />
             </button>
+            {!LOGIN_ENABLED ? null : (
             <button
               type="button"
               onClick={(event) => {
@@ -689,6 +691,7 @@ function BoardNodeComponent({
             >
               <Save aria-hidden className="h-3.5 w-3.5" />
             </button>
+            )}
             <button
               type="button"
               onClick={(event) => {
