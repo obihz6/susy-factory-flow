@@ -240,8 +240,15 @@ if [[ "$jvm_export_root" != "$SUSY_RAW_EXPORT_DIR" ]]; then
 fi
 
 echo "Normalizing SusyCore recipedump into the planner dataset."
-node "$repo_root/tools/dataset-pipeline/scripts/susy/normalize-susy-recipedump.mjs" \
+SUSY_DATASET_VERSION_ID="$SUSY_DATASET_VERSION_ID" \
+SUSY_DATASET_VERSION_LABEL="$SUSY_DATASET_VERSION_LABEL" \
+SUSY_RENDERED_ICON_DIR="$rendered_icon_dir" \
+  node "$repo_root/tools/dataset-pipeline/scripts/susy/normalize-susy-recipedump.mjs" \
   "$recipedump_path" "$SUSY_DATASET_OUT_DIR/recipes.json"
+
+echo "Applying rendered HEI icons to the normalized dataset."
+node "$repo_root/tools/dataset-pipeline/scripts/susy/apply-susy-icons.mjs" \
+  "$SUSY_DATASET_OUT_DIR/recipes.json" "$rendered_icon_dir" "$SUSY_DATASET_OUT_DIR" "/datasets/susy"
 
 echo "Building resource and recipe indexes."
 node "$repo_root/tools/dataset-pipeline/scripts/build-resource-index.mjs" \

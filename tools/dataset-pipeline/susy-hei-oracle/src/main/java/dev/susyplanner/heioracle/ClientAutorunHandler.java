@@ -1,7 +1,9 @@
 package dev.susyplanner.heioracle;
 
 import dev.susyplanner.heioracle.icons.IconQueue;
+import dev.susyplanner.heioracle.icons.QueuedIconExportScreen;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.world.GameType;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
@@ -15,7 +17,10 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  * renders on 1.12.2), then starts the icon export and shuts the game down.
  * A real-time watchdog guarantees the export starts even if the tick loop is
  * stalled or the world cannot be loaded, so a slow or broken world never
- * blocks the oracle forever.
+ * blocks the oracle forever. While the icon export runs, the same tick handler
+ * re-asserts the export screen every tick: on a paused hidden-window client a
+ * join/pause GUI can steal the screen after the first batch, and a screen the
+ * draw loop no longer reaches would stall the export silently.
  */
 public final class ClientAutorunHandler {
 
@@ -34,7 +39,11 @@ public final class ClientAutorunHandler {
 
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END || started) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
+        if (started) {
+            keepExportScreenFrontmost();
             return;
         }
         try {
@@ -107,6 +116,30 @@ public final class ClientAutorunHandler {
 
     private long elapsedSeconds() {
         return (System.nanoTime() - watchStartedAt) / 1000000000L;
+    }
+
+    /**
+     * The export is driven from {@link QueuedIconExportScreen#drawScreen}; if
+     * anything else takes the screen (a pause menu, a join GUI, a mod overlay
+     * screen) the batches stop and the export stalls forever. Put the export
+     * screen back whenever something else is in front of it.
+     */
+    private static void keepExportScreenFrontmost() {
+        if (!dev.susyplanner.heioracle.icons.IconExporter.isRunning()) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null || minecraft.world == null) {
+            return;
+        }
+        GuiScreen current = minecraft.currentScreen;
+        if (current instanceof QueuedIconExportScreen) {
+            return;
+        }
+        SusyHeiOracleMod.LOG.warn(
+            "SUSY HEI oracle re-asserting the export screen over {}.",
+            current != null ? current.getClass().getName() : "no screen");
+        dev.susyplanner.heioracle.icons.IconExporter.displayExportScreen();
     }
 
     private void startExport(String trigger) {

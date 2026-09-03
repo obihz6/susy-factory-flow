@@ -12,9 +12,13 @@ import java.lang.reflect.Method;
  * server/sender, so it runs fine from the title screen (no world needed).
  *
  * Enabled with {@code -Dsusy.oracle.dumpRecipes=true}; the expected output path
- * may be passed with {@code -Dsusy.oracle.recipedumpPath} so the runner can
- * verify the file landed. Runs synchronously on the client thread after the
- * icon export finishes and before the client shuts down.
+ * may be passed with {@code -Dsusy.oracle.recipedumpPath}. SusyCore's command
+ * always writes {@code recipedump.json} into the game dir itself (the saves
+ * directory's parent) and takes no path argument, so when the requested path
+ * differs the oracle watches the game dir and copies the file across — the
+ * runner must find the dump exactly where it was told to look. Runs
+ * synchronously on the client thread after the icon export finishes and before
+ * the client shuts down.
  */
 public final class RecipemapDump {
 
@@ -101,13 +105,28 @@ public final class RecipemapDump {
         if (DUMP_PATH.isEmpty()) {
             return;
         }
-        java.io.File target = new java.io.File(DUMP_PATH);
+        // Where SusyCore actually writes: the saves directory's parent, i.e. the
+        // game dir ("recipedump.json"), whatever the JVM properties say.
+        java.io.File gameDirDump;
+        try {
+            gameDirDump = new java.io.File(
+                net.minecraftforge.fml.common.FMLCommonHandler.instance().getSavesDirectory()
+                    .getParentFile(),
+                "recipedump.json");
+        } catch (Throwable t) {
+            gameDirDump = null;
+        }
+        java.io.File requested = new java.io.File(DUMP_PATH);
+        boolean needCopy =
+            gameDirDump != null
+                && !isSameFile(gameDirDump, requested);
+
         long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
         long lastSize = -1L;
         long stableSince = 0L;
         while (System.currentTimeMillis() < deadline) {
-            if (target.exists()) {
-                long size = target.length();
+            if (gameDirDump != null && gameDirDump.exists()) {
+                long size = gameDirDump.length();
                 if (size == lastSize && size > 0L) {
                     if (stableSince == 0L) {
                         stableSince = System.currentTimeMillis();
@@ -116,6 +135,9 @@ public final class RecipemapDump {
                             "SUSY HEI oracle recipedump.json present ({} bytes).",
                             Long.valueOf(size)
                         );
+                        if (needCopy) {
+                            copyDump(gameDirDump, requested);
+                        }
                         return;
                     }
                 } else {
@@ -130,7 +152,39 @@ public final class RecipemapDump {
                 return;
             }
         }
-        SusyHeiOracleMod.LOG.warn("SUSY HEI oracle timed out waiting for {}; proceeding.", DUMP_PATH);
+        SusyHeiOracleMod.LOG.warn("SUSY HEI oracle timed out waiting for {}; proceeding.",
+            gameDirDump != null ? gameDirDump.getAbsolutePath() : DUMP_PATH);
+    }
+
+    private static boolean isSameFile(java.io.File left, java.io.File right) {
+        try {
+            return left.getCanonicalPath().equals(right.getCanonicalPath());
+        } catch (Throwable t) {
+            return left.getAbsolutePath().equals(right.getAbsolutePath());
+        }
+    }
+
+    /** Copy the dump to the requested path so the runner finds it there. */
+    private static void copyDump(java.io.File from, java.io.File to) {
+        try {
+            java.io.File parent = to.getParentFile();
+            if (parent != null) {
+                parent.mkdirs();
+            }
+            java.nio.file.Files.copy(
+                from.toPath(),
+                to.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            SusyHeiOracleMod.LOG.info(
+                "SUSY HEI oracle copied recipedump.json to the requested path {} ({} bytes).",
+                to.getAbsolutePath(),
+                Long.valueOf(to.length()));
+        } catch (Throwable t) {
+            SusyHeiOracleMod.LOG.error(
+                "SUSY HEI oracle could not copy the recipedump to " + to.getAbsolutePath()
+                    + "; the runner will not find it there.",
+                t);
+        }
     }
 
     private static double elapsedSeconds(long startedAt) {

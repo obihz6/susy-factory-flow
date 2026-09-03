@@ -116,8 +116,16 @@ public final class IconExporter {
             Integer.valueOf(ITEM_QUEUE.size()),
             Integer.valueOf(FLUID_QUEUE.size())
         );
-        Minecraft minecraft = Minecraft.getMinecraft();
-        minecraft.displayGuiScreen(new QueuedIconExportScreen());
+        displayExportScreen();
+    }
+
+    /**
+     * (Re)show the export screen. Also called by the autorun tick handler when
+     * something else (a pause/join GUI on a paused hidden-window client) has
+     * taken the screen and the draw loop stopped reaching the batches.
+     */
+    public static void displayExportScreen() {
+        Minecraft.getMinecraft().displayGuiScreen(new QueuedIconExportScreen());
     }
 
     /**

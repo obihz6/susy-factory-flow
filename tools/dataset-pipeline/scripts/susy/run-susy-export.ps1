@@ -262,11 +262,27 @@ try {
 
 # --- Normalize and publish -------------------------------------------------------
 
+# The dataset scripts read these from the environment; PowerShell variables
+# alone never reach the node children (this is exactly why an otherwise
+# complete export used to die at the normalize step).
+$env:SUSY_DATASET_VERSION_ID = $VersionId
+$env:SUSY_DATASET_VERSION_LABEL = $VersionLabel
+$env:SUSY_RENDERED_ICON_DIR = $RenderedIconDir
+
 Write-Log "Normalizing SusyCore recipedump into the planner dataset."
 Invoke-NodeStep @(
   (Join-Path $PSScriptRoot "normalize-susy-recipedump.mjs"),
   $RecipedumpPath,
   (Join-Path $DatasetOutDir "recipes.json")
+)
+
+Write-Log "Applying rendered HEI icons to the normalized dataset."
+Invoke-NodeStep @(
+  (Join-Path $PSScriptRoot "apply-susy-icons.mjs"),
+  (Join-Path $DatasetOutDir "recipes.json"),
+  $RenderedIconDir,
+  $DatasetOutDir,
+  "/datasets/susy"
 )
 
 Write-Log "Building resource and recipe indexes."
