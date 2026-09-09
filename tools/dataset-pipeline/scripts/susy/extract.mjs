@@ -5,7 +5,6 @@ import {
   executeStandaloneStep,
   parseCliArgs,
   repoRoot,
-  runCommand,
 } from "./pipeline-lib.mjs";
 
 const options = parseCliArgs();
@@ -27,16 +26,9 @@ await executeStandaloneStep("extract", async (logger, config) => {
     }
   } catch {}
 
-  // Best-effort: clear any leftover Java processes that may hold the oracle jar locked.
-  if (process.platform === "win32") {
-    try {
-      await runCommand("taskkill", ["/IM", "javaw.exe", "/T", "/F"], {
-        logger,
-        label: "Clear leftover Java processes",
-        progress: undefined,
-      });
-    } catch {}
-  }
+  // The Windows export runner performs targeted cleanup using its own PID
+  // file. Do not terminate every javaw.exe here: a fresh install must not kill
+  // unrelated Java or Minecraft processes owned by the user.
 
   const runner = path.join(
     repoRoot,

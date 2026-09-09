@@ -97,6 +97,15 @@ describe("inspectInstanceDir", () => {
     expect(path.basename(info.launchScript)).toBe("launch-susy-client.sh");
   });
 
+  it("recognizes the generated Windows launcher script", () => {
+    const dir = makeDir({
+      "pack.toml": PACK_TOML,
+      "mods/susycore-1.4.jar": "jar",
+      "launch-susy-client.cmd": "@echo off\n",
+    });
+    expect(inspectInstanceDir(dir).launchScript).toMatch(/launch-susy-client\.cmd$/);
+  });
+
   it("treats packwiz metadata without jars as a pack source, not an instance", () => {
     const dir = makeDir({
       "pack.toml": PACK_TOML,
@@ -189,6 +198,9 @@ describe("Prism oracle launch configuration", () => {
       expect(runner).toContain("susy.oracle.autorun=true");
       expect(runner).toContain("susy.oracle.dumpRecipes=true");
     }
+    expect(windowsRunner).toContain('call `"$startScript`"');
+    expect(windowsRunner).toContain("Find-SusyClientProcess");
+    expect(windowsRunner).toContain("Write-LaunchDiagnostics");
   });
 });
 

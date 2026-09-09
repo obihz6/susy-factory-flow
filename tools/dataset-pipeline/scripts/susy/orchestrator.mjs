@@ -135,17 +135,9 @@ try {
               }
             }
           } catch {}
-          // Best-effort: also kill any remaining Prism/Minecraft processes that
-          // may still hold the oracle jar locked on Windows.
-          if (process.platform === "win32") {
-            try {
-              await runCommand("taskkill", ["/IM", "javaw.exe", "/T", "/F"], {
-                logger,
-                label: "Clear leftover Java processes",
-                progress: undefined,
-              });
-            } catch {}
-          }
+          // The Windows export runner performs targeted cleanup using its own
+          // PID file. Do not kill every javaw.exe on the machine: that can
+          // terminate unrelated Minecraft or Java applications.
         }
         await runStep(step, config.configPath ?? configPath, logger);
         config = await loadConfig({ config: configPath });

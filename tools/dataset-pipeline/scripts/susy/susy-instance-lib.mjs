@@ -61,7 +61,7 @@ export function compareVersions(left, right) {
 }
 
 const SUSY_JAR_PATTERN = /(?:^|[-_.])(?:supersymmetry|susycore|susy-?core)(?:[-_.]|$)/i;
-const LAUNCH_SCRIPT_PATTERN = /^(?:start|launch)[^/]*\.sh$/i;
+const LAUNCH_SCRIPT_PATTERN = /^(?:start|launch)[^/]*\.(?:sh|cmd|bat)$/i;
 
 /**
  * What the export can learn about one directory. `kind`:

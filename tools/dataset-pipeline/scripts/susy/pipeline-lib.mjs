@@ -132,14 +132,24 @@ export async function setPipelineState(config, status, step, details = {}) {
   config.state.currentStep = step ?? null;
   if (step) {
     config.state.steps ??= {};
-    config.state.steps[step] = {
-      ...(config.state.steps[step] ?? {}),
+    const previous = config.state.steps[step] ?? {};
+    const next = {
+      ...previous,
       status,
       ...(status === "running" ? { startedAt: new Date().toISOString() } : {}),
       ...(status === "completed" ? { completedAt: new Date().toISOString() } : {}),
       ...(status === "failed" ? { failedAt: new Date().toISOString() } : {}),
       ...details,
     };
+    // A later successful retry must not leave the old failure metadata in the
+    // config. This is particularly confusing when resuming a fresh install.
+    if (status === "running" || status === "completed") {
+      delete next.failedAt;
+      delete next.error;
+      delete next.message;
+    }
+    if (status === "running" || status === "failed") delete next.completedAt;
+    config.state.steps[step] = next;
   }
   config.updatedAt = new Date().toISOString();
   await saveConfig(config);

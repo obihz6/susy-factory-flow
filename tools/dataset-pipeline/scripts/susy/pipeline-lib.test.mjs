@@ -8,6 +8,7 @@ import {
   logPath,
   parseCliArgs,
   pipelineStepScriptName,
+  setPipelineState,
   updateConfigPaths,
 } from "./pipeline-lib.mjs";
 
@@ -77,5 +78,29 @@ describe("SUSY pipeline configuration", () => {
   it("maps the package pipeline step to its actual script name", () => {
     expect(pipelineStepScriptName("package")).toBe("package-dataset.mjs");
     expect(pipelineStepScriptName("normalize")).toBe("normalize.mjs");
+  });
+
+  it("clears stale failure metadata after a successful retry", async () => {
+    const tempDir = path.join(os.tmpdir(), `susy-pipeline-state-${Date.now()}`);
+    temporaryDirectories.push(tempDir);
+    const config = createInitialConfig({
+      tempDir,
+      datasetRoot: path.join(tempDir, "datasets"),
+      versionId: "0.1.16.14.1",
+    });
+    config.configPath = path.join(tempDir, "susy-pipeline.json");
+
+    await setPipelineState(config, "failed", "extract", {
+      error: "first attempt failed",
+      message: "retry required",
+    });
+    await setPipelineState(config, "completed", "extract", { attempt: 2 });
+
+    expect(config.state.steps.extract.status).toBe("completed");
+    expect(config.state.steps.extract.attempt).toBe(2);
+    expect(config.state.steps.extract.error).toBeUndefined();
+    expect(config.state.steps.extract.message).toBeUndefined();
+    expect(config.state.steps.extract.failedAt).toBeUndefined();
+    expect(config.state.steps.extract.completedAt).toBeDefined();
   });
 });

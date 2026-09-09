@@ -269,7 +269,7 @@ function Restore-PrismJvmArguments {
       [System.IO.File]::WriteAllText($script:PrismInstanceConfigPath, $script:PrismInstanceConfigOriginal)
       Write-Log "Restored the original Prism instance.cfg JVM arguments."
     } catch {
-      Write-Log "WARNING: Could not restore $script:PrismInstanceConfigPath: $($_.Exception.Message)"
+      Write-Log "WARNING: Could not restore ${script:PrismInstanceConfigPath}: $($_.Exception.Message)"
     }
   }
 }
@@ -279,7 +279,61 @@ function Get-InstanceLogPath {
   return $null
 }
 
+function Get-SusyJavaProcesses {
+  # Cleanroom relaunches the original java.exe into a second JVM. Killing only
+  # javaw.exe leaves that child alive, locks latest.log, and makes the next
+  # retry exit before Forge can write a useful crash report. Restrict the
+  # query to this instance path so unrelated Java applications are untouched.
+  $needle = ([System.IO.Path]::GetFullPath($InstanceDir)).Replace("'", "''")
+  try {
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'java.exe' OR Name = 'javaw.exe'" |
+      Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
+  } catch {
+    return @()
+  }
+}
+
+function Stop-SusyJavaProcesses {
+  foreach ($javaProcess in @(Get-SusyJavaProcesses)) {
+    Write-Log "Stopping stale SUSY Java process PID $($javaProcess.ProcessId)."
+    & taskkill /PID $javaProcess.ProcessId /T /F 2>$null | Out-Null
+  }
+}
+
+function Write-LaunchDiagnostics {
+  param([string]$Reason)
+  Write-Log $Reason
+  foreach ($diagnosticFile in @($RuntimeLog, $RuntimeErrLog, (Get-InstanceLogPath))) {
+    if ($diagnosticFile -and (Test-Path -LiteralPath $diagnosticFile)) {
+      Write-Log "Last 80 lines from ${diagnosticFile}:"
+      Get-Content -LiteralPath $diagnosticFile -Tail 80 | ForEach-Object { Write-Log $_ }
+    }
+  }
+}
+
+function Find-SusyClientProcess {
+  # Cleanroom starts a second javaw.exe a few seconds after the generated
+  # launcher invokes java.exe. Poll instead of checking once: on a fast wrapper
+  # exit the old implementation reported a false launch failure and the
+  # orchestrator retried while the real client was still booting.
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    foreach ($javaProcess in @(Get-SusyJavaProcesses)) {
+      $process = Get-Process -Id $javaProcess.ProcessId -ErrorAction SilentlyContinue
+      if ($process) { return $process }
+    }
+    if ($attempt -lt 19) { Start-Sleep -Seconds 1 }
+  }
+  return $null
+}
+
 $launcherManaged = [bool]$resolved.prismInstanceId -and [string]::IsNullOrWhiteSpace($env:SUSY_LAUNCH_COMMAND)
+
+# A failed Cleanroom start can leave either the original java.exe or the
+# relaunched javaw.exe alive. Clear only processes whose command line belongs
+# to this instance before replacing the oracle jar or starting another client.
+if (-not $launcherManaged) {
+  Stop-SusyJavaProcesses
+}
 
 # Kill any existing Prism process so it picks up the new JVM args.
 if ($launcherManaged) {
@@ -298,6 +352,7 @@ if ($launcherManaged) {
 if ($launcherManaged) { Set-PrismOracleJvmArguments }
 $proc = $null
 $launchDesc = ""
+$launchStartedAt = Get-Date
 $handoffStartedAt = $null
 $oracleSeen = $false
 $clientLaunched = $false
@@ -326,8 +381,13 @@ try {
       if ($startScript -and ($startScript.EndsWith(".cmd") -or $startScript.EndsWith(".bat"))) {
         $launchDesc = "cmd.exe /c `"$startScript`""
         Write-Log "Launch: $launchDesc"
+        # Use CALL with /s so cmd preserves quoted paths containing spaces and
+        # parentheses (for example a cloned repo under Downloads). Without
+        # CALL, cmd can return immediately after parsing a quoted batch path;
+        # the runner then mistakes that wrapper exit for a failed Minecraft
+        # launch and loses the useful child error output.
         $proc = Start-Process -FilePath "cmd.exe" `
-          -ArgumentList @("/d", "/c", "`"$startScript`"") `
+          -ArgumentList @("/d", "/s", "/c", "call `"$startScript`"") `
           -WorkingDirectory $InstanceDir -PassThru `
           -RedirectStandardOutput $RuntimeLog -RedirectStandardError $RuntimeErrLog -WindowStyle Hidden
       } elseif ($startScript) {
@@ -355,8 +415,25 @@ try {
   # Prism may hand the launch request to an already-running launcher process,
   # so the short-lived CLI process is not evidence that the game failed. The
   # instance log and requested dump, not this process, are the source of truth.
-  if (-not $proc -or ($proc.HasExited -and -not $launcherManaged)) {
-    Fail "The Susy client exited immediately (exit code $($proc.ExitCode)). Check $RuntimeErrLog."
+  if (-not $proc) {
+    Write-LaunchDiagnostics "The SUSY client launch did not return a process."
+    Fail "Could not start the SUSY client. Check $RuntimeErrLog."
+  }
+  if ($proc.HasExited -and -not $launcherManaged) {
+    # A batch file can be only a wrapper: cmd may finish while Cleanroom has
+    # already relaunched the actual Java process. Track that process instead of
+    # treating the wrapper's short lifetime as a failed Minecraft launch.
+    $replacement = Find-SusyClientProcess
+    if ($replacement) {
+      Write-Log "Launch wrapper PID $($proc.Id) exited; tracking SUSY Java PID $($replacement.Id)."
+      $proc = $replacement
+    } else {
+      # Do not fail here. The Java/Javaw handoff is asynchronous and can take
+      # longer than the cmd wrapper lifetime on a cold first boot. The
+      # watchdog below will keep polling for the child and will print the
+      # actual runtime/instance log if no child appears.
+      Write-Log "Launch wrapper PID $($proc.Id) exited; waiting for the Cleanroom Java child."
+    }
   }
   Write-Log "Launcher/client PID: $($proc.Id)"
   $clientLaunched = $true
@@ -419,11 +496,29 @@ try {
       }
     }
 
-    if ($proc.HasExited) {
+      if ($proc.HasExited) {
       $proc.WaitForExit()
       if (Test-Path -LiteralPath $RecipedumpPath) { $dumpReady = $true; break }
       if (-not $launcherManaged) {
-        Fail "Susy client exited without producing $RecipedumpPath."
+        $replacement = Find-SusyClientProcess
+        if ($replacement) {
+          Write-Log "Tracked client PID $($proc.Id) exited; continuing with SUSY Java PID $($replacement.Id)."
+          $proc = $replacement
+        } else {
+          # Never conclude that a standalone launch failed merely because the
+          # cmd wrapper exited. Find-SusyClientProcess polls through the
+          # Cleanroom relaunch window; only after the wrapper has been gone for
+          # a full watchdog interval do we report the collected diagnostics.
+          Write-Log "No SUSY Java child is visible yet; continuing to wait for the launch handoff."
+        }
+      }
+    }
+
+    if (-not $launcherManaged -and $proc.HasExited -and -not (Find-SusyClientProcess)) {
+      $launchWaitSeconds = ((Get-Date) - $launchStartedAt).TotalSeconds
+      if ($launchWaitSeconds -gt 90) {
+        Write-LaunchDiagnostics "Standalone launch wrapper exited and no SUSY Java child appeared after $([math]::Round($launchWaitSeconds, 1)) seconds."
+        Fail "Susy client failed to start. Check $RuntimeErrLog and the instance log above."
       }
     }
 
