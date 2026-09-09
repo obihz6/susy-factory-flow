@@ -116,6 +116,36 @@ try {
       logger.info(`Starting step ${step} (attempt ${attempt}/${retries}).`);
       renderOverallProgress(steps, step, "running");
       try {
+        // For extract steps that launch a long-running client, check whether
+        // a previous attempt left a running client behind and kill it so the
+        // retry can install the oracle jar fresh.
+        if (step === "extract") {
+          const pidFile = path.join(path.resolve(config.paths.tempDir), "raw-export", "previous-client.pid");
+          try {
+            const pidText = await fs.readFile(pidFile, "utf8").catch(() => "");
+            const pid = pidText.trim();
+            if (/^\d+$/.test(pid)) {
+              try {
+                process.kill(Number(pid));
+                logger.info(`Killed previously launched client (PID ${pid}) from a failed attempt.`);
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+              } catch {
+                // Process already exited or we don't have permission.
+              }
+            }
+          } catch {}
+          // Best-effort: also kill any remaining Prism/Minecraft processes that
+          // may still hold the oracle jar locked on Windows.
+          if (process.platform === "win32") {
+            try {
+              await runCommand("taskkill", ["/IM", "javaw.exe", "/T", "/F"], {
+                logger,
+                label: "Clear leftover Java processes",
+                progress: undefined,
+              });
+            } catch {}
+          }
+        }
         await runStep(step, config.configPath ?? configPath, logger);
         config = await loadConfig({ config: configPath });
         await setPipelineState(config, "completed", step, { attempt, maxAttempts: retries });

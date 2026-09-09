@@ -27,6 +27,7 @@ $Resolver = Join-Path $PSScriptRoot "resolve-susy-instance.mjs"
 
 $RunnerRawExportDir = if ($env:SUSY_RAW_EXPORT_DIR) { [System.IO.Path]::GetFullPath($env:SUSY_RAW_EXPORT_DIR) } else { Join-Path $RepoRoot "temp\raw-export" }
 $RunnerLog = Join-Path $RunnerRawExportDir "export-runner.log"
+$PreviousClientPidFile = Join-Path $RunnerRawExportDir "previous-client.pid"
 function Write-Log {
   param([string]$Message)
   $line = $Message
@@ -96,6 +97,23 @@ $RecipedumpPath = [System.IO.Path]::GetFullPath((Join-Path $RawExportDir "recipe
 $RenderedIconDir = [System.IO.Path]::GetFullPath((Join-Path $RawExportDir "rendered-icons"))
 $RunId = [guid]::NewGuid().ToString("N")
 $OracleGameDumpPath = Join-Path $InstanceDir "recipedump.json"
+
+# Kill any client launched by a previous attempt that may still be running.
+if (Test-Path -LiteralPath $PreviousClientPidFile) {
+  $previousPid = Get-Content -LiteralPath $PreviousClientPidFile -ErrorAction SilentlyContinue
+  if ($previousPid -and $previousPid -match '^\d+$') {
+    $existingProc = Get-Process -Id $previousPid -ErrorAction SilentlyContinue
+    if ($existingProc) {
+      Write-Log "Killing previously launched client (PID $previousPid) from a failed attempt."
+      Stop-Process -Id $previousPid -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+      if (Get-Process -Id $previousPid -ErrorAction SilentlyContinue) {
+        Write-Log "WARNING: Could not kill previous client PID $previousPid; the oracle jar may remain locked."
+      }
+    }
+  }
+  Remove-Item -LiteralPath $PreviousClientPidFile -Force -ErrorAction SilentlyContinue
+}
 
 # Never accept a dump or icon map from an earlier run as this run's result.
 Remove-Item -LiteralPath $RecipedumpPath -Force -ErrorAction SilentlyContinue
@@ -266,6 +284,7 @@ $proc = $null
 $launchDesc = ""
 $handoffStartedAt = $null
 $oracleSeen = $false
+$clientLaunched = $false
 try {
   if ($env:SUSY_LAUNCH_COMMAND) {
     $launchDesc = $env:SUSY_LAUNCH_COMMAND
@@ -324,6 +343,9 @@ try {
     Fail "The Susy client exited immediately (exit code $($proc.ExitCode)). Check $RuntimeErrLog."
   }
   Write-Log "Launcher/client PID: $($proc.Id)"
+  $clientLaunched = $true
+  # Record the PID so a retry can kill this client if needed.
+  $proc.Id | Set-Content -LiteralPath $PreviousClientPidFile -Force
   if ($launcherManaged) {
     # The Prism CLI process is not the Minecraft process. It may remain alive
     # as the Prism GUI, or exit immediately after handing the request off, so
@@ -385,16 +407,16 @@ try {
 
     if ($launcherManaged -and $handoffStartedAt) {
       $handoffSeconds = ((Get-Date) - $handoffStartedAt).TotalSeconds
-      if ($handoffSeconds -gt 180 -and -not $oracleSeen) {
+      if ($handoffSeconds -gt 600 -and -not $oracleSeen) {
         $logHint = Get-InstanceLogPath
         if ($logHint -and (Test-Path -LiteralPath $logHint)) {
           Write-Log "Last 120 lines from the Prism instance log:"
           Get-Content -LiteralPath $logHint -Tail 120 | ForEach-Object { Write-Log $_ }
         }
-        Fail "Prism accepted the launch request, but the SUSY oracle was not seen in the instance log after 180 seconds. Confirm the oracle jar is enabled in Prism and inspect $logHint."
+        Fail "Prism accepted the launch request, but the SUSY oracle was not seen in the instance log after 600 seconds (10 minutes). Confirm the oracle jar is enabled in Prism and inspect $logHint."
       }
-      if ($handoffSeconds -gt 300) {
-        Fail "Prism launched the instance, but no recipedump appeared after 300 seconds. Check $RuntimeErrLog and $(Get-InstanceLogPath)."
+      if ($handoffSeconds -gt 600) {
+        Fail "Prism launched the instance, but no recipedump appeared after 600 seconds (10 minutes). Check $RuntimeErrLog and $(Get-InstanceLogPath)."
       }
     }
 
@@ -406,6 +428,10 @@ try {
   }
 } finally {
   Restore-PrismJvmArguments
+  # Clean up the PID file on success so retries know there's no leftover client.
+  if ($clientLaunched -and (Test-Path -LiteralPath $PreviousClientPidFile)) {
+    Remove-Item -LiteralPath $PreviousClientPidFile -Force -ErrorAction SilentlyContinue
+  }
   # Do not terminate Prism itself: for a launcher-managed instance `$proc` is
   # the Prism GUI/request process, not the Minecraft client.
   if ($proc -and -not $proc.HasExited -and -not $launcherManaged) {

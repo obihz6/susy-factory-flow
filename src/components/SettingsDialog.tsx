@@ -28,12 +28,17 @@ import {
   setBoardSoundsEnabled,
   setBoardSoundVolume,
 } from "@/lib/board-sounds";
+import {
+  areChipClicksInverted,
+  setChipClicksInverted,
+} from "@/lib/chip-clicks";
 
 /** The planner settings sheet. Changes apply immediately and persist locally. */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [font, setFont] = useState<AppFontId>(() => getStoredAppFont());
   const [sounds, setSounds] = useState<boolean>(() => areBoardSoundsEnabled());
   const [volume, setVolume] = useState<number>(() => getBoardSoundVolume());
+  const [chipClicksInverted, setChipClicksInvertedState] = useState<boolean>(() => areChipClicksInverted());
   const uiScalePercent = useUiScalePercent();
   const canPlayTimelapse = useFactoryStore(
     (state) => state.project.nodes.length + (state.project.storages?.length ?? 0) >= 2,
@@ -172,16 +177,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={() => {
-                const next = !invertedClicks;
+                const next = !chipClicksInverted;
                 setChipClicksInverted(next);
-                setInvertedClicks(next);
+                setChipClicksInvertedState(next);
               }}
-              aria-pressed={invertedClicks}
+              aria-pressed={chipClicksInverted}
               className="flex min-h-10 w-full items-center gap-2 text-left text-sm"
             >
               <span className="min-w-0 flex-1">Swap chip clicks</span>
-              <span className={invertedClicks ? "text-[var(--mc-good)]" : "text-[var(--mc-ink-muted)]"}>
-                {invertedClicks ? "ON" : "OFF"}
+              <span className={chipClicksInverted ? "text-[var(--mc-good)]" : "text-[var(--mc-ink-muted)]"}>
+                {chipClicksInverted ? "ON" : "OFF"}
               </span>
             </button>
           </section>
