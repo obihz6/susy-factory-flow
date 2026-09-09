@@ -162,6 +162,14 @@ Get-ChildItem -LiteralPath $instanceMods -Filter "susy*hei*oracle*.jar" -File -E
     }
   }
 Copy-Item -LiteralPath $OracleJar -Destination (Join-Path $instanceMods (Split-Path -Leaf $OracleJar)) -Force
+Write-Log "Copied oracle jar to: $(Join-Path $instanceMods (Split-Path -Leaf $OracleJar))"
+
+# Verify the oracle jar is in the mods folder.
+$modsAfterCopy = Get-ChildItem -LiteralPath $instanceMods -Filter "susy*hei*oracle*.jar" -File -ErrorAction SilentlyContinue
+if (-not $modsAfterCopy) {
+  Fail "Oracle jar was not found in mods folder after copy! Check: $instanceMods"
+}
+Write-Log "Verified: Oracle jar present in mods folder: $($modsAfterCopy.FullName)"
 
 $instanceOptions = Join-Path $InstanceDir "options.txt"
 if (Test-Path -LiteralPath $instanceOptions) {
@@ -222,6 +230,11 @@ function Find-LauncherExecutable {
 # this launch and restore the file in the finally block below.
 $script:PrismInstanceConfigPath = $null
 $script:PrismInstanceConfigOriginal = $null
+
+# Also set JAVA_TOOL_OPTIONS as a fallback - some Prism versions forward this.
+$env:JAVA_TOOL_OPTIONS = "-Dsusy.oracle.autorun=true -Dsusy.oracle.dumpRecipes=true -Dsusy.oracle.runId=$RunId -Dsusy.oracle.recipedumpPath=$RecipedumpPath -Dsusy.oracle.iconDir=$RenderedIconDir"
+Write-Log "Set JAVA_TOOL_OPTIONS for oracle: $env:JAVA_TOOL_OPTIONS"
+
 function Set-PrismOracleJvmArguments {
   if (-not $resolved.prismInstanceId) { return }
   $wrapperDir = Split-Path -Parent $InstanceDir
@@ -260,6 +273,14 @@ function Set-PrismOracleJvmArguments {
   }
   [System.IO.File]::WriteAllText($configPath, ($lines -join [Environment]::NewLine))
   Write-Log "Configured oracle JVM arguments in Prism instance.cfg for this launch."
+
+  # Verify the config was written correctly.
+  $verifyConfig = [System.IO.File]::ReadAllText($configPath)
+  if ($verifyConfig -match "JvmArgs=.*susy\.oracle") {
+    Write-Log "Verified: instance.cfg contains oracle JVM args."
+  } else {
+    Write-Log "WARNING: Could not verify oracle JVM args in instance.cfg!"
+  }
 }
 
 function Restore-PrismJvmArguments {
