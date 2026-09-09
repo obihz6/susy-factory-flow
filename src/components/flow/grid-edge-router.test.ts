@@ -691,3 +691,119 @@ describe("wires plan together", () => {
     expect(countCrossings(solved)).toBe(0);
   });
 });
+
+describe("exits and landings", () => {
+  it("two cards a cell apart connect straight across, no detour", () => {
+    // Jack, 2026-09-08: a machine one grid space from its drawer had to
+    // leave by a side and come round, because the vertex between the two
+    // cards is inside both margins. Facing docks a cell apart connect.
+    const machine = card("machine", 0, 0, 440, 300);
+    const drawer = card("drawer", 460, 100, 100, 80);
+    const solved = solveGridRoutes(
+      [machine, drawer],
+      [
+        request({
+          edgeId: "e1",
+          sources: rim(machine),
+          targets: rim(drawer),
+          sourceCardId: "machine",
+          targetCardId: "drawer",
+        }),
+      ],
+    );
+    const points = solved.get("e1")!.points;
+    expect(points.length).toBe(2);
+    expect(points[0].x).toBe(440);
+    expect(points[1].x).toBe(460);
+    expect(points[0].y).toBe(points[1].y);
+  });
+
+  it("aligned ports go straight rather than out at 45 and back", () => {
+    // Out at 45°, one bend, straight in must never beat the straight shot.
+    const a = card("a", 0, 0, 440, 300);
+    const b = card("b", 600, 0, 440, 300);
+    const solved = solveGridRoutes(
+      [a, b],
+      [
+        request({
+          edgeId: "e1",
+          sources: [{ x: 440, y: 140, side: "right" }],
+          targets: [{ x: 600, y: 140, side: "left" }],
+        }),
+      ],
+    );
+    const points = solved.get("e1")!.points;
+    expect(points.every((point) => Math.abs(point.y - 140) < 0.01)).toBe(true);
+  });
+});
+
+describe("straight shots and self loops", () => {
+  it("two cards two cells apart connect in one straight line", () => {
+    // Jack, 2026-09-08: at one cell the wire went straight, at two it came
+    // out of a side and turned in. The clean point two cells out was the
+    // far card's edge, so the search charged an early turn to a wire that
+    // never turned. Now only a turn on the exit run pays.
+    const machine = card("machine", 0, 0, 440, 300);
+    const drawer = card("drawer", 480, 100, 100, 80);
+    const solved = solveGridRoutes(
+      [machine, drawer],
+      [
+        request({
+          edgeId: "e1",
+          sources: rim(machine),
+          targets: rim(drawer),
+          sourceCardId: "machine",
+          targetCardId: "drawer",
+        }),
+      ],
+    );
+    const points = solved.get("e1")!.points;
+    expect(points.length).toBe(2);
+    expect(points[0].x).toBe(440);
+    expect(points[1].x).toBe(480);
+    expect(points[0].y).toBe(points[1].y);
+  });
+
+  it("a straight shot of any length beats leaving by another side", () => {
+    const machine = card("machine", 0, 0, 440, 300);
+    const drawer = card("drawer", 640, 100, 100, 80);
+    const solved = solveGridRoutes(
+      [machine, drawer],
+      [
+        request({
+          edgeId: "e1",
+          sources: rim(machine),
+          targets: rim(drawer),
+          sourceCardId: "machine",
+          targetCardId: "drawer",
+        }),
+      ],
+    );
+    const points = solved.get("e1")!.points;
+    expect(points.length).toBe(2);
+    expect(points[0].y).toBe(points[1].y);
+  });
+
+  it("a card wired to itself docks freely, turns only at 90 degrees, and lands a cell or more from its exit", () => {
+    const machine = card("machine", 0, 0, 440, 300);
+    const solved = solveGridRoutes(
+      [machine],
+      [
+        request({
+          edgeId: "loop",
+          sources: rim(machine),
+          targets: rim(machine),
+          sourceCardId: "machine",
+          targetCardId: "machine",
+        }),
+      ],
+    );
+    const points = solved.get("loop")!.points;
+    expect(points.length).toBeGreaterThanOrEqual(3);
+    const first = points[0];
+    const last = points[points.length - 1];
+    expect(Math.max(Math.abs(first.x - last.x), Math.abs(first.y - last.y))).toBeGreaterThanOrEqual(20);
+    // Ninety-degree turns only: every run is horizontal or vertical.
+    expect(isOrthogonal(points)).toBe(true);
+  });
+});

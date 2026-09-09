@@ -148,6 +148,10 @@ export interface BoardCameraRequest {
 }
 
 interface FactoryStore {
+  checklistMode: boolean;
+  setChecklistMode: (active: boolean) => void;
+  toggleChecklist: (kind: "cards" | "edges", ids: string[]) => void;
+  clearChecklist: () => void;
   project: FactoryProject;
   undoHistory: FactoryProject[];
   redoHistory: FactoryProject[];
@@ -469,6 +473,23 @@ interface FactoryStore {
       dominantColor?: string;
     },
     side: "source" | "drain",
+    /** Where to set it down (flow px, the drawer centred there); absent finds clear floor. */
+    position?: { x: number; y: number },
+  ) => void;
+  /**
+   * Cut a wire at a point and run it through a new drawer of its resource
+   * standing there (the board menu's "Add a drawer here"): the wire goes,
+   * one wire runs source -> drawer and one drawer -> target. Several ids
+   * are one drawn channel (the same resource between the same two cards);
+   * all of them run through the one drawer.
+   */
+  insertStorageOnEdge: (
+    edgeIds: string[],
+    position: { x: number; y: number },
+    resource: Pick<
+      ResourceAmount,
+      "kind" | "id" | "displayName" | "iconPath" | "iconAtlas" | "dominantColor" | "tooltip"
+    >,
   ) => void;
   deleteStorage: (storageId: string) => void;
   /** Clone a node (same recipe/config, no wires) beside the original. */
@@ -921,6 +942,26 @@ export interface PendingResourceConnection {
 let lastRecipeAddId = 0;
 
 export const useFactoryStore = create<FactoryStore>((set, get) => ({
+  checklistMode: false,
+  setChecklistMode: (checklistMode) => set({ checklistMode, ...(checklistMode ? { nodeColorPaintMode: undefined, pendingResourceConnection: undefined } : {}) }),
+  toggleChecklist: (kind, ids) => set((state) => {
+    const valid = new Set(kind === "cards"
+      ? [...state.project.nodes, ...(state.project.storages ?? [])].map((entry) => entry.id)
+      : state.project.edges.map((entry) => entry.id));
+    const targets = ids.filter((id) => valid.has(id));
+    if (!targets.length) return state;
+    const checklist = state.project.checklist ?? { cards: [], edges: [] };
+    const checked = new Set(checklist[kind]);
+    const restore = targets.every((id) => checked.has(id));
+    for (const id of targets) { if (restore) checked.delete(id); else checked.add(id); }
+    playBoardSound(restore ? "checklistRestore" : "checklistCheck");
+    return withProjectHistory(state, { project: touchProject({ ...state.project, checklist: { ...checklist, [kind]: [...checked] } }) });
+  }),
+  clearChecklist: () => set((state) => {
+    if (!state.project.checklist) return state;
+    playBoardSound("checklistRestore");
+    return withProjectHistory(state, { project: touchProject({ ...state.project, checklist: undefined }) });
+  }),
   project: initialProject,
   undoHistory: [],
   redoHistory: [],
@@ -2435,17 +2476,21 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       return { project, lastResult: solveBooks(project) };
     });
   },
-  addPoolStorage: (resource, side) => {
+  addPoolStorage: (resource, side, at) => {
     set((state) => {
       // ONE product drawer per resource in pool mode: a second is the same
-      // ask twice. Asking again goes to the one that exists.
+      // ask twice. Asking again goes to the one that exists. Build and
+      // solve mode (the board menu's "New product drawer") may hold as many
+      // as the player sets down.
       const roles = getStorageRoles(state.project);
-      const existing = (state.project.storages ?? []).find(
-        (storage) =>
-          storage.kind === resource.kind &&
-          storage.resourceId === resource.id &&
-          roles.get(storage.id) === "product",
-      );
+      const existing = state.project.poolMode
+        ? (state.project.storages ?? []).find(
+            (storage) =>
+              storage.kind === resource.kind &&
+              storage.resourceId === resource.id &&
+              roles.get(storage.id) === "product",
+          )
+        : undefined;
       if (existing) {
         return {
           boardFocusRequest: {
@@ -2456,11 +2501,16 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         };
       }
       const index = (state.project.storages ?? []).length;
-      // Same magnet a recipe add obeys: never on top of anything.
+      // Same magnet a recipe add obeys: never on top of anything. Asked for
+      // a spot (the board menu), the drawer is centred there instead.
       const position = snapPositionToGrid(
         nearestFreeSpot(
           {
-            ...snapPositionToGrid({ x: 100 + index * 60, y: 120 + (index % 4) * 100 }),
+            ...snapPositionToGrid(
+              at
+                ? { x: at.x - STORAGE_NODE_WIDTH / 2, y: at.y - STORAGE_NODE_HEIGHT / 2 }
+                : { x: 100 + index * 60, y: 120 + (index % 4) * 100 },
+            ),
             width: STORAGE_NODE_WIDTH,
             height: STORAGE_NODE_HEIGHT,
           },
@@ -2486,11 +2536,94 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       return withProjectHistory(state, {
         project,
         lastResult: solveBooks(project),
-        boardFocusRequest: {
-          mode: "centre",
-          nodeIds: [storage.id],
-          token: (state.boardFocusRequest?.token ?? 0) + 1,
+        // Set down where the pointer was, it is already in view.
+        boardFocusRequest: at
+          ? state.boardFocusRequest
+          : {
+              mode: "centre",
+              nodeIds: [storage.id],
+              token: (state.boardFocusRequest?.token ?? 0) + 1,
+            },
+      });
+    });
+  },
+  insertStorageOnEdge: (edgeIds, at, resource) => {
+    set((state) => {
+      const ids = new Set(edgeIds);
+      const cut = state.project.edges.filter((edge) => ids.has(edge.id));
+      if (cut.length === 0) {
+        return state;
+      }
+      const first = cut[0];
+      // The drawer joins the board both ends share, if they share one, so it
+      // rides that board's title bar with them; its position converts to the
+      // frame's own space the way a port-spawned drawer's does.
+      const ownerOf = (id: string) =>
+        state.project.nodes.find((node) => node.id === id)?.pocketId ??
+        (state.project.storages ?? []).find((entry) => entry.id === id)?.pocketId;
+      const sourceOwner = ownerOf(first.source);
+      const owner = sourceOwner !== undefined && sourceOwner === ownerOf(first.target) ? sourceOwner : undefined;
+      const frame = owner
+        ? computeOpenBoardRects(computeBoardLevelView(state.project).openBoards).find(
+            (entry) => entry.id === owner,
+          )
+        : undefined;
+      const landing = nearestFreeSpot(
+        {
+          x: at.x - STORAGE_NODE_WIDTH / 2,
+          y: at.y - STORAGE_NODE_HEIGHT / 2,
+          width: STORAGE_NODE_WIDTH,
+          height: STORAGE_NODE_HEIGHT,
         },
+        projectBlockerRects(state.project),
+        BOARD_GRID,
+      );
+      const storage: FactoryStorage = {
+        id: createId("storage"),
+        kind: resource.kind,
+        resourceId: resource.id,
+        displayName: resource.displayName,
+        iconPath: resource.iconPath,
+        iconAtlas: resource.iconAtlas,
+        dominantColor: resource.dominantColor ?? resource.iconAtlas?.dominantColor,
+        position: snapPositionToGrid(
+          frame ? { x: landing.x - frame.x, y: landing.y - frame.y } : landing,
+        ),
+        pocketId: frame ? owner : undefined,
+      };
+      let project: FactoryProject = {
+        ...state.project,
+        storages: [...(state.project.storages ?? []), storage],
+        edges: state.project.edges.filter((edge) => !ids.has(edge.id)),
+      };
+      const inHandle = makeResourceHandleId("input", { kind: resource.kind, id: resource.id });
+      const outHandle = makeResourceHandleId("output", { kind: resource.kind, id: resource.id });
+      for (const edge of cut) {
+        const into = buildEdgeBetweenNodes(project, edge.source, storage.id, {
+          ...resource,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: inHandle,
+        });
+        if (into && !findDuplicateEdge(project.edges, into)) {
+          project = { ...project, edges: [...project.edges, into] };
+        }
+        const outOf = buildEdgeBetweenNodes(project, storage.id, edge.target, {
+          ...resource,
+          sourceHandle: outHandle,
+          targetHandle: edge.targetHandle,
+        });
+        if (outOf && !findDuplicateEdge(project.edges, outOf)) {
+          project = applyEdgeInputOverride(
+            { ...project, edges: [...project.edges, outOf] },
+            outOf,
+            resource,
+          );
+        }
+      }
+      const finalProject = touchProject(pruneOrphanStorages(project));
+      return withProjectHistory(state, {
+        project: finalProject,
+        lastResult: solveBooks(finalProject),
       });
     });
   },
@@ -2511,13 +2644,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   deleteStorage: (storageId) => {
     set((state) => {
-      const project = touchProject({
-        ...state.project,
-        storages: (state.project.storages ?? []).filter((storage) => storage.id !== storageId),
-        edges: state.project.edges.filter(
-          (edge) => edge.source !== storageId && edge.target !== storageId,
-        ),
-      });
+      const project = touchProject(removeStorageAndHeal(state.project, storageId));
 
       return withProjectHistory(state, {
         project,
@@ -2950,14 +3077,13 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         const lane = waypointsById.get(edge.id);
         if (lane) {
           changed = true;
-          const { labelOffset: _labelOffset, ...rest } = edge;
-          return { ...rest, waypoints: lane };
+          return { ...edge, waypoints: lane };
         }
-        if (!reset.has(edge.id) || (!edge.waypoints && !edge.labelOffset)) {
+        if (!reset.has(edge.id) || !edge.waypoints) {
           return edge;
         }
         changed = true;
-        const { waypoints: _waypoints, labelOffset: _labelOffset2, ...rest } = edge;
+        const { waypoints: _waypoints, ...rest } = edge;
         return rest;
       });
 
@@ -5091,6 +5217,78 @@ function applyEdgeInputOverride(
         : node,
     ),
   };
+}
+
+/**
+ * A deleted drawer's wires HEAL (Jack, 2026-09-08: "it's two edges going
+ * in and out, it should just become one ... you scrubbed it away"): the
+ * cards the drawer stood between are wired straight to each other, which
+ * is exactly the undo of the board menu's "Add a drawer here". Its mode
+ * (buffer, strict, product, trash) makes no difference.
+ *
+ * Who gets rewired, and nothing more:
+ * - ONE feeder or ONE taker: every feeder wires to every taker, so a
+ *   pass-through becomes one wire and a drawer splitting one output to
+ *   three machines leaves those three fed. At most max(feeders, takers)
+ *   wires, never a cross product of both.
+ * - several of each, but all from one card and all to one card: the
+ *   wires pair off in order. That is a drawn channel split through a
+ *   drawer, put back as it was.
+ * - anything else (a real junction, several feeders AND several takers)
+ *   heals nothing: there is no one wire that says what it meant.
+ *
+ * A wire is only added if the board would accept it anyway
+ * (`buildEdgeBetweenNodes` refuses a slot that does not take the
+ * resource), so a drawer bridging two things that cannot meet directly
+ * just goes.
+ */
+function removeStorageAndHeal(project: FactoryProject, storageId: string): FactoryProject {
+  const storage = (project.storages ?? []).find((entry) => entry.id === storageId);
+  const ins = project.edges.filter((edge) => edge.target === storageId);
+  const outs = project.edges.filter((edge) => edge.source === storageId);
+  let next: FactoryProject = {
+    ...project,
+    storages: (project.storages ?? []).filter((entry) => entry.id !== storageId),
+    edges: project.edges.filter((edge) => edge.source !== storageId && edge.target !== storageId),
+  };
+  if (!storage || ins.length === 0 || outs.length === 0) {
+    return next;
+  }
+  const pairs: Array<[FactoryEdge, FactoryEdge]> = [];
+  if (ins.length === 1 || outs.length === 1) {
+    for (const into of ins) {
+      for (const outOf of outs) {
+        pairs.push([into, outOf]);
+      }
+    }
+  } else if (
+    new Set(ins.map((edge) => edge.source)).size === 1 &&
+    new Set(outs.map((edge) => edge.target)).size === 1
+  ) {
+    for (let i = 0; i < Math.min(ins.length, outs.length); i += 1) {
+      pairs.push([ins[i], outs[i]]);
+    }
+  }
+  const resource = {
+    kind: storage.kind,
+    id: storage.resourceId,
+    displayName: storage.displayName,
+    iconPath: storage.iconPath,
+    iconAtlas: storage.iconAtlas,
+    dominantColor: storage.dominantColor ?? storage.iconAtlas?.dominantColor,
+  };
+  for (const [into, outOf] of pairs) {
+    const healed = buildEdgeBetweenNodes(next, into.source, outOf.target, {
+      ...resource,
+      sourceHandle: into.sourceHandle,
+      targetHandle: outOf.targetHandle,
+    });
+    if (!healed || findDuplicateEdge(next.edges, healed)) {
+      continue;
+    }
+    next = applyEdgeInputOverride({ ...next, edges: [...next.edges, healed] }, healed, resource);
+  }
+  return next;
 }
 
 function pruneOrphanStorages(project: FactoryProject): FactoryProject {

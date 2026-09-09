@@ -5,15 +5,11 @@ import {
   Factory,
   Library,
   Plus,
-  ScrollText,
   Search,
-  Sparkles,
   ThumbsUp,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChangelogDialog } from "@/components/ChangelogDialog";
 import { FLUID_ICON_SCALE, ResourceIcon } from "@/components/nei/ResourceIcon";
-import { CHANGELOG } from "@/lib/changelog";
 import { DEFAULT_DATASET_MANIFEST_URL } from "@/lib/datasets";
 import { queryRecipeDatasetResources } from "@/lib/datasets/browser-loader";
 import { listCommunityPlans } from "@/lib/community/client";
@@ -35,10 +31,13 @@ import { WelcomeBackdrop } from "./WelcomeBackdrop";
  *
  * It COVERS the board (see FactoryPlannerApp) rather than replacing it, over
  * a quiet ASCII backdrop that keeps to the corners. The content is one
- * column, kept short: the name and the three ways to start, your designs,
- * the community's newest setups, then what changed last release. Every pick
- * steps off the tab, and the checkbox at the foot is how a regular stops
- * arriving here.
+ * column, kept short: the name and the three ways to start, your designs and
+ * the community's newest setups. Every pick steps off the tab, and the
+ * checkbox at the foot is how a regular stops arriving here.
+ *
+ * There is no "new in vX" section any more (Jack, 2026-09-08): the player
+ * facing changelog is gone, and a release announces itself once through
+ * ReleaseSpotlight.
  */
 
 const COMMUNITY_TILE_COUNT = 15;
@@ -86,8 +85,6 @@ function useBackdropIcons(): string[] {
 export function WelcomePage() {
   const welcome = useWelcomeTab();
   const addDesign = useDesignStore((state) => state.addDesign);
-  const [isChangelogOpen, setChangelogOpen] = useState(false);
-  const latest = CHANGELOG[0];
   const backdropIcons = useBackdropIcons();
 
   return (
@@ -156,34 +153,6 @@ export function WelcomePage() {
 
           <CommunityShelf />
 
-          {latest ? (
-            <section className="flex flex-col gap-2">
-              <SectionTitle>
-                <Sparkles className="h-3.5 w-3.5 text-cyan-300" aria-hidden />
-                New in {latest.version}
-              </SectionTitle>
-              <div className="rounded border border-line bg-[#151a21]/80 px-4 py-3">
-                <p className="text-[14px] font-bold text-white">{latest.headline}</p>
-                <ul className="mt-2 flex flex-col gap-1">
-                  {latest.notes.slice(0, 2).map((note) => (
-                    <li key={note} className="flex gap-2 text-[13px] leading-relaxed text-fg-muted">
-                      <span aria-hidden className="mt-2 h-1 w-1 shrink-0 rounded-full bg-cyan-400" />
-                      <span>{note.replace(/\*/g, "")}</span>
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  type="button"
-                  onClick={() => setChangelogOpen(true)}
-                  className="mt-2 inline-flex items-center gap-1 text-[11px] text-cyan-300 hover:text-cyan-200"
-                >
-                  <ScrollText className="h-3 w-3" aria-hidden />
-                  All release notes
-                </button>
-              </div>
-            </section>
-          ) : null}
-
           <footer className="border-t border-line pt-3">
             <label className="flex w-fit cursor-pointer items-center gap-2 text-[12px] text-fg-muted hover:text-fg">
               <input
@@ -197,7 +166,6 @@ export function WelcomePage() {
           </footer>
         </div>
       </div>
-      {isChangelogOpen ? <ChangelogDialog onClose={() => setChangelogOpen(false)} /> : null}
     </div>
   );
 }

@@ -25,13 +25,13 @@ describe("edgeDetailForLevel", () => {
     expect(hasEdgeDetail(detail, EDGE_DETAIL_GLOBAL)).toBe(false);
   });
 
-  it("strips a line down to its route at a glance", () => {
-    // The chip is a few pixels tall here, the arrowhead is a smudge and the
-    // dashes are a shimmer — and there are hundreds of each.
+  it("strips a line down to its route and its arrows at a glance", () => {
+    // The chip is a few pixels tall here and the dashes are a shimmer - and
+    // there are hundreds of each. The arrows stay, drawn larger.
     const detail = edgeDetailForLevel(NODE_DETAIL_GLANCE);
     expect(hasEdgeDetail(detail, EDGE_DETAIL_GLOBAL)).toBe(true);
     expect(hasEdgeDetail(detail, EDGE_DETAIL_LABELS)).toBe(false);
-    expect(hasEdgeDetail(detail, EDGE_DETAIL_ARROWS)).toBe(false);
+    expect(hasEdgeDetail(detail, EDGE_DETAIL_ARROWS)).toBe(true);
     expect(hasEdgeDetail(detail, EDGE_DETAIL_PULSE)).toBe(false);
   });
 

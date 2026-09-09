@@ -1,0 +1,40 @@
+/* Construction marks are visual only; invisible targets remain clickable. */
+.checklist-active [data-checklist-edge],
+.checklist-active .react-flow__pane,
+.checklist-active .react-flow__node,
+.checklist-active .react-flow__node *,
+.checklist-active .react-flow__edge,
+.checklist-active .react-flow__edge *,
+[data-checklist-row="true"],
+[data-checklist-row="true"] * {
+  cursor: var(--checklist-cursor) !important;
+}
+.checklist-active .checklist-done,
+[data-checklist-done="true"] {
+  opacity: 0.07 !important;
+  transition: opacity 160ms ease-out;
+}
+.checklist-active .checklist-done:hover,
+[data-checklist-done="true"]:hover,
+[data-checklist-done="true"]:focus-visible {
+  /* Lifted far enough for the green mark below to read on a done card. */
+  opacity: 0.3 !important;
+}
+/* WHAT A CLICK WILL MARK, in green, and nothing else: the port glow and the
+   card's own hover states are off while the checklist is on (RecipeNode's
+   checklistLocked). A card wears the outline; a wire lights its own hit
+   target, which lies over the drawn line. */
+.checklist-active .react-flow__node:hover {
+  outline: 3px solid #86efac;
+  outline-offset: 2px;
+}
+.checklist-active path[data-checklist-edge]:hover {
+  stroke: #86efac !important;
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .checklist-active .checklist-done,
+  [data-checklist-done] {
+    transition: none;
+  }
+}

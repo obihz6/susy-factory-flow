@@ -2,6 +2,7 @@
 
 import { Check, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { PREVIEW_RELEASE_SPOTLIGHT_EVENT } from "@/lib/release-spotlight";
 import {
   BOARD_TIMELAPSE_SPEEDS,
   getBoardTimelapseCameraMode,
@@ -50,36 +51,38 @@ import {
   isDefaultRouterTuning,
   redoRouterTuning,
   requestWireReroute,
+  resetArrangeTuning,
+  isDefaultArrangeTuning,
   resetRouterTuning,
   ROUTER_TUNING_FIELDS,
+  type RouterTuningField,
   setRouterTuning,
   undoRouterTuning,
   type RouterTuning,
 } from "./flow/router-tuning";
 import { useFactoryStore } from "@/store/factory-store";
+import { readBoardGeometry, readBoardScore, type BoardScore } from "./flow/board-score";
+import { decodeLayout, encodeLayout } from "@/lib/board-layout-string";
 import { getUiScale } from "@/lib/ui-scale";
+
+/** What a dial is and what its ends do, as the hover tooltip. */
+function dialTooltip(field: RouterTuningField): string {
+  return `${field.hint}\nLow: ${field.low}\nHigh: ${field.high}`;
+}
 
 /**
  * The dev menu, behind a shift-click on the version chip.
  *
- * The chip's shift-click used to jump straight to the update-popup preview;
- * that preview now lives in here as one row among the dev tools, so new ones
- * get a home instead of each claiming its own secret click. Deliberately
- * undocumented in the UI - it is a workbench, not a feature.
+ * One home for the dev tools, so new ones do not each claim a secret click
+ * of their own. Deliberately undocumented in the UI - it is a workbench, not
+ * a feature.
  *
  * A floating PALETTE, not a modal: no backdrop, no dim, no blur, dragged
  * around by its header. The tools in here act on the board live - the tilt
  * sliders especially - so the board has to stay visible and the panel has
  * to get out of the way of whatever it is adjusting.
  */
-export function DevMenu({
-  onClose,
-  onPreviewUpdatePopup,
-}: {
-  onClose: () => void;
-  /** Opens the update-popup preview (WhatsNewPreview), replacing this menu. */
-  onPreviewUpdatePopup: () => void;
-}) {
+export function DevMenu({ onClose }: { onClose: () => void }) {
   const [perfHud, setPerfHud] = useState<boolean>(() => isPerfHudEnabled());
   // Two cards is the least board that reads as a sequence at all.
   const canPlayTimelapse = useFactoryStore(
@@ -110,6 +113,69 @@ export function DevMenu({
   };
   const [forceGlance, setForceGlance] = useState(() => isNodeDetailGlanceForced());
   const [holdEnding, setHoldEnding] = useState(() => getBoardTimelapseHoldEnding());
+  // The board's score, read off the displayed wires every half second
+  // while the menu is open: crossings first, wire length second.
+  const [score, setScore] = useState<BoardScore | undefined>(() => readBoardScore());
+  useEffect(() => {
+    const tick = () => setScore(readBoardScore());
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, []);
+  const [layoutNote, setLayoutNote] = useState<string | undefined>(undefined);
+  const copyLayout = async () => {
+    const project = useFactoryStore.getState().project;
+    const geometry = readBoardGeometry();
+    const current = readBoardScore();
+    const text = encodeLayout({
+      planId: project.id,
+      cards:
+        geometry?.cards ??
+        [...project.nodes, ...(project.storages ?? [])].map((card) => ({
+          id: card.id,
+          x: card.position.x,
+          y: card.position.y,
+        })),
+      wires: geometry?.wires,
+      score: current
+        ? { crossings: current.crossings, length: current.length, points: current.points }
+        : undefined,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      setLayoutNote(`Layout copied: ${text.length} characters.`);
+    } catch {
+      window.prompt("Copy this layout string:", text);
+      setLayoutNote(undefined);
+    }
+  };
+  const pasteLayout = async () => {
+    let text: string | null = null;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      text = window.prompt("Paste a layout string:");
+    }
+    if (!text) return;
+    const state = useFactoryStore.getState();
+    try {
+      const decoded = decodeLayout(text.trim(), state.project);
+      if (decoded.moves.length === 0) {
+        setLayoutNote("No card on this plan matched that layout.");
+        return;
+      }
+      state.applyBoardArrangement({
+        moves: decoded.moves,
+        resetEdgeIds: state.project.edges.map((edge) => edge.id),
+      });
+      useFactoryStore.getState().frameBoardNodes();
+      setLayoutNote(
+        `Placed ${decoded.moves.length} cards${decoded.unknown.length ? `, ${decoded.unknown.length} unknown keys skipped` : ""}${decoded.missing.length ? `, ${decoded.missing.length} cards not in the layout` : ""}${decoded.otherPlan ? " (layout was made for another plan)" : ""}.`,
+      );
+    } catch (error) {
+      setLayoutNote(error instanceof Error ? error.message : String(error));
+    }
+  };
   // The wire router's dials. Every change re-solves the board live.
   const [tuning, setTuning] = useState<RouterTuning>(() => getRouterTuning());
   const patchTuning = (patch: Partial<RouterTuning>) => {
@@ -252,24 +318,6 @@ export function DevMenu({
               aria-hidden
               className={["h-4 w-4 shrink-0", perfHud ? "text-cyan-400" : "invisible"].join(" ")}
             />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              onClose();
-              onPreviewUpdatePopup();
-            }}
-            className="mt-2 flex w-full items-center gap-3 rounded border border-line px-3 py-2.5 text-left hover:border-line-strong hover:bg-surface-raised"
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-base leading-tight text-fg">
-                Preview the update popup
-              </span>
-              <span className="mt-0.5 block text-xs text-fg-muted">
-                Shows the what&apos;s-new popup exactly as a returning player sees it.
-              </span>
-            </span>
           </button>
 
           <div className="mt-2 rounded border border-line px-3 py-2.5">
@@ -481,6 +529,79 @@ export function DevMenu({
           </div>
 
           <div className="mt-2 rounded border border-line px-3 py-2.5">
+            <span className="block text-base leading-tight text-fg">Release popup</span>
+            <span className="mt-0.5 block text-xs text-fg-muted">
+              The poster players get once, on the first visit after a release that was written
+              one. Previewing it here changes nothing about what this browser has been shown.
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                requestAnimationFrame(() =>
+                  window.dispatchEvent(new CustomEvent(PREVIEW_RELEASE_SPOTLIGHT_EVENT)),
+                );
+              }}
+              className="mt-2.5 w-full rounded border border-cyan-700 bg-cyan-500/10 px-3 py-1.5 text-sm text-cyan-300 hover:bg-cyan-500/20"
+            >
+              Preview
+            </button>
+          </div>
+
+          <div className="mt-2 rounded border border-line px-3 py-2.5">
+            <span className="block text-base leading-tight text-fg">Score</span>
+            <span className="mt-0.5 block text-xs text-fg-muted">
+              The board as drawn: crossings first, wire second. Versus mode: copy your layout
+              to send it, paste one to see it here.
+            </span>
+            <div className="mt-2.5 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded border border-line px-2 py-1.5">
+                <div className="text-2xl font-black tabular-nums leading-none text-fg">
+                  {score ? score.crossings : "-"}
+                </div>
+                <div className="mt-1 text-[10px] uppercase tracking-wide text-fg-subtle">crossings</div>
+              </div>
+              <div className="rounded border border-line px-2 py-1.5">
+                <div className="text-2xl font-black tabular-nums leading-none text-fg">
+                  {score ? Math.round(score.points).toLocaleString() : "-"}
+                </div>
+                <div className="mt-1 text-[10px] uppercase tracking-wide text-fg-subtle">points</div>
+              </div>
+              <div className="rounded border border-line px-2 py-1.5">
+                <div className="text-2xl font-black tabular-nums leading-none text-fg">
+                  {score ? score.wires : "-"}
+                </div>
+                <div className="mt-1 text-[10px] uppercase tracking-wide text-fg-subtle">
+                  {score && !score.settled ? "wires, routing" : "wires"}
+                </div>
+              </div>
+            </div>
+            {score ? (
+              <p className="mt-2 text-xs tabular-nums text-fg-subtle">
+                {Math.round(score.length).toLocaleString()} px of wire, {score.bends45} bends of 45°,{" "}
+                {score.bends90} of 90°, priced at the Wires dials below. Lower is better.
+              </p>
+            ) : null}
+            <div className="mt-2.5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => void copyLayout()}
+                className="flex-1 rounded border border-cyan-700 bg-cyan-500/10 px-3 py-1.5 text-sm text-cyan-300 hover:bg-cyan-500/20"
+              >
+                Copy layout
+              </button>
+              <button
+                type="button"
+                onClick={() => void pasteLayout()}
+                className="flex-1 rounded border border-line px-3 py-1.5 text-sm text-fg-muted hover:border-line-strong hover:text-fg"
+              >
+                Paste layout
+              </button>
+            </div>
+            {layoutNote ? <p className="mt-2 text-xs text-fg-muted">{layoutNote}</p> : null}
+          </div>
+
+          <div className="mt-2 rounded border border-line px-3 py-2.5">
             <div className="flex items-start justify-between gap-2">
               <span className="min-w-0">
                 <span className="block text-base leading-tight text-fg">Wires</span>
@@ -535,9 +656,34 @@ export function DevMenu({
             >
               Re-route all wires
             </button>
-            {(["Turns", "Crossings", "Negotiation", "Docks", "Costs", "Search"] as const).map(
+            {(["Turns", "Crossings", "Negotiation", "Docks", "Costs", "Search", "Arrange"] as const).map(
               (group) => (
-                <div key={group} className="mt-2.5">
+                <div key={group} className="mt-3">
+                  {group === "Turns" ? (
+                    <span className="mb-1 block border-b border-line pb-1 text-xs font-semibold text-fg">
+                      Wire routing. Every dial below changes how wires are drawn, and re-routes the board when moved.
+                    </span>
+                  ) : null}
+                  {group === "Arrange" ? (
+                    <span className="mb-1 mt-3 flex items-start justify-between gap-3 border-b border-line pb-1 text-xs font-semibold text-fg">
+                      <span>
+                        Auto arrange. These shape the Arrange button only; they never move a wire by themselves.
+                      </span>
+                      {/* Its own reset: the one at the top puts EVERY dial back,
+                          and tuning the arranger should not cost the routing. */}
+                      <button
+                        type="button"
+                        disabled={isDefaultArrangeTuning()}
+                        onClick={() => {
+                          resetArrangeTuning();
+                          setTuning(getRouterTuning());
+                        }}
+                        className="shrink-0 rounded border border-line px-2 py-1 text-xs font-normal text-fg-muted hover:border-line-strong hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Reset
+                      </button>
+                    </span>
+                  ) : null}
                   <span className="block text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
                     {group}
                   </span>
@@ -546,10 +692,10 @@ export function DevMenu({
                     const changed = value !== DEFAULT_ROUTER_TUNING[field.key];
                     if (field.kind === "boolean") {
                       return (
+                        <div key={field.key} className="mt-1.5">
                         <label
-                          key={field.key}
-                          title={field.hint}
-                          className="mt-1.5 flex cursor-pointer items-center gap-2 text-xs text-fg-muted"
+                          title={dialTooltip(field)}
+                          className="flex cursor-pointer items-center gap-2 text-xs text-fg-muted"
                         >
                           <input
                             type="checkbox"
@@ -558,17 +704,14 @@ export function DevMenu({
                             className="accent-cyan-500"
                           />
                           <span className={changed ? "text-cyan-300" : undefined}>{field.label}</span>
-                          <span className="text-fg-subtle">{field.hint}</span>
                         </label>
+                        </div>
                       );
                     }
                     const number = Number(value);
                     return (
-                      <div
-                        key={field.key}
-                        title={field.hint}
-                        className="mt-1.5 flex items-center gap-1.5 text-xs"
-                      >
+                      <div key={field.key} className="mt-2">
+                        <div title={dialTooltip(field)} className="flex items-center gap-1.5 text-xs">
                         <span
                           className={[
                             "w-24 shrink-0 truncate",
@@ -604,6 +747,7 @@ export function DevMenu({
                           aria-label={`${field.label} value`}
                           className="w-16 shrink-0 rounded border border-line bg-surface px-1 py-0.5 text-right tabular-nums text-fg"
                         />
+                        </div>
                       </div>
                     );
                   })}

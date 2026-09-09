@@ -8,8 +8,6 @@ import {
   setAppFont,
   type AppFontId,
 } from "@/lib/app-font";
-import { isUpdatePopupEnabled, setUpdatePopupEnabled } from "@/lib/whats-new";
-import { areChipClicksInverted, setChipClicksInverted } from "@/lib/chip-clicks";
 import {
   DEFAULT_UI_SCALE_PERCENT,
   UI_SCALE_MAX_PERCENT,
@@ -34,8 +32,6 @@ import {
 /** The planner settings sheet. Changes apply immediately and persist locally. */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [font, setFont] = useState<AppFontId>(() => getStoredAppFont());
-  const [updatePopup, setUpdatePopup] = useState<boolean>(() => isUpdatePopupEnabled());
-  const [invertedClicks, setInvertedClicks] = useState<boolean>(() => areChipClicksInverted());
   const [sounds, setSounds] = useState<boolean>(() => areBoardSoundsEnabled());
   const [volume, setVolume] = useState<number>(() => getBoardSoundVolume());
   const uiScalePercent = useUiScalePercent();
@@ -123,14 +119,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </Key>
           </Row>
 
-          <ToggleRow
-            label="Update notes popup"
-            on={updatePopup}
-            onChange={(next) => {
-              setUpdatePopupEnabled(next);
-              setUpdatePopup(next);
-            }}
-          />
           <ToggleRow
             label="Sounds"
             on={sounds}

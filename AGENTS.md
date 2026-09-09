@@ -21,11 +21,22 @@ Working notes for future agents on GTNH Factory Flow.
     work into the top changelog entry and leave the number alone. Equal to
     `version.ts` means everything is live, so this is a new release: bump, and
     open one new entry.
-- The chip opens the changelog, so every release needs ONE entry in
-  `src/lib/changelog.ts`. Write it for players, not developers: what changed on
-  THEIR board, a headline plus at most four notes. Every note is one short
-  sentence. No second sentence saying what it used to do, no reasoning, no
-  jargon ("solver", "refactor", "edge role"). Newest first.
+- THE PLAYER-FACING CHANGELOG IS GONE (Jack, 2026-09-08). No dialog, no
+  unread dot, no "new in vX" on the Welcome tab; the header chip is just the
+  number, and a plain click on it does nothing (shift-click still opens the
+  dev menu). `ChangelogDialog.tsx` was deleted. `src/lib/changelog.ts` stays
+  as a record IN THE CODE - keep adding an entry per release, same rules as
+  before - but nothing a player can reach reads it.
+- What announces a release now is the NOTICE, `src/lib/release-spotlight.ts`
+  plus `ReleaseSpotlight.tsx`: a window that arrives ONCE, on the first visit
+  after a release, carrying a line per change (icon plus a spec-sheet TITLE,
+  no sentences) and a close key. A release with no entry in
+  `RELEASE_SPOTLIGHTS` shows nothing at all, which is the per-release opt-in.
+  A brand new browser never sees one; a returning one does; closing it files
+  it in `seen-spotlights.v1` and it never returns. The number it prints
+  (`release: "3.0"`) is hard coded per notice. Preview it from the dev menu's
+  "Release popup". Its own file carries the writing rules; read them before
+  touching the copy.
 - `main` is the ONLY branch, by explicit decision (2026-08-19): all work lands
   on it, and stale feature branches were deleted after verifying main carried
   every patch. Do not accumulate long-lived branches; the unmerged
@@ -555,48 +566,203 @@ Working notes for future agents on GTNH Factory Flow.
 - Opening a legacy pocket (`size` absent - the "coordinates are their own
   old space" signal) rebases members to fit the frame and drops waypoints
   on wires touching them; minimize mirrors the waypoint rule.
-- Auto-arrange LOCKS EVERY EXISTING BOARD (Jack, 2026-08-29, from player
-  feedback: the dump-first arrange read as destructive). A board someone
-  drew is the player's: its contents are never rearranged, its frame keeps
-  its size, name, paper and ink, and the arrange only PLACES the board -
-  one solid meta card in the root pass, wire length between blocks doing
-  the placing. Waypoints pinned on wires wholly inside one locked board
-  ride the board's move (translated, not wiped); every other re-laid wire
-  still loses its stops and dragged label, and only ROOT-level ink is
-  cleared. Do not resurrect the dump (`removeBoards` on
-  `applyBoardArrangement` survives as API only).
-- The arrange button opens a small SHEET (the pattern the retired Setup Rules key used
-  beside it): one setting, "Rearrange inside boards", and the Arrange
-  button under it. The setting is a browser preference
-  (`gtnh-factory-flow.arrange-tidy-boards.v1`, off by default), never part
-  of the plan. ON, every OPEN board takes the full interior pass in place:
-  members re-laid, frame refit, that level's ink and pinned waypoints
-  reset - but membership, name and paper still stand, and minimized
-  boards stay sealed either way. This is what makes the button repeatable
-  once everything lives in boards.
-- What the arrange still builds is ZONES for the strays
-  (`computeAutoArrangement`, all one undo entry): loose root cards are
-  scouted with a throwaway arrange and each natural island of two or more
-  becomes a fresh open board ("Zone N", numbered past any existing
-  "Zone N", `addBoards` / `setOwners`). Existing boards stand in the scout
-  so islands form around them but are never swallowed into a zone. Shelf
-  strays and interchange buffers (the arranger's `backdrop: false`
-  islands) stay loose between zones. Each fresh zone arranges its own
-  members in frame space (origin one cell under the title bar) and the
-  frame FITS around the result (`setBoardSizes`); zone interiors pin no
-  waypoints (stored waypoints are flow-space).
-- The zone interior passes are BOUNDARY-AWARE: every wire crossing a frame
-  gets a phantom partner card (one per outer neighbour and direction,
-  weight x3), so members that talk across the border land against the edge
-  their wires leave through; phantoms are discarded and the members
-  re-normalise to the frame corner. Each interior pass records where every
-  crossing wire's member landed (`boundaryPortY`, "edgeId:boardId" from
-  frame top) - and locked top-level boards record the same from where
-  their members already STAND - and the root pass uses those as the board
-  card's PORT heights, which is what lines frames up so wires between
-  boards run straight instead of crossing. The arrange also papers every
-  fresh zone from `ZONE_PAPERS`, skipping coats other boards already wear;
-  locked boards are never re-dressed.
+- AUTO-ARRANGE DUMPS EVERY BOARD FIRST (Jack, 2026-09-08: the arrange
+  "should have no respect for player-made boards"; this reverses the
+  2026-08-29 lock, which was itself a reversal of an earlier dump - the
+  history is in git, not here). `flattenBoards` (src/lib/model) surfaces
+  every member where its frame stood (fitted frames add their corner,
+  nested frames every corner up the chain, legacy pockets surface verbatim)
+  and the arrange lays out one flat set of cards; `applyBoardArrangement`
+  gets `removeBoards` = every board id, so the boards go in the arrange's
+  own undo entry and the members ride `moves`.
+- THE ARRANGE LOADER (Jack, 2026-09-08: "one master progress bar with
+  steps"): `ARRANGE_STEPS` in arrange-job.ts names the six steps (lay out,
+  search, route the candidates, polish first, polish second, choose); every
+  progress message carries its `step`, the bar fills across all six with an
+  equal share each, the steps are listed under it with the current one lit,
+  and the search reports every 250 annealing trials so the bar moves
+  through it. CANCEL: `cancelArrange()` in arrange-solve.ts TERMINATES the
+  worker (it runs the job synchronously and cannot hear a message mid-job)
+  and rejects the pending promise with `ArrangeCancelled`; the next arrange
+  starts a fresh worker. The main-thread fallback cannot be stopped, so its
+  result is dropped instead. tools/audit-board.mjs waits for the loader
+  (role=status, aria-live=polite) to detach; keep those attributes.
+- KEEP BOARDS ON REARRANGE is the switch (the arrange SHEET: one setting,
+  no subtext, and the Arrange button under it). A browser preference
+  (`gtnh-factory-flow.arrange-keep-boards.v1`, OFF by default), never part
+  of the plan. ON is the old lock: a board someone drew is sealed - its
+  contents are never rearranged, its frame keeps its size, name, paper and
+  ink - and the arrange only PLACES the board, one solid meta card in the
+  root pass. Waypoints pinned on wires wholly inside one kept board ride
+  the board's move. The "Rearrange inside boards" setting is gone; the
+  `tidyBoardInteriors` option on `computeAutoArrangement` is always false
+  now and only the code path remains.
+- NO ZONES (Jack, 2026-09-08: "drop island support, board wrapping and
+  whatnot"). The arrange no longer wraps islands in fresh "Zone N" boards;
+  `addBoards` / `setOwners` from `computeAutoArrangement` are always empty
+  now (the plumbing stays for the locked-board bookkeeping).
+- ISLANDS ARE EMERGENT (Jack, 2026-09-08, branch arrange-emergent-islands:
+  "how do we make this behaviour emergent?"). The rule that cut a branch
+  hanging on by a wire or two off as its own island (`splitLooseClusters`,
+  `ISLAND_CUT_MAX`, the `islands` taste) is GONE; one connected web is one
+  island, and disconnected webs are still separate blocks. What parts a
+  cluster from the main body is `src/lib/board-arrange-air.ts`: two cards
+  three or more wire hops apart (a one-partner drawer standing in for its
+  machine) are STRANGERS, and every card pays `islandAir` points per pixel
+  its NEAREST stranger stands closer than six cells. Partners attract
+  through their wire's length, two-hop cards are neutral, so a dense
+  cluster on one bridge wire drifts out until the bridge's extra length
+  balances the air, and a lone card stays put. Per card, not per pair, so
+  the dial means the same on nine cards as on ninety. The term is in the
+  objective EVERYWHERE the arranger decides - the optimiser's proxy, the
+  finalists' judged points, the polish, plain-vs-challenger - so the judge
+  never undoes what the search found; the dev menu's SCORE stays pure
+  routing points. Without a router judge, `arrangeBoard` now picks between
+  the plain pass and the challenger by `scoreLayoutProxy`. The optimiser's
+  state grew a per-column horizontal pad (islands part sideways too) and a
+  group move (a card and its partners shift together). Dial: `islandAir`
+  (Arrange group of the dev menu, default 0.5, 0 packs tight); the worker
+  gets the host's tuning through `ArrangeInput.tuning`. Cost on the oil
+  board (a single dense community, where air only hurts): 12,842 pts at 0,
+  ~13,500 at 0.5, ~14,900 at 1. Exam: "emergent islands" in
+  board-arrange.test.ts (a hub feeding two clusters stands them apart;
+  dial 0 packs them).
+- THE ARRANGE IS BENCHMARKED, and the benchmark is Jack's (2026-09-08):
+  total crossings of the board's real wires first, total wire length
+  second, readability assumed to follow. COUNT CROSSINGS THE RIGHT WAY:
+  `src/lib/route-metrics.ts` (`measureWireRoutes`, and the router's
+  `measureRoutes` is it) counts every point where two wires' rays
+  alternate - crossings AT BENDS and where a run ends on another wire
+  included; a segment-only counter that skipped endpoints said 2 where
+  Jack counted 24 on the same board. `tools/audit-board.mjs <plan> <out>
+  [--arrange]` loads a plan in the real app, presses the real Arrange, and
+  prints the two integers from the DISPLAYED routes (docs/route-audit.md);
+  Jack's counts agree with it. Jack's hand-arranged oil board is the
+  reference: 1 crossing, 12,745 px (`artifacts/route-audit/oil-manual`).
+- THE FREE PLACEMENT (Jack, 2026-09-08: "get rid of the grid thinking ...
+  a lot of considerations when we place a thing ... future thinking"):
+  `src/lib/board-arrange-free.ts` is a THIRD candidate beside the column
+  passes, and on big boards it is the one that wins. Stress SGD over
+  graph distance (a card ten hops away stands ten cards away, partners
+  touch) gives the structure; the cards are settled on the cell grid;
+  then simulated annealing over FREE moves (beside a partner with port
+  rows aligned, nudge, swap, a machine with its own drawers as one, a
+  whole side of a bridge wire as one) scored INCREMENTALLY in the
+  router's points plus the stranger air, plus three readability terms
+  the router does not price: TIDY (a card's edge lining up with a
+  neighbour's, or a shared port row), FLOW (a wire's target less than a
+  card's width right of its source pays per pixel, and a backward wire a
+  flat price: a crossing's worth, nearly four between two machines, a
+  token one inside a cycle - an oil board is mostly recycle loops), and
+  a little sprawl. The one lattice kept: MACHINES STAND IN COLUMNS at a
+  pitch of one machine width plus a drawer corridor, drawers in the
+  corridors; rows are any cell. The search runs twice like a chip
+  placer - free to any cell first (the structure), then legalised onto
+  the columns and repaired with a cooler search - because searching on
+  the lattice from the start found layouts a fifth worse. The three
+  candidates are judged by the real router, the best two polished, the
+  better polished board wins on points; every dial is in `FREE_DIALS`.
+  DRAWERS ARE PLACED BY PATTERN, not searched (Jack, same day, holding
+  his hand layout against the arranger's: "shouldn't all the products
+  just be in a row next to each other"): a drawer wired to ONE machine
+  is its bud and stands in a touching LINE on its side (supplies left,
+  products right, port order, centred on the ports); a drawer wired to
+  exactly TWO machines stands in a line BETWEEN them (the corridor when
+  side by side, a row in the gap when stacked); lines meeting in one
+  corridor stack; a drawer whose place is taken is freed to the search.
+  `planPatterns` / `derivePatterns` / `settleWithPatterns` in
+  board-arrange-free.ts; the search moves machines and the drawers
+  follow. Costs points (the oil berry board 9 -> 17 crossings) and Jack
+  called the result good.
+  Harnesses (local, off the suite): `arrange-capture.local.test.ts`
+  (CAPTURE=an audit.json: arranges offline, REPORT=, OUT=layout) and
+  `free-explain.local.test.ts` (LAYOUTS=: every objective term and the
+  router's verdict per layout). Numbers, oil berry board (44 machines,
+  36 drawers, 104 wires, `artifacts/route-audit/oilberry-*`): the app's
+  Arrange gave 38 crossings / 41,965 px / 93,549 pts; the free placement
+  9 / 23,223 / 42,099. Jack's small oil board: 1 crossing / 5,564 px
+  (his hand layout 3 / 6,880). Cost: the arrange takes ~80 s on the big
+  board, ~20 s of it the free search.
+- HOW `arrangeBoard` WORKS NOW: the plain column pass AND a challenger
+  (`board-arrange-optimize.ts`: annealing over column order / offsets /
+  row air / satellite slides / column hops / moves to a partner's side,
+  against a PROXY that scores in the router's own points - see below) are
+  each POLISHED (`polishWithJudge`) and the better finished board wins by
+  the judge, ON POINTS ALONE (Jack, 2026-09-08: a crossing is already
+  priced into the points at the crossing dial, and "if it leads to edges
+  taking the huge long way all the way around the whole board, it looks
+  stupid" - his 3-crossing board beat the arranger's 0-crossing one on
+  points). The polish runs even at zero crossings, blaming the cards on
+  the longest wires. The polish is what a hand does: the real router says
+  where wires still cross, the cards on those wires are tried elsewhere -
+  beside a partner on any side (the far end of the crossing wire weighs
+  four times), level with a partner in their own column, or SWAPPED with
+  a card in their column - buds (drawers serving only that machine)
+  riding along, each try judged by the router. Quick verdicts pin every
+  wire the move does not touch and re-solve the rest (`route-judge.ts`,
+  the router's `pinned` argument, results carrying `vertices`/docks for
+  the purpose); a winning move gets the full verdict and becomes the
+  base. Budget 100 quick verdicts per polish. The host judge is
+  `buildArrangeJudge` in FactoryFlow -> `makeRouteJudge`, on the
+  published route inputs; no judge (boards on the level) -> plain pass.
+- LAYERING RULES LEARNED FROM JACK'S OIL BOARD: two machines feeding the
+  same drawer stand on OPPOSITE sides of it (`splitCoFeeders`: the one
+  with fewer other rightward wires has its drawer wires turned round for
+  the ranking, so it ranks past the drawers); shared drawers sit between
+  their partners (`relaxSharedStorages`).
+- VERSUS MODE: the dev menu's Score section (shift-click the version
+  chip) shows crossings / points / wires of the displayed board, "Copy
+  layout" puts a LAYOUT STRING on the clipboard (`board-layout-string.ts`
+  v2: plan id, score, every card's cell rect, every wire with port rows
+  and width), "Paste layout" applies one. `src/lib/versus.local.test.ts`
+  (LAYOUT=file OUT=file, local config) scores a layout string offline and
+  writes the arranger's answer beside it; `score-layout.local.test.ts`
+  scores one. Compact taste is 1/2/2/1/0 cells (row/section/column/
+  satellite pad/stack), what Jack's hand draws.
+- POINTS ARE WEIGHTED BY FLOW (Jack, 2026-09-08: "edges with more items/s
+  or L/s are more expensive to traverse ... like laying the bedrock
+  first"). `wireWeight(width)` in route-metrics.ts is 0.5 + width/8: the
+  quietest wire on the board (4 px) weighs 1, the busiest (16 px) 2.5. A
+  wire's length and bends count its weight times over and a crossing
+  weighs the heavier of the two wires (`weighted*` fields on
+  `RouteMeasure`; `routePoints` reads those). Every `GridRoutedEdge`
+  carries its `width` so the judge, the router's own retainBest and the
+  dev menu's score all weigh the same way; the arranger's proxy already
+  weighted links by log10 of the flow. Effect on the numbers: a board's
+  points rose by roughly the average weight (Jack's oil-jack4 8,388 ->
+  12,401 at 3 crossings), so compare boards only at one metric version.
+- THE PROXY SPEAKS POINTS (Jack, 2026-09-08: "bring the points into
+  stage one"). `board-arrange-optimize.ts` scores a trial layout the way
+  the router will: every wire's proxy path (rim point FACING the far card
+  - side chosen by the gap between the two rectangles, never by the far
+  centre, and facing sides with overlapping dock ranges line up on one
+  row for the straight shot; clean stubs only as far as half the room
+  ahead; one centred diagonal) priced as length + bends at turn45/turn90 +
+  a detour estimate per card it would run through (two corners plus half
+  the card's shorter side), all times the wire's `wireWeight`; crossings
+  at the crossing dial weighing the heavier wire. NEVER pin the proxy to
+  fixed port rows again - docking is free, and pinning drew a 30-cell
+  zigzag where the router draws 5 cells straight and ranked Jack's layout
+  below the arranger's. `src/lib/proxy-score.local.test.ts`
+  (LAYOUTS=a,b,... PERWIRE=1) prints proxy vs router per layout and per
+  wire; on the oil board the proxy is now within ~5% of the router on
+  every layout tried. Finalists are one per column STRUCTURE (six), the
+  real router judges them on points (the host's judge, shifted to the
+  island's current corner) and the fewest real points wins.
+- THE SEARCH MAY DRAW LEVEL WITH A DRAWER: a machine may hop into any
+  column flow allows, and may share a column with a drawer it trades with
+  (`mayStandIn`, `reach` 0 for a storage partner, 1 for a machine) but
+  never pass beyond it; a drawer may stand anywhere between its first and
+  last partner's column, those included. This is what lets two machines
+  trading through drawers stack in one column with the drawers in the gap
+  between them - Jack's oil board - and it took the arranger's answer from
+  18k to 12.8k points in one step.
+- Numbers on the oil board at the shipped dials (2026-09-08, weighted
+  points): Jack's hand layout `artifacts/route-audit/oil-jack4.layout.json`
+  3 crossings / 12,401 pts / 6,880 px; the arranger's answer
+  (`oil-answer9`) 4 / 12,842 pts / 6,940 px, structurally his board, in
+  ~19 s offline. Before the proxy rework the answer was 3 / 18,809 /
+  10,400. Open: the last crossing, time.
 - The board title bar has a paint button (palette in a NodeToolbar portal,
   because the frame's own layer sits under the cards); the paint TOOL works
   on boards too. Both go through `paintPocket`.
@@ -616,7 +782,8 @@ Working notes for future agents on GTNH Factory Flow.
   parent, so a floor child could not go below either. The layer reads live
   positions from the node lookup, so paper tracks a dragged frame exactly.
   Open boards therefore also un-seal the edge/node layers
-  (`factory-flow-board--edges-under`, the lever thickness mode pulls).
+  (`factory-flow-board--edges-under`, always on now that line thickness
+  is always on).
 - The marching dashes are a CANVAS painted over everything, so anything the
   wires go under has to be punched back out of it. A board's bar and rim are
   in that set in EVERY mode (`boardChromeOccluders`, fed from
@@ -781,12 +948,37 @@ Working notes for future agents on GTNH Factory Flow.
 
 ## Board Gestures
 
+- Checklist mode (`ChecklistMode.tsx`) has its own tray on the right, beside markup/view. Its active
+  tool is session state; `project.checklist` saves checked card and edge ids.
+  It only changes presentation, never machine settings or production, and
+  supports undo/reset. The Machines list checks the cards in each build row.
+  Checks dim to 7% while the mode is on; leaving reveals the board and keeps
+  progress. Capture blocks editing clicks, but middle mouse and wheel MUST
+  reach the camera. Checklist wires use the FULL live route at every zoom,
+  in an invisible hit layer above port hit boxes: normal 26px endpoint trimming
+  erases short targets; visible wires must keep their ordinary depth.
+  THE BOARD SAYS ONE THING UNDER THE POINTER while it is on (Jack,
+  2026-09-08): what a click would mark, in green - a card wears a 3px
+  outline, a wire lights its own hit target (checklist.css) - and nothing
+  else. The port rows' flow glow is off and every wheel knob on a card is
+  dead: both read `checklistLocked()` in RecipeNode at event time, so no
+  card subscribes to the mode. Any new knob on a card needs the same guard.
+
 - A port ROW answers, not its little item icon: left click opens what makes the
   resource, right click what uses it, R and U do the same for the row under the
   pointer (`port-browse.ts` holds the pointed-at row imperatively — do not
   subscribe cards to it), a long press opens a two-item menu for a finger, and a
   drag still wires. The icon is art with `pointer-events-none`; the full-row
   React Flow handle underneath it takes the drag.
+- THE HOVER HIGHLIGHT is `src/components/flow/flow-scope.ts`, one module
+  for a port row and a drawer alike: the wires on the thing you point at,
+  each far-end port, and the cards involved. Two rules it must keep
+  (Jack, 2026-09-08): a wire belongs to the SECTION its handle names, so
+  one recipe's port on a shared card never lights another's wires; and a
+  DRAWER PASSES IT ALONG - the walk carries on through drawers in the
+  direction the hover asked about (both ways from a drawer itself) and
+  stops at the first machine, so a buffer reads as the junction it is.
+  `flow-scope.test.ts` pins both.
 - Touch gestures on the board live in `board-touch-gestures.ts`, in native
   capture-phase listeners: React Flow's pan sits on the pane below, and stopping
   the event before it gets there is the only way to take a gesture off it
@@ -836,9 +1028,15 @@ Working notes for future agents on GTNH Factory Flow.
     wire that cannot route from the near ones), and a dock another wire
     already uses costs `dockShare` - never a ban, so wires may stack onto
     one side of a drawer when that routes best (Jack, 2026-09-08).
-  - FIRST PASS, LONGEST WIRE FIRST: a long wire takes the open lines and
-    the short ones fit in around it, which nests a fan to a row of drawers
-    instead of having the last one climb across all the others.
+  - FIRST PASS, BEDROCK FIRST (Jack, 2026-09-08): the THICKEST wires -
+    the ones carrying the most - take the open lines first, then, at one
+    width, the longest: a long wire takes the open lines and the short
+    ones fit in around it, which nests a fan to a row of drawers instead
+    of having the last one climb across all the others. The trickles find
+    their way round the trunk lines afterwards.
+  - THE BOARD KEPT is the one with the fewest POINTS (`retainBest`,
+    `routePoints` over `measureWireRoutes`), the same number the arrange
+    and the dev menu's score read.
   - NEGOTIATION: any wire that ended up crossing another (or overflowing a
     lane) is ripped up and routed again against the whole finished board,
     and every spot wires cross at gets dearer each round (`escalate`, a
@@ -862,21 +1060,54 @@ Working notes for future agents on GTNH Factory Flow.
   pooled memo; occupancy (lane widths, passers, negotiation history) is
   dense typed arrays over the board's extent, not maps - four map lookups
   per priced step was most of a big board's solve.
-- CLEAN EXITS AND LANDINGS: a wire leaves a port straight along the
-  normal and lands straight, for `cleanCells` cells (2). The search is
-  seeded at the clean point heading outward and at the apron dearer by
-  `earlyTurn`; the goal at the clean point must be reached heading in,
-  the apron takes any arrival at the same surcharge. So a bend or a
-  diagonal right off a card is possible when a wire is walled in, and
-  otherwise never.
+- EXITS AND LANDINGS (rewritten 2026-09-08 with Jack): a wire may leave
+  a dock along the port's normal OR 45° to either side of it (three
+  `EndVertex` variants per dock, each with its own apron); a diagonal
+  exit or landing costs `turn45`, the bend it is, priced at the dock. THE
+  CLEAN RUN is the apron and the cells after it up to the clean point
+  (`cleanCells` out from the card edge): a TURN made on it, by a wire
+  that left from that start (`cleanZone`, keyed by start variant through
+  `startOf`), costs `earlyTurn` on top of the turn; the landing side
+  mirrors it (the clean point must be reached heading in, the apron takes
+  any other arrival at the surcharge, and with no room for a clean run a
+  straight arrival at the apron is free). A wire that never turns there
+  pays nothing, so a straight shot to a card two cells away IS a straight
+  line. It used to charge the surcharge for STARTING at the apron, which
+  made a two-cell straight shot dearer than leaving by another side (the
+  bug Jack saw: one cell straight, two cells out-the-side-and-turn).
+  TOUCHING DOCKS (`directDock`): two cards one grid space apart have no
+  vertex between them, so a source dock whose apron IS a facing target
+  dock connects there without a search - the only special case.
+  Preference order Jack asked for falls out of the prices: straight shot,
+  then a 45° shot, then pathing round.
+- SELF LOOPS dock freely like everything else, but route with 90° TURNS
+  ONLY (`straightOnly` in routeWithinWindow: no diagonal exits, landings or
+  runs - a loop that left at 45° and turned back on itself read as a
+  scribble on the card's own edge) and must land at least one cell
+  (`SELF_LOOP_CELLS`) from where they left (`landsTooClose` at goal
+  acceptance), or the loop collapses to a stub. Both Jack, 2026-09-08.
 - TURNS COST: a 45° bend `turn45` (35), a 90° corner `turn90` (80), a
-  reversal `reverse` (waypoint excursions only), 135° forbidden. Jack's
+  reversal `reverse` (100,000 since 2026-09-08 - all but forbidden, Jack:
+  "only if they literally have to"; only a pinned dot can force one), 135°
+  forbidden. Jack's
   rules (2026-09-08): turning should cost a lot, a diagonal costs its true
   length, least turns wins, no wiggling left-right to shave a cell.
-- CROSSINGS COST `crossing` (200) each, counted at grid vertices an
+- CROSSINGS COST `crossing` (400) each, counted at grid vertices an
   earlier wire passes straight through (run ends are corners and do not
   count; a stub's apron vertex DOES, or a wire riding a card's margin line
   crossed every stub for free) and, for two diagonals, at cell centres.
+- THE DIALS ARE EXPLAINED FOR A PLAYER (Jack, 2026-09-08): every
+  `RouterTuningField` carries `hint` (what it is), `low` and `high` (what
+  turning it down or up does), and the dev menu prints all three under
+  each slider. The menu has two headings: WIRE ROUTING (Turns, Crossings,
+  Negotiation, Docks, Costs, Search - every dial re-routes the board) and
+  AUTO ARRANGE (the Arrange group: islandAir, searchTrials, finalists,
+  polishBudget, arrangeRowGap, arrangeColumnGap, arrangeDrawerGap - shape
+  the Arrange button only). `routerTuningKey` leaves the Arrange group out,
+  so an arrange dial never re-solves a wire. The three spacing dials
+  override the taste only when moved off their defaults
+  (`applyArrangeDials`); the arranger reads the rest through
+  `ARRANGE_PRICES` (polish budget, search trials, finalists).
 - EVERY DIAL IS LIVE: `src/components/flow/router-tuning.ts` is the one
   `RouterTuning` object the router, the worker job and the dev menu
   share; `DEFAULT_ROUTER_TUNING` is the shipped behaviour. The dev menu
@@ -897,12 +1128,14 @@ Working notes for future agents on GTNH Factory Flow.
   two benzene recipes into one card, or into two benzene slots, draw as one
   wire with the summed rate; the flat edges stay distinct underneath for
   the solve, and deleting the wire deletes them all.
-- Docking is a VIEW toggle (the anchor button, on by default): free mode
-  offers the whole perimeter (corners and their neighbouring cells
-  excluded: two cells on a big card, ONE on a small one so a drawer's side
-  has three docks, not one); port mode pins wires to the classic fixed
-  ports - inputs left, outputs right, storage side centres. Ports always
-  remain where wires START (drag from a chip) and where the numbers live.
+- DOCKING IS ALWAYS FREE (Jack, 2026-09-08: "get rid of the free docking
+  setting"). Every wire, self loops included, offers its card's whole
+  perimeter, one dock per grid line, only the corner cell itself excluded
+  (`keepOutFor` in FactoryFlow: one cell on any card two cells or wider).
+  The anchor toggle, `freeDockMode` on the board view / plan view, the
+  fixed-port resolver branch and the dock-flip warning are GONE; old plans
+  carrying the key parse (unknown keys strip). Ports remain where wires
+  START (drag from a chip) and where the numbers live.
 - Crossing hops (`pointsToHoppedSvgPath`) bump over any pair of
   non-parallel segments, diagonals included: a run bumps toward the upper
   side of its own line (a vertical run toward the right).
@@ -922,8 +1155,46 @@ Working notes for future agents on GTNH Factory Flow.
   2026-09-08 vs the old Hanan router: crossings 4->0, 9->0, 45->20,
   23->5, 6->1, 43->28, 634->314; time roughly 2.5x (farm-power 1.7s->4.6s,
   in the worker; hv-oil 51->133ms).
-- Edge rate labels are a VIEW mode, off by default: the tag button in the
-  board toolbar shows lean rate pills on the lines. No dragging, no popover.
+- LINE THICKNESS IS ALWAYS ON (Jack, 2026-09-08: "line thickness will be
+  perma enabled"). Every wire is drawn and routed at `laneWidthForHeat`
+  of its flow; the switch, `lineThicknessMode` on the board view and plan
+  view, and the thin-mode styling (starved dashes, per-kind widths,
+  z-index lift, search-emphasised drawer wires) are GONE; wires always sit
+  under the cards (`factory-flow-board--edges-under`). Old plans carrying
+  the key parse (unknown keys strip).
+- DIRECTION ARROWS (Jack, 2026-09-08: "very visible, but still look good
+  and be the same colour as the edge"): FILLED arrowheads (`getRouteArrows`
+  in FactoryFlow) in the wire's colour lifted brighter, outlined in a DEEP
+  shade of the same colour (never black: a black edge read as spots ahead
+  of the tip where it crossed the pipe) over a soft offset drop shadow,
+  sized to the stroke and a little wider than it, one near each end and one
+  every 8 cells along a long run, each kept wholly on one straight run.
+  They stay at a GLANCE (`EDGE_DETAIL_ARROWS` is in the glance level) and
+  draw double size there.
+- LINE LABELS ARE GONE (Jack, 2026-09-08: "dropping support for line
+  labels ... permanently for everyone"): no rate pills on wires, no tag
+  button, no `lineLabelsMode` on the board view, no `labelOffset` on an
+  edge. Old plans and view blobs carrying the keys parse (unknown keys
+  strip); `lineLabelsMode` stays in the plan-view type as a historical
+  field nothing reads. The ports carry the numbers.
+- THE BOARD MENU (Jack, 2026-09-08): ONE right-click menu for the whole
+  board, `src/components/flow/BoardContextMenu.tsx`, on React Flow's
+  `onPaneContextMenu` / `onNodeContextMenu` / `onEdgeContextMenu`. The
+  void: "New product drawer" (the pool key's item picker at the pointer,
+  `addPoolStorage(resource, "drain", position)` - a drain drawer survives
+  the orphan sweep and is one product drawer per resource only in pool
+  mode). A machine or drawer: Clone, Delete. A wire: "Add a drawer here"
+  (`insertStorageOnEdge`: the wire goes, a drawer of its resource stands
+  where you clicked, one wire runs in and one out; a drawn channel of
+  several flat edges all run through the one drawer) and Delete wire.
+  Controls with a right click of their own (port rows, tier chips, count
+  steppers) prevent the event's default and the board handlers skip a
+  prevented event; boards, annotations and trash cans get no menu. Plain
+  words, no tooltips, no submenus. The menu chrome is the library's
+  (`LibraryMenu` / `MenuItem` in library-menu.tsx). Probe:
+  `menu-probe.local.mjs <plan.json> <prefix>` (note the pane is a
+  million px square under the scroll camera: aim by the `.react-flow`
+  wrapper's box, never the pane's).
 
 ## Import/Export Plans
 

@@ -53,6 +53,27 @@ export interface RouterTuning {
   longestFirst: boolean;
   /** Search window padding round a wire's ends, in cells. */
   windowPad: number;
+  /** Padding of the wide retry rung a route that paid for a crossing gets, in cells. */
+  wideRungCells: number;
+  /**
+   * ARRANGE: price per pixel, per pair, that two STRANGER cards (three or
+   * more wire hops apart) pay for standing closer than six cells. This is
+   * the whole of how islands happen (board-arrange-air.ts); zero packs the
+   * board as tight as the wires allow.
+   */
+  islandAir: number;
+  /** ARRANGE: annealing trials the search may spend (capped by board size). */
+  searchTrials: number;
+  /** ARRANGE: distinct layouts the real router judges at the end of the search. */
+  finalists: number;
+  /** ARRANGE: router questions the polish may ask per layout. */
+  polishBudget: number;
+  /** ARRANGE: air between stacked cards, in cells. */
+  arrangeRowGap: number;
+  /** ARRANGE: least corridor between columns, in cells. */
+  arrangeColumnGap: number;
+  /** ARRANGE: air between a drawer and the machine it rides, in cells. */
+  arrangeDrawerGap: number;
 }
 
 export const DEFAULT_ROUTER_TUNING: RouterTuning = {
@@ -63,10 +84,13 @@ export const DEFAULT_ROUTER_TUNING: RouterTuning = {
   costOutsideHome: 3,
   turn45: 35,
   turn90: 80,
-  reverse: 240,
+  // All but forbidden (Jack, 2026-09-08: "they can only do it if they
+  // literally have to"): a wire doubles back only when no other route
+  // exists, which only a pinned dot can force.
+  reverse: 100000,
   earlyTurn: 100,
   cleanCells: 2,
-  crossing: 1000,
+  crossing: 400,
   diagonals: true,
   diagonalLength: Math.SQRT2,
   diagonalLaneCapacity: 10,
@@ -77,43 +101,214 @@ export const DEFAULT_ROUTER_TUNING: RouterTuning = {
   negotiationBudget: 2,
   longestFirst: true,
   windowPad: 4,
+  wideRungCells: 30,
+  islandAir: 0.5,
+  searchTrials: 20000,
+  finalists: 6,
+  polishBudget: 100,
+  arrangeRowGap: 1,
+  arrangeColumnGap: 2,
+  arrangeDrawerGap: 1,
 };
 
 export interface RouterTuningField {
   key: keyof RouterTuning;
   label: string;
-  /** One line for the player who is not the developer. */
+  /** What the dial is, in plain words. */
   hint: string;
+  /** What happens when it is turned down. */
+  low: string;
+  /** What happens when it is turned up. */
+  high: string;
   kind: "number" | "boolean";
   min?: number;
   max?: number;
   step?: number;
-  group: "Costs" | "Turns" | "Crossings" | "Docks" | "Negotiation" | "Search";
+  group: "Costs" | "Turns" | "Crossings" | "Docks" | "Negotiation" | "Search" | "Arrange";
 }
 
-/** The dials in the order the dev menu shows them. */
+/**
+ * The dials in the order the dev menu shows them, each explained for a
+ * player, not a developer (Jack, 2026-09-08: "explain in layman terms,
+ * what each setting does on the high end or low end"). The first six
+ * groups shape the WIRES; the Arrange group shapes AUTO ARRANGE only and
+ * never re-routes a wire by itself.
+ */
 export const ROUTER_TUNING_FIELDS: RouterTuningField[] = [
-  { key: "costEmpty", label: "Empty lane", hint: "Per pixel on a free line.", kind: "number", min: 0.1, max: 5, step: 0.1, group: "Costs" },
-  { key: "costShared", label: "Shared lane", hint: "Per pixel riding beside another wire that fits.", kind: "number", min: 0.1, max: 5, step: 0.1, group: "Costs" },
-  { key: "costOverflow", label: "Full lane", hint: "Per pixel in a lane the wire does not fit.", kind: "number", min: 1, max: 30, step: 0.5, group: "Costs" },
-  { key: "costInsideExempt", label: "Leaving a board", hint: "Multiplier while still inside a board frame the wire is leaving.", kind: "number", min: 1, max: 10, step: 0.5, group: "Costs" },
-  { key: "costOutsideHome", label: "Outside home board", hint: "Multiplier outside the board that holds both ends.", kind: "number", min: 1, max: 10, step: 0.5, group: "Costs" },
-  { key: "turn45", label: "45° bend", hint: "In pixels of travel.", kind: "number", min: 0, max: 400, step: 5, group: "Turns" },
-  { key: "turn90", label: "90° corner", hint: "In pixels of travel.", kind: "number", min: 0, max: 600, step: 5, group: "Turns" },
-  { key: "reverse", label: "Reversal", hint: "Doubling back on the same line; only waypoints need it.", kind: "number", min: 0, max: 1000, step: 10, group: "Turns" },
-  { key: "earlyTurn", label: "Early bend", hint: "Extra for bending inside the clean run at a port.", kind: "number", min: 0, max: 600, step: 10, group: "Turns" },
-  { key: "cleanCells", label: "Clean run", hint: "Cells a wire runs straight out of a port and straight into one.", kind: "number", min: 1, max: 5, step: 1, group: "Turns" },
-  { key: "diagonals", label: "Diagonals", hint: "Allow 45° runs at all.", kind: "boolean", group: "Turns" },
-  { key: "diagonalLength", label: "Diagonal length", hint: "A diagonal cell relative to a straight one. Root two is true.", kind: "number", min: 1, max: 2.5, step: 0.01, group: "Turns" },
-  { key: "crossing", label: "Crossing", hint: "Running across another wire once.", kind: "number", min: 0, max: 2000, step: 10, group: "Crossings" },
-  { key: "negotiationRounds", label: "Rounds", hint: "Passes that rip up crossing wires and route them again.", kind: "number", min: 0, max: 12, step: 1, group: "Negotiation" },
-  { key: "negotiationBudget", label: "Reroute budget", hint: "Reroutes allowed, as a multiple of the wire count.", kind: "number", min: 0, max: 5, step: 0.25, group: "Negotiation" },
-  { key: "longestFirst", label: "Longest first", hint: "Route the longest wires first; off routes the shortest first.", kind: "boolean", group: "Negotiation" },
-  { key: "dockPlanBias", label: "Plan pull", hint: "Per pixel of rim between the dock taken and the dock planned.", kind: "number", min: 0, max: 3, step: 0.05, group: "Docks" },
-  { key: "dockShare", label: "Shared dock", hint: "Extra for landing on a dock another wire already uses. Never a ban: wires may stack onto one side.", kind: "number", min: 0, max: 600, step: 10, group: "Docks" },
-  { key: "dockPlanWindow", label: "Plan window", hint: "Cells of rim either side of the plan a wire may still dock in.", kind: "number", min: 1, max: 60, step: 1, group: "Docks" },
-  { key: "diagonalLaneCapacity", label: "Diagonal lane width", hint: "Usable stroke pixels in a diagonal lane.", kind: "number", min: 4, max: 16, step: 1, group: "Search" },
-  { key: "windowPad", label: "Search pad", hint: "Cells of search window round a wire's ends before it grows.", kind: "number", min: 2, max: 40, step: 1, group: "Search" },
+  {
+    key: "costEmpty", label: "Empty lane", kind: "number", min: 0.1, max: 5, step: 0.1, group: "Costs",
+    hint: "Price per pixel along a free line. The unit everything else is priced in.",
+    low: "Distance barely matters; wires detour to dodge a single bend.",
+    high: "Distance is everything; wires go straight through bends and crossings.",
+  },
+  {
+    key: "costShared", label: "Shared lane", kind: "number", min: 0.1, max: 5, step: 0.1, group: "Costs",
+    hint: "Price per pixel riding beside another wire that still fits.",
+    low: "Wires bundle into ribbons.",
+    high: "Wires keep a line apart.",
+  },
+  {
+    key: "costOverflow", label: "Full lane", kind: "number", min: 1, max: 30, step: 0.5, group: "Costs",
+    hint: "Price per pixel in a lane too full for the wire.",
+    low: "Wires overlap when crowded.",
+    high: "Wires go round rather than overlap.",
+  },
+  {
+    key: "costInsideExempt", label: "Leaving a board", kind: "number", min: 1, max: 10, step: 0.5, group: "Costs",
+    hint: "Multiplier while a wire is still inside a board it is leaving.",
+    low: "A leaving wire may wander inside the frame.",
+    high: "A leaving wire heads for the nearest wall.",
+  },
+  {
+    key: "costOutsideHome", label: "Outside home board", kind: "number", min: 1, max: 10, step: 0.5, group: "Costs",
+    hint: "Multiplier when a wire with both ends in one board steps outside it.",
+    low: "Such a wire may duck out and back in.",
+    high: "Such a wire stays inside.",
+  },
+  {
+    key: "turn45", label: "45 degree bend", kind: "number", min: 0, max: 400, step: 5, group: "Turns",
+    hint: "One 45 degree bend, in pixels of travel. A 45 degree exit or landing costs one too.",
+    low: "Wires zig-zag freely.",
+    high: "Wires travel further rather than bend.",
+  },
+  {
+    key: "turn90", label: "90 degree corner", kind: "number", min: 0, max: 600, step: 5, group: "Turns",
+    hint: "One square corner, in pixels of travel.",
+    low: "Wires draw staircases.",
+    high: "Wires use diagonals or longer straights instead.",
+  },
+  {
+    key: "reverse", label: "Reversal", kind: "number", min: 0, max: 100000, step: 1000, group: "Turns",
+    hint: "Doubling back along the same line. Only a pinned dot can force one.",
+    low: "A wire loops back on itself to reach a dot.",
+    high: "A wire goes any other way first.",
+  },
+  {
+    key: "earlyTurn", label: "Early bend", kind: "number", min: 0, max: 600, step: 10, group: "Turns",
+    hint: "Extra for bending inside the clean run at a port.",
+    low: "Wires may turn right off a card.",
+    high: "Wires leave and land dead straight.",
+  },
+  {
+    key: "cleanCells", label: "Clean run", kind: "number", min: 1, max: 5, step: 1, group: "Turns",
+    hint: "Cells out of a port that count as the clean run.",
+    low: "Wires may bend one cell out.",
+    high: "Wires run straight longer; cards need more room.",
+  },
+  {
+    key: "diagonals", label: "Diagonals", kind: "boolean", group: "Turns",
+    hint: "Whether wires may run at 45 degrees.",
+    low: "Off: horizontal and vertical only.",
+    high: "On: diagonals allowed.",
+  },
+  {
+    key: "diagonalLength", label: "Diagonal length", kind: "number", min: 1, max: 2.5, step: 0.01, group: "Turns",
+    hint: "A diagonal cell relative to a straight one. True length is 1.41.",
+    low: "Diagonals count cheap; wires prefer them.",
+    high: "Diagonals count dear; wires prefer straights.",
+  },
+  {
+    key: "crossing", label: "Crossing", kind: "number", min: 0, max: 2000, step: 10, group: "Crossings",
+    hint: "Crossing another wire once, in pixels of travel. Thick wires weigh more.",
+    low: "Wires cross freely and stay short.",
+    high: "Wires go far round to avoid one crossing.",
+  },
+  {
+    key: "negotiationRounds", label: "Rounds", kind: "number", min: 0, max: 12, step: 1, group: "Negotiation",
+    hint: "Passes that rip up crossing wires and route them again.",
+    low: "One pass. Fast, more crossings.",
+    high: "Many passes. Slower, fewer crossings.",
+  },
+  {
+    key: "negotiationBudget", label: "Reroute budget", kind: "number", min: 0, max: 5, step: 0.25, group: "Negotiation",
+    hint: "Reroutes allowed, as a multiple of the wire count.",
+    low: "Few wires get a second try.",
+    high: "Crossing wires are tried again and again.",
+  },
+  {
+    key: "longestFirst", label: "Longest first", kind: "boolean", group: "Negotiation",
+    hint: "After the thickest wires, which go next.",
+    low: "Off: shortest first.",
+    high: "On: longest first, short ones nest inside.",
+  },
+  {
+    key: "dockPlanBias", label: "Plan pull", kind: "number", min: 0, max: 3, step: 0.05, group: "Docks",
+    hint: "Pull toward the planned spot on the card edge, per pixel away from it.",
+    low: "Wires dock wherever is cheapest.",
+    high: "Wires dock exactly as planned, never crossing at the card.",
+  },
+  {
+    key: "dockShare", label: "Shared dock", kind: "number", min: 0, max: 600, step: 10, group: "Docks",
+    hint: "Extra for a spot another wire already uses. Never a ban.",
+    low: "Wires share spots freely.",
+    high: "Every wire wants its own spot.",
+  },
+  {
+    key: "dockPlanWindow", label: "Plan window", kind: "number", min: 1, max: 60, step: 1, group: "Docks",
+    hint: "Cells of edge either side of the planned spot a wire may still use.",
+    low: "Wires stick to the plan.",
+    high: "Wires may dock anywhere nearby.",
+  },
+  {
+    key: "diagonalLaneCapacity", label: "Diagonal lane width", kind: "number", min: 4, max: 16, step: 1, group: "Search",
+    hint: "Pixels of wire that fit side by side on a diagonal. Straights hold 16.",
+    low: "Thick wires avoid diagonals.",
+    high: "Diagonals hold as much as straights.",
+  },
+  {
+    key: "wideRungCells", label: "Wide retry", kind: "number", min: 0, max: 80, step: 2, group: "Search",
+    hint: "How far, in cells, a crossing wire may look on its retry.",
+    low: "Nearby only. Fast.",
+    high: "Across the board. Slow, finds the way over tall cards.",
+  },
+  {
+    key: "windowPad", label: "Search pad", kind: "number", min: 2, max: 40, step: 1, group: "Search",
+    hint: "Cells beyond a wire's own box the first search may look.",
+    low: "Own box only. Fast.",
+    high: "Further afield. Slower.",
+  },
+  {
+    key: "islandAir", label: "Island air", kind: "number", min: 0, max: 5, step: 0.1, group: "Arrange",
+    hint: "Price for standing within six cells of an unrelated card. Parts clusters into islands.",
+    low: "Zero packs tight, no islands.",
+    high: "Groups stand far apart; bridge wires get longer.",
+  },
+  {
+    key: "searchTrials", label: "Search trials", kind: "number", min: 1000, max: 100000, step: 1000, group: "Arrange",
+    hint: "Ceiling on the layout search's trial moves.",
+    low: "Quick and rough.",
+    high: "Slow and thorough.",
+  },
+  {
+    key: "finalists", label: "Finalists", kind: "number", min: 1, max: 12, step: 1, group: "Arrange",
+    hint: "Layouts the real router judges before one is chosen.",
+    low: "The search's favourite on trust. Fast.",
+    high: "More routed for real. Slower, better chosen.",
+  },
+  {
+    key: "polishBudget", label: "Polish budget", kind: "number", min: 0, max: 400, step: 10, group: "Arrange",
+    hint: "Router questions the polish may ask per layout. Most of an arrange's time.",
+    low: "Zero skips the polish. Fast.",
+    high: "Keeps moving cards. Slow, a little better.",
+  },
+  {
+    key: "arrangeRowGap", label: "Row gap", kind: "number", min: 0, max: 6, step: 1, group: "Arrange",
+    hint: "Cells between cards stacked in a column.",
+    low: "Cards touch.",
+    high: "Room between for wires.",
+  },
+  {
+    key: "arrangeColumnGap", label: "Column gap", kind: "number", min: 1, max: 10, step: 1, group: "Arrange",
+    hint: "Least corridor between columns, in cells. Busy corridors grow by themselves.",
+    low: "Short, crowded wires.",
+    high: "Longer wires with room.",
+  },
+  {
+    key: "arrangeDrawerGap", label: "Drawer gap", kind: "number", min: 0, max: 6, step: 1, group: "Arrange",
+    hint: "Cells between a drawer and its machine.",
+    low: "Drawers touch.",
+    high: "Drawers stand off.",
+  },
 ];
 
 const STORAGE_KEY = "gtnh-factory-flow.router-tuning.v1";
@@ -206,6 +401,17 @@ export function resetRouterTuning() {
   setRouterTuning({ ...DEFAULT_ROUTER_TUNING });
 }
 
+/** The Arrange group's dials, and only those, back to default (Jack, 2026-09-08). */
+export function resetArrangeTuning() {
+  const patch: Partial<RouterTuning> = {};
+  for (const field of ROUTER_TUNING_FIELDS) {
+    if (field.group === "Arrange") {
+      (patch as Record<string, unknown>)[field.key] = DEFAULT_ROUTER_TUNING[field.key];
+    }
+  }
+  setRouterTuning(patch);
+}
+
 export function canUndoRouterTuning(): boolean {
   return undoStack.length > 0;
 }
@@ -237,8 +443,17 @@ export function redoRouterTuning(): boolean {
   return true;
 }
 
+/** Every dial at its default, the Arrange group included: what the top Reset asks. */
 export function isDefaultRouterTuning(): boolean {
-  return routerTuningKey(getRouterTuning()) === routerTuningKey(DEFAULT_ROUTER_TUNING);
+  const tuning = getRouterTuning();
+  return ROUTER_TUNING_FIELDS.every((field) => tuning[field.key] === DEFAULT_ROUTER_TUNING[field.key]);
+}
+
+export function isDefaultArrangeTuning(): boolean {
+  const tuning = getRouterTuning();
+  return ROUTER_TUNING_FIELDS.filter((field) => field.group === "Arrange").every(
+    (field) => tuning[field.key] === DEFAULT_ROUTER_TUNING[field.key],
+  );
 }
 
 /**
@@ -262,5 +477,9 @@ export function subscribeRouterTuning(listener: () => void): () => void {
 
 /** A string that changes whenever any dial does, for solve signatures. */
 export function routerTuningKey(tuning: RouterTuning): string {
-  return ROUTER_TUNING_FIELDS.map((field) => String(tuning[field.key])).join(",");
+  // The Arrange dials shape the arranger only; turning one must not
+  // re-route every wire on the board.
+  return ROUTER_TUNING_FIELDS.filter((field) => field.group !== "Arrange")
+    .map((field) => String(tuning[field.key]))
+    .join(",");
 }

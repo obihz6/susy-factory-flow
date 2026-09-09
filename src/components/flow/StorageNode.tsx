@@ -27,54 +27,12 @@ import { useBoardView } from "./board-view";
 import { MotionNumberText } from "./board-motion";
 import { formatSlotRate } from "./flow-explainers";
 import { makeResourceHandleId } from "./resource-handles";
+import { buildStorageFlowScope } from "./flow-scope";
 import { useRenderedHandles } from "./use-rendered-handles";
-import { canonicalizeResourceHandleId } from "@/lib/model/edge-identity";
 import { GT_NODE_COLORS } from "./node-colors";
 import { getPaintBrushCursor } from "./paint-cursor";
 import { hasAnySolveNumbers } from "@/lib/solver/throughput";
 
-/**
- * The flow neighbourhood a drawer hover lights up: every wire ON this drawer,
- * the far-end port of each wire, and the nodes those wires reach. The mirror
- * of `buildPortFlowScope` in RecipeNode.tsx, because a drawer IS a port - it
- * holds one resource and the card is the row.
- *
- * It used to light every wire and card on the board carrying the drawer's
- * resource, wired to this drawer or not, and breathe while it did. Asking
- * "where does THIS drawer's copper go" is not asking where copper appears.
- */
-function buildStorageFlowScope(storage: FactoryStorage) {
-  const { project } = useFactoryStore.getState();
-  const resource = { kind: storage.kind, id: storage.resourceId };
-  const edges: Record<string, true> = {};
-  const nodes: Record<string, true> = { [storage.id]: true };
-  // The drawer's own two handles: whatever side a wire arrives on, the card is
-  // the port it arrives at, so it wears the port rim rather than the quieter
-  // node one.
-  const ports: Record<string, true> = {
-    [`${storage.id}|${makeResourceHandleId("input", resource)}`]: true,
-    [`${storage.id}|${makeResourceHandleId("output", resource)}`]: true,
-  };
-  for (const edge of project.edges) {
-    const leavesHere = edge.source === storage.id;
-    const arrivesHere = edge.target === storage.id;
-    if (!leavesHere && !arrivesHere) {
-      continue;
-    }
-    edges[edge.id] = true;
-    const otherId = leavesHere ? edge.target : edge.source;
-    nodes[otherId] = true;
-    const rawOtherHandle = leavesHere ? edge.targetHandle : edge.sourceHandle;
-    const otherHandle =
-      canonicalizeResourceHandleId(rawOtherHandle) ??
-      makeResourceHandleId(leavesHere ? "input" : "output", {
-        kind: edge.resourceKind,
-        id: edge.resourceId,
-      });
-    ports[`${otherId}|${otherHandle}`] = true;
-  }
-  return { edges, ports, nodes };
-}
 
 export interface StorageNodeData extends Record<string, unknown> {
   storage: FactoryStorage;
@@ -556,7 +514,7 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
           <div
             className="relative mx-auto flex min-h-0 w-full flex-1 flex-col"
             onMouseEnter={() =>
-              isWiringConnection() ? undefined : setHoveredFlowScope(buildStorageFlowScope(storage))
+              isWiringConnection() ? undefined : setHoveredFlowScope(buildStorageFlowScope(useFactoryStore.getState().project, storage))
             }
             onMouseLeave={() => setHoveredFlowScope(undefined)}
           >

@@ -35,14 +35,14 @@ export const NODE_DETAIL_GLANCE = 1;
 export type NodeDetailLevel = typeof NODE_DETAIL_FULL | typeof NODE_DETAIL_GLANCE;
 
 /**
- * Below this the board drops to the glance view. 0.6 is roughly where a port
- * row's lettering falls under eight screen pixels: the moment the card stops
- * being readable is the moment the glance takes over, rather than three
- * wheel-steps later with the board a smear in between.
+ * Below this the board drops to the glance view. 0.45 (lowered from 0.6, Jack,
+ * 2026-09-08: the full cards should stay readable further out; the glance
+ * turns on later on the way out) is roughly where a port row's lettering
+ * falls under six screen pixels and the card stops being readable.
  */
-export const NODE_GLANCE_ENTER_ZOOM = 0.6;
+export const NODE_GLANCE_ENTER_ZOOM = 0.45;
 /** And above this it comes back. The gap is the anti-flicker dead zone. */
-export const NODE_GLANCE_LEAVE_ZOOM = 0.66;
+export const NODE_GLANCE_LEAVE_ZOOM = 0.5;
 
 /**
  * The level for this zoom, given the level currently in force.
@@ -57,7 +57,7 @@ export function getNodeDetailLevel(zoom: number, current: NodeDetailLevel): Node
   }
   // The thresholds are written for a 1:1 interface; the board's zoom carries
   // the interface size (ui-scale.ts), so the lettering falls under eight
-  // pixels at 0.6 times that.
+  // pixels at 0.45 times that.
   const apparent = zoom / boardZoomScale();
   if (apparent < NODE_GLANCE_ENTER_ZOOM) {
     return NODE_DETAIL_GLANCE;

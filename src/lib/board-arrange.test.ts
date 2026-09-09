@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ROUTER_TUNING } from "@/components/flow/router-tuning";
 import {
   arrangeBoard,
+  arrangeBoardColumns,
   type ArrangeCard,
   type ArrangeMove,
   type ArrangeWire,
@@ -97,13 +99,18 @@ describe("arrangeBoard", () => {
       origin: { x: 0, y: 0 },
     });
     const p = positionsById(moves);
-    // Apart on SOME axis by a clear island gap - side by side or stacked,
-    // never interleaved.
-    const aRight = Math.max(...["a1", "a2", "a3"].map((id) => p.get(id)!.x + 360));
-    const aBottom = Math.max(...["a1", "a2", "a3"].map((id) => p.get(id)!.y + 280));
-    const bLeft = Math.min(...["b1", "b2"].map((id) => p.get(id)!.x));
-    const bTop = Math.min(...["b1", "b2"].map((id) => p.get(id)!.y));
-    expect(bLeft - aRight >= 100 || bTop - aBottom >= 100).toBe(true);
+    // Apart on SOME axis by a clear gap - side by side or stacked, either
+    // way round, never interleaved.
+    const box = (ids: string[]) => ({
+      left: Math.min(...ids.map((id) => p.get(id)!.x)),
+      right: Math.max(...ids.map((id) => p.get(id)!.x + 360)),
+      top: Math.min(...ids.map((id) => p.get(id)!.y)),
+      bottom: Math.max(...ids.map((id) => p.get(id)!.y + 280)),
+    });
+    const a = box(["a1", "a2", "a3"]);
+    const b = box(["b1", "b2"]);
+    const gap = Math.max(b.left - a.right, a.left - b.right, b.top - a.bottom, a.top - b.bottom);
+    expect(gap >= 100).toBe(true);
     expectNoOverlaps(cards, moves);
   });
 
@@ -135,8 +142,11 @@ describe("arrangeBoard", () => {
   });
 
   it("survives a recycle loop and keeps the majority direction", () => {
+    // The column pass's rule (a cycle broken at its least wire, the rest
+    // reading left to right); the free placement may fold a loop into a
+    // triangle, which the router prices lower.
     const cards = [card("a"), card("b"), card("c")];
-    const { moves } = arrangeBoard({
+    const { moves } = arrangeBoardColumns({
       cards,
       wires: [wire("a", "b"), wire("b", "c"), wire("c", "a")],
     });
@@ -354,39 +364,6 @@ describe("arrangeBoard", () => {
     expectNoOverlaps(cards, moves);
   });
 
-  it("stands a buffer shared by several islands between them", () => {
-    // One filler island and two drinker islands share the buffer, so it
-    // steps out and stands bare in the gap. A buffer passing between just
-    // two islands stays inside one of them (see the next test).
-    const chain = (prefix: string) => [1, 2, 3, 4].map((i) => card(`${prefix}${i}`));
-    const chainWires = (prefix: string) =>
-      [1, 2, 3].map((i) => wire(`${prefix}${i}`, `${prefix}${i + 1}`));
-    const cards = [
-      ...chain("a"),
-      card("pool", { width: 100, height: 80, role: "storage" }),
-      ...chain("b"),
-      ...chain("c"),
-    ];
-    const result = arrangeBoard({
-      cards,
-      wires: [
-        ...chainWires("a"),
-        wire("a4", "pool"),
-        wire("pool", "b1"),
-        wire("pool", "c1"),
-        ...chainWires("b"),
-        ...chainWires("c"),
-      ],
-      origin: { x: 0, y: 0 },
-    });
-    expect(result.islands).toHaveLength(4);
-    expect(result.islands.filter((island) => !island.backdrop)).toHaveLength(1);
-    const p = positionsById(result.moves);
-    expect(p.get("pool")!.x).toBeGreaterThan(p.get("a4")!.x);
-    expect(p.get("pool")!.x).toBeLessThan(p.get("b1")!.x);
-    expect(p.get("pool")!.x).toBeLessThan(p.get("c1")!.x);
-  });
-
   it("keeps a pass-through buffer inside its island", () => {
     const cards = [
       card("a1"),
@@ -417,60 +394,6 @@ describe("arrangeBoard", () => {
     expect(result.islands.filter((island) => !island.backdrop)).toHaveLength(0);
   });
 
-  it("orders islands within a column so their bridges do not cross", () => {
-    // Feeder island 1 serves consumer island 2 and vice versa - stacked in
-    // index order their bridges would make an X between the columns.
-    const chain = (prefix: string) => [1, 2, 3, 4].map((i) => card(`${prefix}${i}`));
-    const chainWires = (prefix: string) =>
-      [1, 2, 3].map((i) => wire(`${prefix}${i}`, `${prefix}${i + 1}`));
-    const cards = [...chain("f"), ...chain("g"), ...chain("x"), ...chain("y")];
-    const result = arrangeBoard({
-      cards,
-      wires: [
-        ...chainWires("f"),
-        ...chainWires("g"),
-        ...chainWires("x"),
-        ...chainWires("y"),
-        wire("f4", "y1"),
-        wire("g4", "x1"),
-      ],
-      origin: { x: 0, y: 0 },
-    });
-    expect(result.islands).toHaveLength(4);
-    const p = positionsById(result.moves);
-    // Uncrossed means the vertical order of the feeders matches the order
-    // of the islands they feed.
-    const fAboveG = p.get("f4")!.y < p.get("g4")!.y;
-    const yAboveX = p.get("y1")!.y < p.get("x1")!.y;
-    expect(yAboveX).toBe(fAboveG);
-  });
-
-  it("taste: islands off keeps a loose web whole", () => {
-    const cards = [
-      card("a"),
-      card("b"),
-      card("c"),
-      card("d"),
-      card("e"),
-      card("e2"),
-      card("f"),
-      card("g"),
-    ];
-    const wires = [
-      wire("a", "b"),
-      wire("b", "c"),
-      wire("c", "d"),
-      wire("e", "f"),
-      wire("e2", "f"),
-      wire("f", "g"),
-      wire("g", "b"),
-    ];
-    const together = arrangeBoard({ cards, wires, origin: { x: 0, y: 0 }, taste: { islands: "off" } });
-    expect(together.islands).toHaveLength(1);
-    const split = arrangeBoard({ cards, wires, origin: { x: 0, y: 0 } });
-    expect(split.islands).toHaveLength(2);
-  });
-
   it("taste: snug spacing packs tighter than airy", () => {
     const cards = [card("a"), card("x1"), card("x2"), card("b"), card("c")];
     const wires = [wire("a", "b"), wire("x1", "x2"), wire("x2", "b"), wire("b", "c")];
@@ -491,80 +414,6 @@ describe("arrangeBoard", () => {
     expect(arrangeBoard({ cards: [], wires: [wire("x", "y")] }).moves).toEqual([]);
     const { moves } = arrangeBoard({ cards: [card("a")], wires: [wire("a", "ghost")] });
     expect(moves).toHaveLength(1);
-  });
-
-  it("splits a loosely attached cluster into its own island", () => {
-    // A four-card cluster feeding the main chain through ONE wire is its
-    // own island, connected component or not.
-    const cards = [
-      card("a"),
-      card("b"),
-      card("c"),
-      card("d"),
-      card("e"),
-      card("e2"),
-      card("f"),
-      card("g"),
-    ];
-    const result = arrangeBoard({
-      cards,
-      wires: [
-        wire("a", "b"),
-        wire("b", "c"),
-        wire("c", "d"),
-        wire("e", "f"),
-        wire("e2", "f"),
-        wire("f", "g"),
-        wire("g", "b"),
-      ],
-      origin: { x: 0, y: 0 },
-    });
-    expect(result.islands).toHaveLength(2);
-    const p = positionsById(result.moves);
-    const inIsland = (id: string, island: { x: number; y: number; width: number; height: number }) =>
-      p.get(id)!.x >= island.x && p.get(id)!.y >= island.y;
-    const clusterIsland = result.islands.find((island) => inIsland("f", island))!;
-    for (const id of ["e", "e2", "g"]) {
-      expect(inIsland(id, clusterIsland)).toBe(true);
-    }
-    expectNoOverlaps(cards, result.moves);
-  });
-
-  it("stands a feeding island to the left of the island it feeds, aligned", () => {
-    const cards = [
-      card("p1"),
-      card("p2"),
-      card("p3"),
-      card("p4"),
-      card("m1"),
-      card("m2"),
-      card("m3"),
-      card("m4"),
-    ];
-    const result = arrangeBoard({
-      cards,
-      wires: [
-        wire("p1", "p2"),
-        wire("p2", "p3"),
-        wire("p3", "p4"),
-        wire("m1", "m2"),
-        wire("m2", "m3"),
-        wire("m3", "m4"),
-        wire("p4", "m1"),
-      ],
-      origin: { x: 0, y: 0 },
-    });
-    expect(result.islands).toHaveLength(2);
-    const p = positionsById(result.moves);
-    const feeder = result.islands.find(
-      (island) => p.get("p1")!.x >= island.x && p.get("p1")!.y >= island.y,
-    )!;
-    const eater = result.islands.find((island) => island !== feeder)!;
-    // Left of, not above: the islands trade, so they sit side by side with
-    // vertical ranges that overlap.
-    expect(feeder.x + feeder.width).toBeLessThanOrEqual(eater.x);
-    expect(feeder.y).toBeLessThan(eater.y + eater.height);
-    expect(eater.y).toBeLessThan(feeder.y + feeder.height);
   });
 
   it("keeps a tightly coupled web as one island", () => {
@@ -597,62 +446,6 @@ describe("arrangeBoard", () => {
       origin: { x: 0, y: 0 },
     });
     expect(result.islands).toHaveLength(1);
-  });
-
-  it("steers a bridge around an island standing in its way", () => {
-    // Three narrow islands share one line, plus a direct bridge from the
-    // first to the third: the bridge would cut straight through the middle
-    // island, so it gets grid-aligned stops walking it around that
-    // island's ground. Bridges between neighbouring islands stay stop-free.
-    const hub = (prefix: string) => [1, 2, 3, 4].map((i) => card(`${prefix}${i}`));
-    const hubWires = (prefix: string) =>
-      [2, 3, 4].map((i) => wire(`${prefix}1`, `${prefix}${i}`));
-    const cards = [...hub("a"), ...hub("b"), ...hub("c")];
-    const result = arrangeBoard({
-      cards,
-      wires: [
-        ...hubWires("a"),
-        ...hubWires("b"),
-        ...hubWires("c"),
-        { ...wire("a2", "b1"), id: "near" },
-        { ...wire("b2", "c1"), id: "next" },
-        { ...wire("a3", "c3"), id: "haul" },
-      ],
-      origin: { x: 0, y: 0 },
-    });
-    expect(result.islands).toHaveLength(3);
-    const haul = result.wireRoutes.find((entry) => entry.id === "haul");
-    expect(haul).toBeDefined();
-    expect(haul!.waypoints.length).toBeGreaterThanOrEqual(2);
-    for (const point of haul!.waypoints) {
-      expect(point.x % BOARD_GRID).toBe(0);
-      expect(point.y % BOARD_GRID).toBe(0);
-      for (const island of result.islands) {
-        const inside =
-          point.x > island.x &&
-          point.x < island.x + island.width &&
-          point.y > island.y &&
-          point.y < island.y + island.height;
-        expect(inside, "a stop sits inside an island").toBe(false);
-      }
-    }
-    expect(result.wireRoutes.find((entry) => entry.id === "near")).toBeUndefined();
-    expect(result.wireRoutes.find((entry) => entry.id === "next")).toBeUndefined();
-    // The stops walk WITH the wire: every stop sits inside the run's own
-    // horizontal span, in travel order - never behind the start, never past
-    // the target, never doubling back.
-    const p = positionsById(result.moves);
-    const from = p.get("a3")!;
-    const to = p.get("c3")!;
-    const low = Math.min(from.x + 360, to.x);
-    const high = Math.max(from.x + 360, to.x);
-    let previousX = from.x + 360;
-    for (const point of haul!.waypoints) {
-      expect(point.x).toBeGreaterThanOrEqual(low);
-      expect(point.x).toBeLessThanOrEqual(high);
-      expect(point.x).toBeGreaterThanOrEqual(previousX - BOARD_GRID);
-      previousX = point.x;
-    }
   });
 
   it("stands each bypass buffer between its own two machines", () => {
@@ -688,26 +481,64 @@ describe("arrangeBoard", () => {
     expectNoOverlaps(cards, moves);
   });
 
-  it("reports one rectangle per island, covering its cards", () => {
-    const cards = [card("a1"), card("a2"), card("b1"), card("b2")];
-    const result = arrangeBoard({
-      cards,
-      wires: [wire("a1", "a2"), wire("b1", "b2")],
-      origin: { x: 0, y: 0 },
+});
+
+describe("emergent islands", () => {
+  // One hub feeds two dense clusters of four. Nothing names either cluster
+  // an island: the clusters part because their cards are strangers to each
+  // other (three or more hops apart) and strangers owe each other air. With
+  // the dial at zero the same board packs tight.
+  const cards = [
+    card("hub"),
+    card("a1"),
+    card("a2"),
+    card("a3"),
+    card("a4"),
+    card("b1"),
+    card("b2"),
+    card("b3"),
+    card("b4"),
+  ];
+  const wires = [
+    wire("hub", "a1"),
+    wire("a1", "a2"),
+    wire("a1", "a3"),
+    wire("a2", "a4"),
+    wire("a3", "a4"),
+    wire("hub", "b1"),
+    wire("b1", "b2"),
+    wire("b1", "b3"),
+    wire("b2", "b4"),
+    wire("b3", "b4"),
+  ];
+  const gapBetween = (moves: ArrangeMove[]) => {
+    const p = positionsById(moves);
+    const box = (ids: string[]) => ({
+      left: Math.min(...ids.map((id) => p.get(id)!.x)),
+      right: Math.max(...ids.map((id) => p.get(id)!.x + 360)),
+      top: Math.min(...ids.map((id) => p.get(id)!.y)),
+      bottom: Math.max(...ids.map((id) => p.get(id)!.y + 280)),
     });
-    expect(result.islands).toHaveLength(2);
-    const p = positionsById(result.moves);
-    for (const [ids, island] of [
-      [["a1", "a2"], result.islands[0]],
-      [["b1", "b2"], result.islands[1]],
-    ] as const) {
-      for (const id of ids) {
-        const pos = p.get(id)!;
-        expect(pos.x).toBeGreaterThanOrEqual(island.x);
-        expect(pos.y).toBeGreaterThanOrEqual(island.y);
-        expect(pos.x + 360).toBeLessThanOrEqual(island.x + island.width);
-        expect(pos.y + 280).toBeLessThanOrEqual(island.y + island.height);
-      }
-    }
+    const a = box(["a1", "a2", "a3", "a4"]);
+    const b = box(["b1", "b2", "b3", "b4"]);
+    return Math.max(b.left - a.right, a.left - b.right, b.top - a.bottom, a.top - b.bottom);
+  };
+
+  it("two clusters off one hub stand apart from each other", () => {
+    const result = arrangeBoard({ cards, wires, origin: { x: 0, y: 0 } });
+    expectNoOverlaps(cards, result.moves);
+    expect(gapBetween(result.moves)).toBeGreaterThanOrEqual(4 * BOARD_GRID);
+  });
+
+  it("with the air dial at zero the same board packs tighter", () => {
+    const airy = arrangeBoard({ cards, wires, origin: { x: 0, y: 0 } });
+    const tight = arrangeBoard({
+      cards,
+      wires,
+      origin: { x: 0, y: 0 },
+      tuning: { ...DEFAULT_ROUTER_TUNING, islandAir: 0 },
+    });
+    expectNoOverlaps(cards, tight.moves);
+    expect(gapBetween(tight.moves)).toBeLessThan(gapBetween(airy.moves));
   });
 });

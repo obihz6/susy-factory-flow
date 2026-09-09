@@ -413,6 +413,87 @@ describe("factory resource links", () => {
     expect(useFactoryStore.getState().project.edges).toHaveLength(0);
   });
 
+  it("wires the neighbours straight together when a pass-through drawer is deleted", () => {
+    // The undo of the board menu's "Add a drawer here": scrub the drawer
+    // away and the wire it stood in the middle of is back.
+    const base = useFactoryStore.getState().project;
+    const out = makeResourceHandleId("output", { kind: "item", id: "dust" });
+    const into = makeResourceHandleId("input", { kind: "item", id: "dust" });
+    const drawer = (id: string, x: number) => ({
+      id,
+      kind: "item" as const,
+      resourceId: "dust",
+      displayName: "Dust",
+      position: { x, y: 0 },
+    });
+    const wire = (id: string, source: string, target: string) => ({
+      id,
+      source,
+      target,
+      sourceHandle: out,
+      targetHandle: into,
+      resourceKind: "item" as const,
+      resourceId: "dust",
+    });
+    useFactoryStore.getState().setProject({
+      ...base,
+      storages: [drawer("dust-a", 0), drawer("dust-b", 200), drawer("dust-c", 400)],
+      edges: [wire("a-b", "dust-a", "dust-b"), wire("b-c", "dust-b", "dust-c")],
+    });
+
+    useFactoryStore.getState().deleteStorage("dust-b");
+
+    const project = useFactoryStore.getState().project;
+    expect((project.storages ?? []).map((entry) => entry.id)).toEqual(["dust-a", "dust-c"]);
+    expect(project.edges).toEqual([
+      expect.objectContaining({ source: "dust-a", target: "dust-c", resourceId: "dust" }),
+    ]);
+  });
+
+  it("heals nothing when the deleted drawer was a junction", () => {
+    // Two feeders AND two takers: there is no one wire that says what the
+    // drawer meant, so its neighbours are left unwired rather than guessed.
+    const base = useFactoryStore.getState().project;
+    const out = makeResourceHandleId("output", { kind: "item", id: "dust" });
+    const into = makeResourceHandleId("input", { kind: "item", id: "dust" });
+    const drawer = (id: string, x: number) => ({
+      id,
+      kind: "item" as const,
+      resourceId: "dust",
+      displayName: "Dust",
+      position: { x, y: 0 },
+    });
+    const wire = (id: string, source: string, target: string) => ({
+      id,
+      source,
+      target,
+      sourceHandle: out,
+      targetHandle: into,
+      resourceKind: "item" as const,
+      resourceId: "dust",
+    });
+    useFactoryStore.getState().setProject({
+      ...base,
+      storages: [
+        drawer("in-1", 0),
+        drawer("in-2", 0),
+        drawer("hub", 200),
+        drawer("out-1", 400),
+        drawer("out-2", 400),
+      ],
+      edges: [
+        wire("i1", "in-1", "hub"),
+        wire("i2", "in-2", "hub"),
+        wire("o1", "hub", "out-1"),
+        wire("o2", "hub", "out-2"),
+      ],
+    });
+
+    useFactoryStore.getState().deleteStorage("hub");
+
+    expect(useFactoryStore.getState().project.edges).toEqual([]);
+  });
+
   it("refuses a drawer wired to a drawer of a different resource, or to itself", () => {
     useFactoryStore.getState().connectNodes("dust-drawer", "mold-drawer", {
       kind: "item",

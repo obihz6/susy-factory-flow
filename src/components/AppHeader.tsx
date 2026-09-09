@@ -1,10 +1,19 @@
 "use client";
 
 import { Settings } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { OPEN_SHARE_DIALOG_EVENT } from "@/lib/setups-tab";
 import { useIsCompactViewport } from "@/lib/compact-view";
-import { markVersionSeenAndNotify, subscribeToVersionSeen, unseenEntries } from "@/lib/whats-new";
+import { markVersionSeen, readLastSeenVersion } from "@/lib/whats-new";
+import {
+  PREVIEW_RELEASE_SPOTLIGHT_EVENT,
+  RELEASE_SPOTLIGHTS,
+  markSpotlightSeen,
+  pickSpotlight,
+  readSeenSpotlights,
+  type ReleaseSpotlight as Spotlight,
+} from "@/lib/release-spotlight";
+import { ReleaseSpotlight } from "./ReleaseSpotlight";
 import { APP_VERSION } from "@/lib/version";
 import { AccountMenu } from "./community/AccountMenu";
 import { SharePlanDialog } from "./community/SharePlanDialog";
@@ -12,11 +21,9 @@ import { AppIdentity } from "./AppIdentity";
 import { AppMenu } from "./AppMenu";
 import { BoardActions } from "./BoardActions";
 import { ExportImageDialog } from "./export/ExportImageDialog";
-import { ChangelogDialog } from "./ChangelogDialog";
 import { DevMenu } from "./DevMenu";
 import { SettingsDialog } from "./SettingsDialog";
 import { HeaderLinks, ReportBugButton, SupportButton } from "./HeaderLinks";
-import { WhatsNewPreview } from "./WhatsNewPreview";
 
 /** The dataset version selector is part of the planner's main controls. */
 export const SHOW_PACK_PICKER = true;
@@ -31,22 +38,52 @@ interface AppHeaderProps {
  * tab, so there is no page switch up here anymore.
  */
 export function AppHeader({ onLoadDatasetVersion }: AppHeaderProps) {
-  const [isChangelogOpen, setChangelogOpen] = useState(false);
-  // The unread dot, on the version chip now that the What's new button is
-  // gone. It comes from localStorage, which a server render does not have,
-  // so the server snapshot is "nothing unread".
-  const hasUnread = useSyncExternalStore(
-    subscribeToVersionSeen,
-    () => unseenEntries().length > 0,
-    () => false,
-  );
-  // Captured at the moment of the click, because opening the notes marks them
-  // read: without this the divider would have nothing above it.
-  const [unseenVersions, setUnseenVersions] = useState<Set<string>>();
-  // The update-popup preview, reached from the dev menu. See WhatsNewPreview.
-  const [isPreviewOpen, setPreviewOpen] = useState(false);
   // Shift-click the version chip. See DevMenu.
   const [isDevMenuOpen, setDevMenuOpen] = useState(false);
+  // The release POSTER: the one thing allowed to arrive by itself, and only
+  // for a release that was written one (release-spotlight.ts). Decided in an
+  // effect, not during render, because the answer is in localStorage.
+  const [spotlight, setSpotlight] = useState<Spotlight>();
+  useEffect(() => {
+    const due = pickSpotlight({
+      lastSeenVersion: readLastSeenVersion(),
+      seen: readSeenSpotlights(),
+      appVersion: APP_VERSION,
+    });
+    setSpotlight(due);
+    // Stamping is what tells the NEXT release that this browser has been here
+    // before, and it is the only writer left now that the version chip opens
+    // nothing. It waits while a notice is due, though: a notice is spent when
+    // it is CLOSED, not when it is rendered, so somebody who reloads before
+    // reading it gets it again. Closing files it in the seen list instead.
+    if (!due) {
+      markVersionSeen();
+    }
+  }, []);
+  // The dev menu previews it without touching what this browser has seen.
+  const [preview, setPreview] = useState<Spotlight>();
+  useEffect(() => {
+    const open = (event: Event) => {
+      const version = (event as CustomEvent<string | undefined>).detail;
+      setPreview(
+        (version ? RELEASE_SPOTLIGHTS.find((entry) => entry.version === version) : undefined) ??
+          RELEASE_SPOTLIGHTS[0],
+      );
+    };
+    window.addEventListener(PREVIEW_RELEASE_SPOTLIGHT_EVENT, open);
+    return () => window.removeEventListener(PREVIEW_RELEASE_SPOTLIGHT_EVENT, open);
+  }, []);
+  const shownSpotlight = preview ?? spotlight;
+  const closeSpotlight = () => {
+    if (preview) {
+      setPreview(undefined);
+      return;
+    }
+    if (spotlight) {
+      markSpotlightSeen(spotlight.version);
+      setSpotlight(undefined);
+    }
+  };
   // The share dialog lives up here rather than in BoardActions so the compact
   // menu can close behind it without unmounting it. The export dialog for the
   // same reason.
@@ -73,34 +110,22 @@ export function AppHeader({ onLoadDatasetVersion }: AppHeaderProps) {
         <span className="shrink-0">
           SuSy <span className="text-cyan-500">Planner</span>
         </span>
+        {/* JUST THE NUMBER (Jack, 2026-09-08). The player-facing changelog is
+            gone: no dialog, no unread dot, nothing here to open. What
+            announces a release is the notice that arrives once, on its own.
+            The chip is still the way in to the DEV MENU on a shift-click, and
+            a plain click does nothing at all. */}
         <button
           type="button"
           onClick={(event) => {
-            // Shift-click is the way in to the dev menu (the perf readout,
-            // the update-popup preview). Undiscovered by accident, and the
-            // ordinary click is unchanged.
             if (event.shiftKey) {
               setDevMenuOpen(true);
-              return;
             }
-            // Read what is unseen BEFORE stamping, or the dialog opens with
-            // nothing above its divider. Opening it IS reading it, so the dot
-            // goes now rather than on close.
-            setUnseenVersions(new Set(unseenEntries().map((entry) => entry.version)));
-            markVersionSeenAndNotify();
-            setChangelogOpen(true);
           }}
-          title="What's new"
-          aria-label={`Version ${APP_VERSION}: see what's new`}
-          className="relative shrink-0 rounded border border-line px-1 py-px text-[10px] font-semibold leading-none text-fg-muted tabular-nums hover:border-cyan-600 hover:text-cyan-500"
+          aria-label={`Version ${APP_VERSION}`}
+          className="shrink-0 cursor-default rounded border border-line px-1 py-px text-[10px] font-semibold leading-none text-fg-muted tabular-nums"
         >
           v{APP_VERSION}
-          {hasUnread ? (
-            <span
-              aria-label="Unread release notes"
-              className="absolute -right-1 -top-1 h-2 w-2 rounded-full border border-surface bg-cyan-400"
-            />
-          ) : null}
         </button>
         {/* The pack picker rides up here beside the app version rather than at
             the head of the browser column. Two versions that are easy to
@@ -117,19 +142,10 @@ export function AppHeader({ onLoadDatasetVersion }: AppHeaderProps) {
           </>
         )}
       </h1>
-      {isChangelogOpen ? (
-        <ChangelogDialog
-          unseenVersions={unseenVersions}
-          onClose={() => setChangelogOpen(false)}
-        />
+      {shownSpotlight ? (
+        <ReleaseSpotlight spotlight={shownSpotlight} onClose={closeSpotlight} />
       ) : null}
-      {isPreviewOpen ? <WhatsNewPreview onClose={() => setPreviewOpen(false)} /> : null}
-      {isDevMenuOpen ? (
-        <DevMenu
-          onClose={() => setDevMenuOpen(false)}
-          onPreviewUpdatePopup={() => setPreviewOpen(true)}
-        />
-      ) : null}
+      {isDevMenuOpen ? <DevMenu onClose={() => setDevMenuOpen(false)} /> : null}
       {isShareOpen ? <SharePlanDialog onClose={() => setShareOpen(false)} /> : null}
       {isExportOpen ? <ExportImageDialog onClose={() => setExportOpen(false)} /> : null}
       {isSettingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}

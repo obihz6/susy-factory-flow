@@ -618,10 +618,6 @@ export interface FactoryEdge {
   crossForm?: {
     litresPerCell: number;
   };
-  labelOffset?: {
-    x: number;
-    y: number;
-  };
   /**
    * User-pinned stops, in order: the wire must pass through each on its way
    * from source to target. Placed by double-clicking the wire, dragged to
@@ -666,8 +662,7 @@ export interface PlanViewState {
   /** Historical: older plans carry it, nothing reads it. Line colour rides
    * the status glance mode now. */
   lineHeatMode?: boolean;
-  lineThicknessMode?: boolean;
-  freeDockMode?: boolean;
+  /** Historical: the rate pills on wires were dropped (2026-09-08); nothing reads it. */
   lineLabelsMode?: boolean;
   linePulseMode?: boolean;
   calmMode?: boolean;
@@ -714,6 +709,8 @@ export interface SetupRules {
 }
 
 export interface FactoryProject {
+  /** Construction progress; never changes production. */
+  checklist?: { cards: string[]; edges: string[] };
   schemaVersion: typeof PROJECT_SCHEMA_VERSION;
   id: string;
   name: string;

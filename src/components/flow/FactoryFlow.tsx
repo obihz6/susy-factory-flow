@@ -1,12 +1,13 @@
 "use client";
 
+import { ChecklistKeys, useChecklistBoard, checklistCursorStyle } from "./ChecklistMode";
+
 import { emitBoardCameraMove } from "@/lib/board-camera-signal";
 
 import { useDropdownDismiss } from "@/lib/hooks/use-dropdown-dismiss";
 
 import {
   BaseEdge,
-  EdgeLabelRenderer,
   ConnectionMode,
   Position,
   ReactFlow,
@@ -39,12 +40,9 @@ import {
   Ban,
   Box,
   Combine,
-  Cable,
   Grid2x2,
-  Anchor,
   Eye,
   Focus,
-  Tag,
   Gauge,
   Grid3x3,
   Grip,
@@ -58,7 +56,6 @@ import {
   Paintbrush,
   Pencil,
   Plus,
-  Presentation,
   Redo2,
   Square,
   Trash2,
@@ -112,6 +109,7 @@ import { queryRecipeDatasetResources } from "@/lib/datasets/browser-loader";
 import { DEFAULT_DATASET_MANIFEST_URL } from "@/lib/datasets/remote";
 import type { DatasetResourceIndexEntry } from "@/lib/datasets/types";
 import { ItemPickerPopover } from "@/components/ItemPickerPopover";
+import { BoardContextMenu, type BoardMenuTarget } from "./BoardContextMenu";
 import { listPoolCellPairs } from "@/lib/solver/pool-mode";
 import "./pool-mode.css";
 import "./scroll-camera.css";
@@ -138,7 +136,6 @@ import {
   captureBoardSelection,
   findToggleDuplicateEdge,
   useFactoryStore,
-  useRateDisplayUnits,
   wouldConnectionStorageSpawn,
   type BoardClipboardPayload,
   type BoardFraming,
@@ -242,7 +239,6 @@ import {
 import { CANVAS_THEMES, getCanvasTheme, type CanvasTheme } from "./canvas-themes";
 import { GrainBackground, RuledBackground, TiledBackground } from "./board-pattern";
 import {
-  MotionNumberText,
   readBoardMotionSnapshot,
   useBoardMotion,
   useMotionRoute,
@@ -262,13 +258,8 @@ import { getSharedMachineHandlers, listNodeSections, sectionNodeView, splitSecti
 import { isPowerRecipe } from "@/lib/power/power-recipe";
 import { isCropFarmRecipe } from "@/lib/model/passive-production";
 import {
-  edgeUnit,
-  formatEdgeRateLabelFrom,
-  getEdgeRateLabelValues,
   isEdgeStarved,
-  type EdgeLabelInput,
 } from "./edge-labels";
-import { ResourceIcon } from "@/components/nei/ResourceIcon";
 import { RecipeAddChips } from "@/components/RecipeAddChip";
 import {
   LANE_CAPACITY,
@@ -277,8 +268,25 @@ import {
   type GridEndpoint,
   type GridSide,
   type GridRouteRequest,
+  type GridObstacle,
+  type GridRoutedEdge,
+  measureRoutes,
 } from "./grid-edge-router";
 import { getRouterTuning, routerTuningKey, subscribeRouterTuning } from "./router-tuning";
+import type { ArrangeInput } from "@/lib/board-arrange";
+import { proxyPath } from "@/lib/board-arrange-optimize";
+import { makeRouteJudge } from "@/lib/route-judge";
+import { routePoints } from "@/lib/route-metrics";
+import { registerBoardGeometryReader, registerBoardScoreReader } from "./board-score";
+import { flattenBoards } from "@/lib/model/flatten-boards";
+import {
+  ARRANGE_STEPS,
+  ArrangeCancelled,
+  arrangeInWorker,
+  cancelArrange,
+  type ArrangeProgress,
+} from "@/lib/arrange-solve";
+import type { ArrangeJudgeInput } from "@/lib/arrange-job";
 import {
   ASYNC_ROUTE_EDGE_LIMIT,
   routeWorkerAvailable,
@@ -348,10 +356,8 @@ import {
   type NodeDetailLevel,
 } from "./node-detail";
 import {
-  publishEdgeLabelBox,
   publishEdgePulse,
   publishEdgeWaypointDots,
-  retractEdgeLabelBox,
   retractEdgePulse,
   retractEdgeWaypointDots,
   snapshotEdgeLabelBoxes,
@@ -577,6 +583,25 @@ function withTouchDragRule(nodes: BoardFlowNode[], compact: boolean): BoardFlowN
  * the narrowest a sliver. `laneWidthForHeat` does the mapping.
  */
 const FLOW_MODE_MIN_WIDTH = 4;
+/**
+ * The dash pattern of a wire carrying nothing: round-capped dots one stroke
+ * wide with a gap of two and a half strokes, so the dots read as dots on a
+ * thin line and stay dots when the line is highlighted thicker.
+ */
+const idleDots = (strokeWidth: number) => `0.1 ${Math.max(8, strokeWidth * 2.5)}`;
+/**
+ * The ink a routed lane width draws at. The thinnest wire (a quarter lane,
+ * 4px) stays 4px; the fattest (a full 16px lane) draws at 32px (Jack,
+ * 2026-09-08: "the thinnest edge is good, but the thickest edge, let's
+ * make it twice as thick"), the steps between stretched to match. The
+ * ROUTER still packs and prices by lane width - only the ink doubles - so
+ * two fat pipes on neighbouring grid lines touch rather than leave
+ * daylight, which is the look asked for.
+ */
+const drawnStrokeWidth = (laneWidth: number) =>
+  FLOW_MODE_MIN_WIDTH +
+  (laneWidth - FLOW_MODE_MIN_WIDTH) *
+    ((2 * LANE_CAPACITY - FLOW_MODE_MIN_WIDTH) / (LANE_CAPACITY - FLOW_MODE_MIN_WIDTH));
 const FLOW_MODE_MAX_WIDTH = LANE_CAPACITY;
 /**
  * Dash travel in flow pixels per second: the quietest line on the board, and
@@ -745,8 +770,6 @@ type ResourceEdgeData = {
   /** The line ends in a barrel or tank rather than a machine. */
   isStorageTarget?: boolean;
   isStorageEdge: boolean;
-  showLabel: boolean;
-  labelOffset?: { x: number; y: number };
   /** User-pinned stops the wire routes through, in order. */
   waypoints?: Array<{ x: number; y: number }>;
   sourceHandleId?: string | null;
@@ -799,6 +822,13 @@ type ResourceEdgeData = {
     color: boolean;
     thickness: boolean;
     pulse: boolean;
+    /**
+     * Nothing moves on this wire at all (Jack, 2026-09-08: "if it's zero,
+     * we don't just make it the smallest edge, we also make it a dotted
+     * line"). Drawn dotted at every zoom; starved-but-flowing wires keep
+     * their solid line, dotted only at a glance as before.
+     */
+    idle: boolean;
   };
   /**
    * Bust token for the edge-identity cache. Node size changes bump it, which
@@ -839,6 +869,13 @@ type RoutedEdgePath = {
    */
   labelHidden?: boolean;
   points: Array<{ x: number; y: number }>;
+  /**
+   * Whether these points came from the router (fresh or last-solved) rather
+   * than the port-anchored fallback. The fallback leaves each end at its
+   * port row, which is the look free docking replaced, so a wire must never
+   * be seen ANIMATING out of one (see the morph gate in the edge).
+   */
+  solved?: boolean;
 };
 
 const directRouteCache = new Map<
@@ -1053,8 +1090,6 @@ type GridRouteEdgeInput = {
 };
 
 let publishedGridRouteEdges: GridRouteEdgeInput[] = [];
-/** Free docking (anywhere on the perimeter) vs fixed ports — see the toggle. */
-let publishedGridFreeDock = true;
 let gridSolveSignature = "";
 /**
  * Fast-path gate. Building the full signature walks every edge's endpoints,
@@ -1147,20 +1182,16 @@ function gridRouteEdgeInputsEqual(a: GridRouteEdgeInput[], b: GridRouteEdgeInput
   return true;
 }
 
-function publishGridRouteEdges(edges: GridRouteEdgeInput[], freeDock: boolean) {
+function publishGridRouteEdges(edges: GridRouteEdgeInput[]) {
   // The edges memo rebuilds on hover, search keystrokes and solver results —
   // none of which move a wire. Bumping the stamp unconditionally forced the
-  // full signature rebuild (O(edges × perimeter) endpoint resolution in free
-  // dock) just to discover nothing changed; a field-wise compare here is
-  // O(edges) and keeps the fast-path gate honest.
-  if (
-    freeDock === publishedGridFreeDock &&
-    gridRouteEdgeInputsEqual(publishedGridRouteEdges, edges)
-  ) {
+  // full signature rebuild (O(edges × perimeter) endpoint resolution) just
+  // to discover nothing changed; a field-wise compare here is O(edges) and
+  // keeps the fast-path gate honest.
+  if (gridRouteEdgeInputsEqual(publishedGridRouteEdges, edges)) {
     return;
   }
   publishedGridRouteEdges = edges;
-  publishedGridFreeDock = freeDock;
   gridSolveInputsStamp += 1;
 }
 
@@ -1185,48 +1216,9 @@ function resolveGridRouteEndpoints(
   }
   const snap = (value: number) => Math.round(value / BOARD_GRID) * BOARD_GRID;
 
-  // A machine wired into itself always uses fixed ports, whatever the anchor
-  // toggle says. In free mode both ends of that wire offer the same card's
-  // whole perimeter, and the cheapest way to get from a card to itself is to
-  // not move: both ends pick one dock and the loop collapses to a stub. The
-  // real input and output rows give it two genuinely different ends, so the
-  // wire has to travel around the card and reads as the loop it is.
-  const isSelfLoop = input.sourceNodeId === input.targetNodeId;
-
-  // Fixed-port mode (the anchor toggle, off): wires attach the classic way —
-  // machine inputs on the left at their port row, outputs on the right, and
-  // storage/trash cards on whichever side centre routes best.
-  if (!publishedGridFreeDock || isSelfLoop) {
-    const isSlot = end === "source" ? input.sourceSlotEndpoint : input.targetSlotEndpoint;
-    if (isSlot) {
-      const handleId = end === "source" ? input.sourceHandleId : input.targetHandleId;
-      const handle = parseResourceHandleId(handleId);
-      const edgeSide = handle?.side === "input" ? Position.Left : Position.Right;
-      const side: GridSide = edgeSide === Position.Left ? "left" : "right";
-      const measured = getMeasuredSlotEndpoint({ nodeId, handleId, edgeSide });
-      if (measured) {
-        return [{ x: measured.x, y: measured.y, side }];
-      }
-      // Unmeasured (first paint of a culled node): the card edge at a
-      // plausible port height until the real measurement lands.
-      return [
-        {
-          x: side === "left" ? rect.left : rect.right,
-          y: Math.min(rect.top + 60, (rect.top + rect.bottom) / 2),
-          side,
-        },
-      ];
-    }
-    const fixedCenterX = snap((rect.left + rect.right) / 2);
-    const fixedCenterY = snap((rect.top + rect.bottom) / 2);
-    return [
-      { x: rect.left, y: fixedCenterY, side: "left" },
-      { x: rect.right, y: fixedCenterY, side: "right" },
-      { x: fixedCenterX, y: rect.top, side: "top" },
-      { x: fixedCenterX, y: rect.bottom, side: "bottom" },
-    ];
-  }
-
+  // Every wire docks freely, a machine wired into itself included (Jack,
+  // 2026-09-08; the fixed-port mode and its toggle are gone). The router
+  // keeps a self loop's two ends a few cells apart so it reads as a loop.
   const left = snap(rect.left);
   const right = snap(rect.right);
   const top = snap(rect.top);
@@ -1238,10 +1230,9 @@ function resolveGridRouteEndpoints(
   // Corners and their neighbourhoods are off limits: a wire hanging off the
   // very corner of a card reads as clipped through it. Docks start two
   // cells in from each corner — close is fine, corner is not.
-  // A small card (a drawer is 5 by 4 cells) keeps only one cell off its
-  // corners, or its short sides would offer a single dock each and every
-  // second wire would be sent round the back.
-  const keepOutFor = (span: number) => (span < 6 * BOARD_GRID ? BOARD_GRID : 2 * BOARD_GRID);
+  // One cell off the corners (Jack, 2026-09-08): a wire may leave near a
+  // corner, and at 45° if it likes; only the corner itself is not a dock.
+  const keepOutFor = (span: number) => (span >= 2 * BOARD_GRID ? BOARD_GRID : 0);
   // The window's true top: side docks exist only below it, and the corner
   // keep-out measures from IT — the window's corner, not the phantom box's.
   const dockTop = top;
@@ -1302,14 +1293,11 @@ function ensureGridSolve() {
   const requests: GridRouteRequest[] = [];
   const orderByEdge = new Map<string, number>();
   const parts: string[] = [];
-  // Free-dock endpoint resolution enumerates the whole card perimeter (~64
-  // candidates per endpoint), yet its signature never contains those coords —
+  // Endpoint resolution enumerates the whole card perimeter (~64
+  // candidates per endpoint), yet its signature never contains those coords -
   // they derive purely from the card rects the sweep hash already covers. So
-  // in free-dock mode the signature is built FIRST from the inputs alone and
-  // resolution is deferred until it actually differs; only fixed-port mode
-  // (1-4 anchors, and lazily-arriving slot measurements that must go in the
-  // signature) still resolves up front.
-  const freeDock = publishedGridFreeDock;
+  // the signature is built FIRST from the inputs alone and resolution is
+  // deferred until it actually differs.
   const deferredInputs: GridRouteEdgeInput[] = [];
   for (const input of publishedGridRouteEdges) {
     const waypointPart =
@@ -1318,43 +1306,16 @@ function ensureGridSolve() {
             .map((point) => `${Math.round(point.x)},${Math.round(point.y)}`)
             .join("+")}`
         : "";
-    let describe: string;
-    if (freeDock) {
-      // Same skip rule the resolver applies: an unmeasured node yields no
-      // candidates in free-dock mode, and nothing else can empty them.
-      if (
-        !getMeasuredNodeBoundsById(input.sourceNodeId) ||
-        !getMeasuredNodeBoundsById(input.targetNodeId)
-      ) {
-        continue;
-      }
-      deferredInputs.push(input);
-      describe = waypointPart;
-    } else {
-      const sources = resolveGridRouteEndpoints(input, "source");
-      const targets = resolveGridRouteEndpoints(input, "target");
-      if (sources.length === 0 || targets.length === 0) {
-        continue;
-      }
-      requests.push({
-        edgeId: input.edgeId,
-        order: input.order,
-        sources,
-        targets,
-        strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
-        waypoints: input.waypoints,
-        exemptObstacleIds: input.throughBoardIds,
-        homeObstacleIds: input.homeBoardIds,
-        sourceCardId: input.sourceNodeId,
-        targetCardId: input.targetNodeId,
-      });
-      orderByEdge.set(input.edgeId, input.order);
-      describe = `${waypointPart}|${sources
-        .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
-        .join("+")}|${targets
-        .map((endpoint) => `${Math.round(endpoint.x)},${Math.round(endpoint.y)}`)
-        .join("+")}`;
+    // Same skip rule the resolver applies: an unmeasured node yields no
+    // candidates, and nothing else can empty them.
+    if (
+      !getMeasuredNodeBoundsById(input.sourceNodeId) ||
+      !getMeasuredNodeBoundsById(input.targetNodeId)
+    ) {
+      continue;
     }
+    deferredInputs.push(input);
+    const describe = waypointPart;
     // Frame exemptions are a routing input like a waypoint: adopting a card
     // changes no endpoint and moves no obstacle, yet its wires must reroute.
     const throughPart =
@@ -1383,7 +1344,7 @@ function ensureGridSolve() {
     .join(";");
 
   const tuning = getRouterTuning();
-  const signature = `${publishedGridFreeDock ? "free" : "ports"}::${routerTuningKey(tuning)}::${sweep.hash}::${framesPart}::${parts.join(";")}`;
+  const signature = `${routerTuningKey(tuning)}::${sweep.hash}::${framesPart}::${parts.join(";")}`;
   if (signature === gridSolveSignature || signature === gridSolveWantedSignature) {
     return;
   }
@@ -1391,7 +1352,7 @@ function ensureGridSolve() {
   gridSolveRequestSeq += 1;
   const seq = gridSolveRequestSeq;
 
-  // The signature actually moved: now pay for the free-dock perimeters.
+  // The signature actually moved: now pay for the perimeters.
   for (const input of deferredInputs) {
     const sources = resolveGridRouteEndpoints(input, "source");
     const targets = resolveGridRouteEndpoints(input, "target");
@@ -1424,7 +1385,78 @@ function ensureGridSolve() {
       signature,
       obstacles,
       requests,
+      tuning,
     };
+    // Read the installed geometry on demand, never re-solve a benchmark's
+    // approximation. The signature gate lets probes wait for the worker.
+    registerBoardScoreReader(() => {
+      const routes: GridRoutedEdge[] = [];
+      let settled = gridSolveSignature === gridSolveWantedSignature;
+      for (const input of publishedGridRouteEdges) {
+        const entry = directRouteCache.get(input.edgeId);
+        if (!entry) {
+          settled = false;
+          continue;
+        }
+        if (entry.signature !== gridSolveSignature) settled = false;
+        routes.push({
+          edgeId: input.edgeId,
+          points: entry.route.points,
+          width: Math.min(input.routingWidth, LANE_CAPACITY),
+        });
+      }
+      const measured = measureRoutes(routes);
+      return {
+        crossings: measured.crossings,
+        length: measured.length,
+        points: routePoints(measured, getRouterTuning()),
+        bends45: measured.bends45,
+        bends90: measured.bends90 + 3 * measured.bendsSharp,
+        wires: routes.length,
+        settled,
+      };
+    });
+    // The board's geometry as the router sees it: for the layout string
+    // (dev menu -> Score -> Copy layout), enough to rebuild the routing
+    // problem offline.
+    registerBoardGeometryReader(() => {
+      const project = useFactoryStore.getState().project;
+      const cards: Array<{ id: string; x: number; y: number; width: number; height: number; role: "machine" | "storage" | "board" }> = [];
+      const seen = new Set<string>();
+      const take = (id: string, role: "machine" | "storage" | "board") => {
+        const rect = getMeasuredNodeBoundsById(id);
+        if (!rect || seen.has(id)) return;
+        seen.add(id);
+        cards.push({ id, x: rect.left, y: rect.top, width: rect.right - rect.left, height: rect.bottom - rect.top, role });
+      };
+      for (const node of project.nodes) take(node.id, "machine");
+      for (const storage of project.storages ?? []) take(storage.id, "storage");
+      for (const pocket of project.pockets ?? []) take(pocket.id, "board");
+      const wires = publishedGridRouteEdges
+        .filter((input) => seen.has(input.sourceNodeId) && seen.has(input.targetNodeId))
+        .map((input) => ({
+          id: input.edgeId,
+          source: input.sourceNodeId,
+          target: input.targetNodeId,
+          sourcePortY: input.sourceSlotEndpoint
+            ? measuredPortOffsetY(input.sourceNodeId, input.sourceHandleId ?? undefined, Position.Right)
+            : undefined,
+          targetPortY: input.targetSlotEndpoint
+            ? measuredPortOffsetY(input.targetNodeId, input.targetHandleId ?? undefined, Position.Left)
+            : undefined,
+          width: Math.min(input.routingWidth, LANE_CAPACITY),
+        }));
+      return { cards, wires };
+    });
+    (window as unknown as { __gtnhReadDisplayedRoutes?: unknown }).__gtnhReadDisplayedRoutes = () => ({
+      signature: gridSolveSignature,
+      wantedSignature: gridSolveWantedSignature,
+      project: useFactoryStore.getState().project,
+      routes: publishedGridRouteEdges.flatMap((input) => {
+        const entry = directRouteCache.get(input.edgeId);
+        return entry ? [{ edgeId: input.edgeId, signature: entry.signature, points: entry.route.points }] : [];
+      }),
+    });
   }
   // A big board routes in the worker (`grid-route-solve.ts`): this render
   // keeps serving the routes already installed - `gridSolveSignature` does
@@ -1483,6 +1515,74 @@ function installSolvedRoutes(result: RouteSolveResult) {
   routeSolveRerender?.();
 }
 setRouteSolveSink(installSolvedRoutes);
+
+/**
+ * The arranger's judge: routes the board's OWN wires (the published route
+ * inputs - real docks, widths, ids, frames) at hypothetical card positions
+ * and reports crossings and total length. Every card is shifted by the
+ * difference between where it stands and where the layout puts it, so the
+ * measured perimeters and slot ports move with it. Undefined when any card
+ * on the level is a board (the meta cards have no measured perimeter of
+ * their own to shift) or when no wire has resolvable ends.
+ */
+function buildArrangeJudge(cardIds: readonly string[]): ArrangeInput["judge"] | undefined {
+  const input = buildArrangeJudgeInput(cardIds);
+  return input ? makeRouteJudge(input.obstacles, input.requests, input.tuning) : undefined;
+}
+
+/** The judge's inputs, serialisable: what the arrange worker builds its judge from. */
+function buildArrangeJudgeInput(cardIds: readonly string[]): ArrangeJudgeInput | undefined {
+  const ids = new Set(cardIds);
+  const inputs = publishedGridRouteEdges.filter(
+    (input) => ids.has(input.sourceNodeId) && ids.has(input.targetNodeId),
+  );
+  if (inputs.length === 0) {
+    return undefined;
+  }
+  const base: Array<{ input: GridRouteEdgeInput; sources: GridEndpoint[]; targets: GridEndpoint[] }> = [];
+  for (const input of inputs) {
+    const sources = resolveGridRouteEndpoints(input, "source");
+    const targets = resolveGridRouteEndpoints(input, "target");
+    if (sources.length === 0 || targets.length === 0) {
+      continue;
+    }
+    base.push({ input, sources, targets });
+  }
+  if (base.length === 0) {
+    return undefined;
+  }
+  const bounds = new Map<string, { left: number; top: number; right: number; bottom: number }>();
+  for (const id of ids) {
+    const rect = getMeasuredNodeBoundsById(id);
+    if (!rect) {
+      return undefined;
+    }
+    bounds.set(id, rect);
+  }
+  const obstacles: GridObstacle[] = [];
+  for (const [id, rect] of bounds) {
+    obstacles.push({ id, left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+  }
+  const requests: GridRouteRequest[] = base.map(({ input, sources, targets }) => ({
+    edgeId: input.edgeId,
+    order: input.order,
+    sources,
+    targets,
+    strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
+    sourceCardId: input.sourceNodeId,
+    targetCardId: input.targetNodeId,
+  }));
+  // The judge's exact inputs at the moment of the arrange, for the audit
+  // tool (tools/audit-board.mjs) to save beside the result.
+  const input: ArrangeJudgeInput = { obstacles, requests, tuning: getRouterTuning() };
+  if (typeof window !== "undefined") {
+    (window as unknown as { __gtnhArrangeJudgeInput?: unknown }).__gtnhArrangeJudgeInput = {
+      ...input,
+      cardIds: [...cardIds],
+    };
+  }
+  return input;
+}
 
 function clearDirectRoutes() {
   directRouteCache.clear();
@@ -1979,14 +2079,16 @@ export function FactoryFlow() {
   const nodeColorPaintMode = useFactoryStore((state) => state.nodeColorPaintMode);
   const setNodeColorPaintMode = useFactoryStore((state) => state.setNodeColorPaintMode);
   const boardView = useBoardView();
-  const { freeDockMode, lineLabelsMode, lineThicknessMode, calmMode } = boardView;
+  const { calmMode } = boardView;
   // Device taste, not plan state: never captured into plan-view snapshots.
   const boardMotion = useBoardMotion();
   const canvasTheme = getCanvasTheme(boardView.canvasTheme);
   // Line colour rides the speed smart view now — no switch of its own. The
   // edge component itself gates it to the glance step, where the view lives.
   const speedColorMode = boardView.glanceMode === "status";
-  const anyLineMode = speedColorMode || lineThicknessMode;
+  // Line thickness is always on (Jack, 2026-09-08); every wire is drawn and
+  // routed at the width its flow earns.
+  const anyLineMode = true;
   const setFlowViewportCenter = useFactoryStore((state) => state.setFlowViewportCenter);
   const hoveredFlowResourceKey = useFactoryStore((state) => state.hoveredFlowResourceKey);
   const selectedFlowResourceKey = useFactoryStore((state) => state.selectedFlowResourceKey);
@@ -2238,6 +2340,10 @@ export function FactoryFlow() {
   // the house colour, and legible on every paper the board ships with.
   const [activeColorTag, setActiveColorTag] = useState<FactoryNodeColorTag>("blue");
   const [isDeleteMode, setDeleteMode] = useState(false);
+  const checklistMode = useFactoryStore((state) => state.checklistMode);
+  useEffect(() => {
+    if (checklistMode) { setDeleteMode(false); setAnnotationTool(undefined); }
+  }, [checklistMode]);
   const [annotationDraft, setAnnotationDraft] = useState<AnnotationDraft | undefined>(undefined);
   const annotationDraftRef = useRef<AnnotationDraft | undefined>(undefined);
   const [layoutVersion, setLayoutVersion] = useState(0);
@@ -2683,11 +2789,11 @@ export function FactoryFlow() {
     // republishes every endpoint, but an edge only redraws when its identity
     // changes — without the epoch bump the new docking arrived one hover at
     // a time, as each edge happened to re-render.
-    const nextLaneScale = lineThicknessMode ? THICK_LINE_LANE_SCALE : 1;
+    const nextLaneScale = THICK_LINE_LANE_SCALE;
     // Clearances are a routing input for the same reason lane width is, and
     // they move together: both are functions of the widest line the current
     // mode can draw. See edgeClearancesForMode.
-    const nextClearances = edgeClearancesForMode(lineThicknessMode);
+    const nextClearances = edgeClearancesForMode(true);
     if (
       publishedEdgeLaneScale !== nextLaneScale ||
       publishedDirectEdgeNodeClearance !== nextClearances.node ||
@@ -2774,7 +2880,7 @@ export function FactoryFlow() {
     if (invalidateRoutes) {
       invalidateMeasuredLayout();
     }
-  }, [freeDockMode, lineThicknessMode]);
+  }, []);
   // Live-drag throttle state: when the last mid-drag solve ran, and the
   // trailing timer that guarantees the LAST cell a card entered still gets
   // its solve when the pointer stops moving inside a throttle window.
@@ -3102,7 +3208,7 @@ export function FactoryFlow() {
       // together or visibly do not.
       publishedEdgeStrokeWidths.set(
         edge.id,
-        lineThicknessMode ? laneWidthForHeat(heat) : DEFAULT_EDGE_STROKE_WIDTH,
+        laneWidthForHeat(heat),
       );
     }
 
@@ -3239,13 +3345,9 @@ export function FactoryFlow() {
       // the board, 1 the busiest. A single line, or a board where every line
       // is equal, reads as the biggest there is.
       const flowHeat = flowHeatById.get(edge.id) ?? 0;
-      // isLimited almost never survives the solver's utilisation convergence,
-      // since demand gets scaled down to whatever supply exists. The nameplate
-      // comparison is what actually catches a starved machine. Storage soaks
-      // up whatever arrives, so a line into a barrel is never starved.
+      // Storage soaks up whatever arrives, so a line into a barrel is never
+      // supply-capped.
       const isSupplyCapped = edgeResult?.constraint === "supply" && !targetStorage;
-      const isStarvedEdge =
-        isSupplyCapped || (edgeResult?.isLimited === true && !targetStorage);
       const isStorageEdge = Boolean(sourceStorage || targetStorage);
       const resource = getEdgeResource(project, edge);
       const edgeColor = getInitialResourceColor(resource);
@@ -3268,12 +3370,6 @@ export function FactoryFlow() {
       const canonicalTargetHandle = targetIsPocket
         ? POCKET_CARD_TARGET_HANDLE
         : canonicalizeResourceHandleId(edge.targetHandle);
-      const isSearchEdgeActive = edgeMatchesSearch(edge, resource, recipeSearch);
-      // A drawer's own wires thicken when the search names them. Hovering the
-      // drawer no longer feeds this: that lights the wires ON the drawer
-      // through the flow scope, which is a per-edge subscription and does not
-      // rebuild this memo.
-      const isStorageEdgeEmphasized = isStorageEdge && isSearchEdgeActive;
       const isFlowHighlighted =
         activeFlowResourceKey === makeResourceKey(edge.resourceKind, edge.resourceId);
 
@@ -3340,7 +3436,7 @@ export function FactoryFlow() {
         // No drag-time bump any more: wires hold still during a drag and the
         // dragged card itself is elevated (see handleNodeDragStart), so a
         // card in hand always passes OVER the board's wiring.
-        zIndex: lineThicknessMode ? -1 : isFlowHighlighted ? 1200 : 20,
+        zIndex: -1,
         source: sourceRep,
         target: targetRep,
         sourceHandle: canonicalSourceHandle,
@@ -3365,8 +3461,6 @@ export function FactoryFlow() {
           isSupplyCapped,
           isStorageTarget: Boolean(targetStorage),
           isStorageEdge,
-          showLabel: lineLabelsMode,
-          labelOffset: edge.labelOffset,
           waypoints: edge.waypoints,
           sourceHandleId: canonicalSourceHandle,
           targetHandleId: canonicalTargetHandle,
@@ -3391,9 +3485,10 @@ export function FactoryFlow() {
           flowRate: anyLineMode
             ? {
                 heat: flowHeat,
+                idle: (transferredById.get(edge.id) ?? 0) <= RATE_DISPLAY_EPSILON,
                 kind: flowBucketFor(edge.resourceKind),
                 color: speedColorMode,
-                thickness: lineThicknessMode,
+                thickness: true,
                 // The marching dashes were retired (2026-09-07): their canvas
                 // dirtied the whole board every frame and read the camera a
                 // frame late, so they cost most of the frame rate and still
@@ -3407,38 +3502,14 @@ export function FactoryFlow() {
           // Always the resource colour: the edge component derives its own
           // speed-view stroke at the point of use (it knows the LOD step).
           stroke: edgeColor,
-          // Volume is the whole message in thickness mode, so the starved
-          // dashes stand down rather than chopping up a fat pipe.
-          strokeDasharray: isStarvedEdge && !lineThicknessMode ? "4 6" : undefined,
-          strokeOpacity: lineThicknessMode
-            ? 0.95
-            : isFlowHighlighted
-              ? 1
-              : isStarvedEdge
-                ? 0.58
-                : isStorageEdge
-                  ? 0.86
-                  : 0.92,
-          // Doubled across the board: ~3px wires read as scratches next to
-          // the 4-16px dynamic pipes and on dense displays.
-          strokeWidth: lineThicknessMode
-            ? laneWidthForHeat(flowHeat)
-            : isFlowHighlighted
-              ? 9
-              : isStorageEdge
-                ? isStorageEdgeEmphasized
-                  ? 7.5
-                  : 6.2
-                : isStarvedEdge
-                  ? 5.4
-                  : edge.resourceKind === "fluid"
-                    ? 6.8
-                    : 5.8,
+          // Volume is the whole message, so no starved dashes chop up a pipe.
+          strokeOpacity: 0.95,
+          strokeWidth: laneWidthForHeat(flowHeat),
         },
       })];
     });
 
-    publishGridRouteEdges(gridRouteInputs, freeDockMode);
+    publishGridRouteEdges(gridRouteInputs);
 
     // Paint order IS depth, and it has to be the SAME order hop rendering
     // uses — otherwise a line hops over something that is drawn on top of it
@@ -3470,10 +3541,7 @@ export function FactoryFlow() {
   }, [
     activeFlowResourceKey,
     anyLineMode,
-    freeDockMode,
     speedColorMode,
-    lineLabelsMode,
-    lineThicknessMode,
     layoutVersion,
     pocketSummaries,
     pocketView,
@@ -4823,11 +4891,7 @@ export function FactoryFlow() {
         // dots. The GIF replays against these instead of the live
         // registries, which will have forgotten the offscreen edges by then.
         occlusionRects: [
-          ...(lineThicknessMode
-            ? (publishedBoardBounds ?? []).map(({ id, bounds }) => {
-                return bounds;
-              })
-            : []),
+          ...(publishedBoardBounds ?? []).map(({ bounds }) => bounds),
           // Board chrome hides the wires under it in every mode, so the
           // exported dashes stop at it too.
           ...publishedBoardFrameBounds.flatMap(({ bounds }) => boardChromeOccluders(bounds)),
@@ -4887,7 +4951,7 @@ export function FactoryFlow() {
         dispatchImageExportComplete(requestId, capture, failure);
       }
     },
-    [flowNodes, canvasTheme.base, lineThicknessMode],
+    [flowNodes, canvasTheme.base],
   );
 
   const exportFlowImage = useCallback(
@@ -5391,6 +5455,69 @@ export function FactoryFlow() {
     cancelResourceConnection();
   }, [cancelResourceConnection, selectNode]);
 
+  // THE BOARD MENU (BoardContextMenu.tsx): one right click anywhere on the
+  // board. A control that already answers a right click has prevented the
+  // event's default by the time it reaches here, and is left alone.
+  const [boardMenu, setBoardMenu] = useState<BoardMenuTarget | undefined>(undefined);
+  const closeBoardMenu = useCallback(() => setBoardMenu(undefined), []);
+  const menuPoint = useCallback((event: ReactMouseEvent | MouseEvent) => {
+    const instance = flowInstanceRef.current;
+    const flow = instance
+      ? instance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+      : { x: 0, y: 0 };
+    return { x: event.clientX, y: event.clientY, flow };
+  }, []);
+  const handlePaneContextMenu = useCallback(
+    (event: ReactMouseEvent | MouseEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      event.preventDefault();
+      setBoardMenu({ kind: "pane", ...menuPoint(event) });
+    },
+    [menuPoint],
+  );
+  const handleNodeContextMenu = useCallback(
+    (event: ReactMouseEvent, node: BoardFlowNode) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      if (node.type !== "recipeNode" && node.type !== "storageNode") {
+        return;
+      }
+      event.preventDefault();
+      setBoardMenu({
+        kind: node.type === "storageNode" ? "storage" : "node",
+        id: node.id,
+        ...menuPoint(event),
+      });
+    },
+    [menuPoint],
+  );
+  const handleEdgeContextMenu = useCallback(
+    (event: ReactMouseEvent, edge: Edge) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      event.preventDefault();
+      const project = useFactoryStore.getState().project;
+      const flat = project.edges.find((entry) => entry.id === edge.id);
+      // The drawer holds what the wire carries: read off the source's port,
+      // or the target's when the source is a board with no ports.
+      const resource = flat
+        ? (getResourceForHandle(project, flat.source, flat.sourceHandle ?? "") ??
+          getResourceForHandle(project, flat.target, flat.targetHandle ?? ""))
+        : undefined;
+      setBoardMenu({
+        kind: "edge",
+        ids: expandChannelEdgeIds([edge.id]),
+        resource,
+        ...menuPoint(event),
+      });
+    },
+    [expandChannelEdgeIds, menuPoint],
+  );
+
   const handleShowNodes = useCallback(
     (nodeIds: string[]) => frameBoardCards(nodeIds),
     [frameBoardCards],
@@ -5443,7 +5570,7 @@ export function FactoryFlow() {
   useBoardTouchGestures({
     boardRef,
     instanceRef: flowInstanceRef,
-    enabled: nodeColorPaintMode === undefined && annotationTool === undefined && !isDeleteMode,
+    enabled: !checklistMode && nodeColorPaintMode === undefined && annotationTool === undefined && !isDeleteMode,
   });
 
   // The camera under the hand: the wheel eases toward its target, a released
@@ -5462,8 +5589,46 @@ export function FactoryFlow() {
   // Auto-arrange: lay the visible level out left to right and reframe. Reads
   // the store at click time so the callback stays stable — the toolbar it
   // lives on must not re-render per project edit.
-  const handleAutoArrange = useCallback((options: { tidyBoardInteriors: boolean }) => {
+  // The arrange in flight, for the loader; undefined when none is.
+  const [arrangeProgress, setArrangeProgress] = useState<ArrangeProgress | undefined>(undefined);
+  const arrangeRunningRef = useRef(false);
+  const handleAutoArrange = useCallback(async (options: { keepBoards: boolean }) => {
+    // One at a time: a second click while one runs is a second click.
+    if (arrangeRunningRef.current) {
+      return;
+    }
+    arrangeRunningRef.current = true;
+    setArrangeProgress({ seq: 0, step: 0, stage: "Reading the board", done: 0, total: 1 });
     const state = useFactoryStore.getState();
+    // THE DUMP (Jack, 2026-09-08): unless Keep boards is on, every board is
+    // dumped first - members surface where the frame stood, the frames go -
+    // and the arrange lays out one flat set of cards. Keep boards on is the
+    // old rule: a board someone drew is sealed and only placed.
+    const dumpBoards = !options.keepBoards && (state.project.pockets?.length ?? 0) > 0;
+    const project = dumpBoards ? flattenBoards(state.project) : state.project;
+    let computed: Awaited<ReturnType<typeof computeAutoArrangement>>;
+    try {
+      computed = await computeAutoArrangement(
+        project,
+        state.lastResult,
+        // Tight spacing, always: the dial for it was only ever set one way.
+        // Islands are emergent now (board-arrange-air.ts), no dial.
+        {
+          spacing: "compact",
+        },
+        { tidyBoardInteriors: false },
+        (progress) => setArrangeProgress(progress),
+      );
+    } catch (error) {
+      if (!(error instanceof ArrangeCancelled)) {
+        console.error("arrange failed", error);
+      }
+      arrangeRunningRef.current = false;
+      setArrangeProgress(undefined);
+      return;
+    }
+    arrangeRunningRef.current = false;
+    setArrangeProgress(undefined);
     const {
       moves,
       wireRoutes,
@@ -5473,23 +5638,12 @@ export function FactoryFlow() {
       addBoards,
       setOwners,
       setBoardThemes,
-    } = computeAutoArrangement(
-        state.project,
-        state.lastResult,
-        // Tight spacing and normal island splitting, always: the dials that
-        // existed for these were both ever set one way.
-        {
-          spacing: "compact",
-          islands: "normal",
-        },
-        options,
-      );
+    } = computed;
     if (moves.length === 0) {
       return;
     }
-    // An arranged board is read through three switches, so the arrange sets
-    // them: lines weighted by volume, wires docking freely, rate pills off.
-    writeBoardView({ lineThicknessMode: true, freeDockMode: true, lineLabelsMode: false });
+    // The board may have changed while the arrange ran; apply to the
+    // current store, which is what applyBoardArrangement reads.
     // The arrange draws no ink: its islands become ZONES — real boards the
     // stray cards move into. Root notes (and old releases' island boxes)
     // go; they point at a layout that no longer exists. Boards the player
@@ -5504,6 +5658,9 @@ export function FactoryFlow() {
       setOwners,
       setBoardThemes,
       removeAnnotationIds: staleInkIds,
+      // The dump for real: every board goes, its members ride `moves`
+      // (root positions from the flattened plan) and surface on the canvas.
+      removeBoards: dumpBoards ? (state.project.pockets ?? []).map((pocket) => pocket.id) : undefined,
     });
     useFactoryStore.getState().frameBoardNodes();
   }, []);
@@ -5512,6 +5669,7 @@ export function FactoryFlow() {
   // per-frame FactoryFlow renders a node drag produces.
   const handlePaintModeChange = useCallback(
     (tag: FactoryNodeColorTag | null | undefined) => {
+      if (tag !== undefined) useFactoryStore.getState().setChecklistMode(false);
       setAnnotationTool(undefined);
       setDeleteMode(false);
       // Picking up the brush no longer touches the smart view: the coloured
@@ -5533,6 +5691,7 @@ export function FactoryFlow() {
   );
   const handleAnnotationToolChange = useCallback(
     (tool: BoardDrawTool | undefined) => {
+      if (tool) useFactoryStore.getState().setChecklistMode(false);
       setNodeColorPaintMode(undefined);
       setDeleteMode(false);
       setAnnotationTool(tool);
@@ -5545,6 +5704,7 @@ export function FactoryFlow() {
   );
   const handleDeleteModeChange = useCallback(
     (enabled: boolean) => {
+      if (enabled) useFactoryStore.getState().setChecklistMode(false);
       setNodeColorPaintMode(undefined);
       setAnnotationTool(undefined);
       setDeleteMode(enabled);
@@ -6251,23 +6411,20 @@ export function FactoryFlow() {
     [setNodeColorPaintMode],
   );
 
-  // One short line of caution before the dock-mode flip rewires the board —
-  // shown when there is real work to redo (lots of lines) or user work to
-  // unsettle (pinned dots). Undefined means flip silently.
-  const dockToggleWarning = useMemo(() => {
-    const edgeCount = project.edges.length;
-    const hasDots = project.edges.some((edge) => (edge.waypoints?.length ?? 0) > 0);
-    if (edgeCount < 50 && !hasDots) {
-      return undefined;
-    }
-    if (hasDots && edgeCount >= 50) {
-      return `Rewires all ${edgeCount} lines and your pinned dots. It may take a moment and look odd at first. Flipping back restores it. Continue?`;
-    }
-    if (hasDots) {
-      return "Rewires your lines and pinned dots. It may look odd for a moment. Flipping back restores it. Continue?";
-    }
-    return `Rewires all ${edgeCount} lines. It may take a moment. Flipping back restores it. Continue?`;
-  }, [project.edges]);
+
+  const checklistCapture = useChecklistBoard(visibleFlowEdges);
+  const checklistNodes = useMemo(() => {
+    if (!checklistMode) return visibleFlowNodes;
+    const checked = new Set(project.checklist?.cards);
+    return visibleFlowNodes.map((node) => ({ ...node, draggable: false,
+      className: [node.className, checked.has(node.id) ? "checklist-done" : ""].filter(Boolean).join(" ") }));
+  }, [visibleFlowNodes, checklistMode, project.checklist]);
+  const checklistEdges = useMemo(() => {
+    if (!checklistMode) return visibleFlowEdges;
+    const checked = new Set(project.checklist?.edges);
+    return visibleFlowEdges.map((edge) => ({ ...edge,
+      className: [edge.className, (edge.data?.bundle?.edgeIds ?? [edge.id]).every((id) => checked.has(id)) ? "checklist-done" : ""].filter(Boolean).join(" ") }));
+  }, [visibleFlowEdges, checklistMode, project.checklist]);
 
   const paintCursor =
     nodeColorPaintMode !== undefined
@@ -6291,12 +6448,13 @@ export function FactoryFlow() {
         // it: a floor taller than the window is a page that scrolls the board out
         // of sight.
         "factory-flow-board relative h-full min-h-[480px] compact:min-h-0 overflow-hidden border-x border-line bg-canvas",
+        checklistMode ? "checklist-active" : "",
         isNodeDragging ? "factory-flow-board--dragging" : "",
         poolMode ? "factory-flow-board--pool" : "",
         paintCursor ? "factory-flow-board--painting" : "",
         annotationTool ? "factory-flow-board--annotating" : "",
         isDeleteMode ? "factory-flow-board--deleting" : "",
-        lineThicknessMode ? "factory-flow-board--edges-under" : "",
+        "factory-flow-board--edges-under",
         calmMode ? "factory-flow-board--calm" : "",
         // The two motion switches (board-motion.tsx): the grid magnet and the
         // arrival pop hang off the first, the easing gauges off the second.
@@ -6318,6 +6476,7 @@ export function FactoryFlow() {
       ].join(" ")}
       style={
         {
+          ...checklistCursorStyle,
           ...(paintCursor ? { "--paint-cursor": paintCursor } : undefined),
           ...(isDeleteMode ? { "--delete-cursor": getDeleteCursor() } : undefined),
           // The theme paints the room: base colour, the screen-space edge
@@ -6346,7 +6505,14 @@ export function FactoryFlow() {
             : undefined),
         } as CSSProperties
       }
-      onPointerDownCapture={handleAnnotationPointerDown}
+      onPointerDownCapture={(event) => { if (!checklistCapture(event)) handleAnnotationPointerDown(event); }}
+      onMouseDownCapture={checklistCapture}
+      onTouchStartCapture={checklistCapture}
+      onClickCapture={checklistCapture}
+      onDoubleClickCapture={checklistCapture}
+      onContextMenuCapture={checklistCapture}
+      onKeyDownCapture={checklistCapture}
+      onWheelCapture={checklistCapture}
       // Dragging a picture file straight onto the board drops it where it
       // lands, as an image annotation.
       onDragOver={(event) => {
@@ -6370,9 +6536,10 @@ export function FactoryFlow() {
         void placeImageFile(file, point);
       }}
     >
+      {boardMenu ? <BoardContextMenu target={boardMenu} onClose={closeBoardMenu} /> : null}
       <ReactFlow
-        nodes={visibleFlowNodes}
-        edges={visibleFlowEdges}
+        nodes={checklistNodes}
+        edges={checklistEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         // A press that travels under this many pixels is a CLICK, over it a
@@ -6427,6 +6594,9 @@ export function FactoryFlow() {
         onSelectionStart={handleSelectionStart}
         onSelectionEnd={handleSelectionEnd}
         onPaneClick={handlePaneClick}
+        onPaneContextMenu={handlePaneContextMenu}
+        onNodeContextMenu={handleNodeContextMenu}
+        onEdgeContextMenu={handleEdgeContextMenu}
         onNodeDragStart={handleNodeDragStart}
         onNodeDragStop={handleNodeDragStop}
         onEdgesDelete={handleEdgesDelete}
@@ -6523,7 +6693,6 @@ export function FactoryFlow() {
         onDeleteModeChange={handleDeleteModeChange}
         view={boardView}
         onViewChange={writeBoardView}
-        dockToggleWarning={dockToggleWarning}
         onAutoArrange={handleAutoArrange}
         folded={toolbarFold.paint}
         foldAll={toolbarFold.paintFoldsAll}
@@ -6545,6 +6714,9 @@ export function FactoryFlow() {
       {/* Toggled from the dev menu (shift-click the version chip). Sits above
           the help button; see PerfHud.tsx. */}
       <PerfHud />
+      {arrangeProgress ? (
+        <ArrangeLoader progress={arrangeProgress} onCancel={cancelArrange} />
+      ) : null}
       {timelapseActive ? (
         // Settings live in the dev menu, set BEFORE the run; this only ends
         // it (as do Esc and any click on the board).
@@ -7466,7 +7638,13 @@ const ModeKeys = memo(function ModeKeys() {
       // Three separate things, three separate sounds: never a ladder that
       // rises and falls with the direction of travel.
       playBoardSound(key === "pool" ? "poolOn" : key === "solve" ? "solveOn" : "buildOn");
-      setBoardMode(key);
+      // The switch itself waits one task: the new mode re-solves and
+      // re-renders every card, a freeze of hundreds of milliseconds on a
+      // big board, and Firefox hands the audio thread its orders only when
+      // the task that gave them ends - so a sound played in the same task
+      // as that freeze arrived late and clipped, or not at all
+      // (board-sounds.ts). A task later is under a frame, invisible.
+      window.setTimeout(() => setBoardMode(key), 0);
     },
     [setBoardMode],
   );
@@ -8817,15 +8995,12 @@ function ThemeSwatch({ theme }: { theme: CanvasTheme }) {
 const BoardViewMenu = memo(function BoardViewMenu({
   view,
   onChange,
-  dockToggleWarning,
   open,
   onOpenChange,
   arrange,
 }: {
   view: BoardView;
   onChange: (patch: Partial<BoardView>) => void;
-  /** One-line caution before the dock flip rewires a big or dotted board. */
-  dockToggleWarning?: string;
   /** Held by the paint toolbar, which lifts the row's z while the sheet is out. */
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -8834,18 +9009,12 @@ const BoardViewMenu = memo(function BoardViewMenu({
    * sheet of its own): the one setting, and the button that runs it.
    */
   arrange: {
-    tidyBoardInteriors: boolean;
-    onToggleTidyBoards: () => void;
-    onArrange: (options: { tidyBoardInteriors: boolean }) => void;
+    keepBoards: boolean;
+    onToggleKeepBoards: () => void;
+    onArrange: (options: { keepBoards: boolean }) => void;
   };
 }) {
-  const {
-    canvasPattern,
-    freeDockMode,
-    lineLabelsMode,
-    lineThicknessMode,
-    calmMode,
-  } = view;
+  const { canvasPattern } = view;
   // Motion is device taste, not plan state: read and written through its own
   // store (board-motion.tsx), never through the plan-view snapshot.
   const boardMotion = useBoardMotion();
@@ -8861,45 +9030,6 @@ const BoardViewMenu = memo(function BoardViewMenu({
     Icon: LucideIcon;
     flip: () => void;
   }> = [
-    // The two line modes, independent and mixable. Volume is always ranked
-    // within a kind, items against items and fluids against fluids.
-    {
-      id: "thickness",
-      on: lineThicknessMode,
-      label: "Line thickness",
-      line: "Wires with more flow are drawn thicker.",
-      Icon: Cable,
-      flip: () => onChange({ lineThicknessMode: !lineThicknessMode }),
-    },
-    {
-      id: "labels",
-      on: lineLabelsMode,
-      label: "Line labels",
-      line: "Each wire shows its rate.",
-      Icon: Tag,
-      flip: () => onChange({ lineLabelsMode: !lineLabelsMode }),
-    },
-    {
-      id: "docking",
-      on: freeDockMode,
-      label: "Free docking",
-      line: "Wires can attach anywhere on a card. Off: fixed ports only.",
-      Icon: Anchor,
-      flip: () => {
-        if (dockToggleWarning && !window.confirm(dockToggleWarning)) {
-          return;
-        }
-        onChange({ freeDockMode: !freeDockMode });
-      },
-    },
-    {
-      id: "calm",
-      on: calmMode,
-      label: "Calm colours",
-      line: "Softer status colours.",
-      Icon: Presentation,
-      flip: () => onChange({ calmMode: !calmMode }),
-    },
     // The two motion switches. Device taste rather than plan dressing, so
     // they write to their own store and never travel with a shared plan.
     {
@@ -9017,16 +9147,16 @@ const BoardViewMenu = memo(function BoardViewMenu({
           ))}
           {/* ARRANGE, at the foot of the sheet: the setting reads like the
               toggles above it, and the button that runs it sits right under.
-              The arrange respects boards you drew by default; the setting is
-              where you say otherwise. */}
+              The arrange dumps every board by default (Jack, 2026-09-08);
+              Keep boards is where you say otherwise. */}
           <div className="mt-1 border-t-2 border-[var(--mc-15)] pt-1">
             <button
               type="button"
-              onClick={arrange.onToggleTidyBoards}
-              aria-pressed={arrange.tidyBoardInteriors}
+              onClick={arrange.onToggleKeepBoards}
+              aria-pressed={arrange.keepBoards}
               className={[
                 "flex w-full items-start gap-2 border-2 p-2 text-left",
-                arrange.tidyBoardInteriors
+                arrange.keepBoards
                   ? `border-[var(--mc-good)] ${TOOL_FACE_ON}`
                   : `border-[var(--mc-15)] ${TOOL_FACE_OFF}`,
               ].join(" ")}
@@ -9034,18 +9164,15 @@ const BoardViewMenu = memo(function BoardViewMenu({
               <Network className="mt-[1px] h-4 w-4 shrink-0" />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex items-baseline justify-between gap-2">
-                  <span className="font-mono text-[12px] font-black uppercase">Rearrange inside boards</span>
+                  <span className="font-mono text-[12px] font-black uppercase">Keep boards on rearrange</span>
                   <span
                     className={[
                       "font-mono text-[10px] font-black tracking-[1px]",
-                      arrange.tidyBoardInteriors ? "text-[var(--mc-good)]" : "text-[var(--mc-ink-muted)]",
+                      arrange.keepBoards ? "text-[var(--mc-good)]" : "text-[var(--mc-ink-muted)]",
                     ].join(" ")}
                   >
-                    {arrange.tidyBoardInteriors ? "ON" : "OFF"}
+                    {arrange.keepBoards ? "ON" : "OFF"}
                   </span>
-                </span>
-                <span className="font-mono text-[11px] leading-snug opacity-80">
-                  On, every open board is laid out again too. Off, boards you drew are only placed.
                 </span>
               </span>
             </button>
@@ -9053,7 +9180,7 @@ const BoardViewMenu = memo(function BoardViewMenu({
               type="button"
               onClick={() => {
                 onOpenChange(false);
-                arrange.onArrange({ tidyBoardInteriors: arrange.tidyBoardInteriors });
+                arrange.onArrange({ keepBoards: arrange.keepBoards });
               }}
               className="mt-1 flex w-full items-center justify-center gap-2 border-2 border-[var(--mc-15)] bg-[var(--mc-49)] p-2 font-mono text-[12px] font-black uppercase text-white shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25)] hover:brightness-110"
               aria-label="Arrange the board"
@@ -9069,9 +9196,117 @@ const BoardViewMenu = memo(function BoardViewMenu({
 });
 
 // Whether auto-arrange may lay out the inside of boards the player drew.
+/**
+ * THE ARRANGE LOADER (Jack, 2026-09-08): one bar across every step of the
+ * arrange, each step an equal share, the steps listed under it with the
+ * current one lit, and a Cancel key. Within a step the bar moves with that
+ * step's own count (search trials, polish judge calls); a step with no
+ * count of its own fills as it ends.
+ */
+function ArrangeLoader({
+  progress,
+  onCancel,
+}: {
+  progress: ArrangeProgress;
+  onCancel: () => void;
+}) {
+  const steps = ARRANGE_STEPS.length;
+  const within = Math.min(progress.done, progress.total) / Math.max(progress.total, 1);
+  const overall = Math.min(1, (Math.min(progress.step, steps) + within) / steps);
+  // Dressed like the Settings dialog (Jack, 2026-09-08): the same bevelled
+  // plate, title bar and face keys, so the loader is a window of the
+  // planner and not a web toast over it. It SPINS (Jack, same day: "hard to
+  // tell it's not just hung"): the bar only moves at step boundaries and
+  // every few hundred trials, so a long routing pass held a still window
+  // for seconds. The running step's marker is a spinner that turns the
+  // whole time the worker does (one spinner, on the step, not a second in
+  // the title bar - Jack) - the arrange runs off the main thread, so a
+  // frozen spinner would mean the tab really is stuck.
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none absolute inset-0 z-[60] flex items-center justify-center bg-neutral-950/40"
+    >
+      <div className="pointer-events-auto w-[26rem] max-w-[calc(100*var(--ui-vw)-32px)] border-2 border-[var(--mc-15)] bg-[var(--mc-49)] text-[var(--mc-ink)] shadow-[inset_2px_2px_0_var(--mc-85),inset_-2px_-2px_0_var(--mc-25),4px_4px_0_rgba(0,0,0,0.45)]">
+        <div className="flex items-center justify-between border-b-2 border-[var(--mc-15)] px-4 py-2.5">
+          <h2 className="text-sm font-bold">Arranging the board</h2>
+          <span className="font-mono text-sm tabular-nums text-[var(--mc-ink-muted)]">
+            {Math.round(overall * 100)}%
+          </span>
+        </div>
+        <div className="px-4 py-3">
+          <div className="flex h-3 w-full gap-[3px] border-2 border-[var(--mc-15)] bg-[var(--mc-25)] p-[2px]">
+            {ARRANGE_STEPS.map((step, index) => {
+              const fill = index < progress.step ? 1 : index === progress.step ? within : 0;
+              return (
+                <div key={step.key} className="h-full flex-1 overflow-hidden bg-[var(--mc-36)]">
+                  <div
+                    className="h-full bg-[var(--mc-good)] transition-[width] duration-150"
+                    style={{ width: `${Math.round(fill * 100)}%` }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <ol className="mt-3 flex flex-col divide-y divide-[var(--mc-36)]">
+            {ARRANGE_STEPS.map((step, index) => {
+              const state = index < progress.step ? "done" : index === progress.step ? "now" : "next";
+              return (
+                <li
+                  key={step.key}
+                  className={[
+                    "flex min-h-8 items-center gap-2 py-1 font-mono text-[12px] uppercase",
+                    state === "now"
+                      ? "font-black text-[var(--mc-ink)]"
+                      : state === "done"
+                        ? "text-[var(--mc-ink-muted)]"
+                        : "text-[var(--mc-ink-muted)] opacity-50",
+                  ].join(" ")}
+                >
+                  {state === "now" ? (
+                    <LoaderCircle
+                      aria-hidden
+                      className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--mc-good)]"
+                    />
+                  ) : (
+                    <span
+                      aria-hidden
+                      className={[
+                        "inline-block h-3 w-3 shrink-0 border-2 border-[var(--mc-15)]",
+                        state === "done" ? "bg-[var(--mc-good)]" : "bg-[var(--mc-36)]",
+                      ].join(" ")}
+                    />
+                  )}
+                  <span>{step.label}</span>
+                  {state === "now" && progress.stage !== step.label ? (
+                    <span className="ml-auto truncate text-[11px] font-normal normal-case text-[var(--mc-ink-muted)]">
+                      {progress.stage}
+                    </span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t-2 border-[var(--mc-15)] px-4 py-2.5">
+          <span className="text-xs text-[var(--mc-ink-muted)]">Every move is checked against the real wires.</span>
+          <button
+            type="button"
+            onClick={onCancel}
+            className={`h-7 border-2 border-[var(--mc-15)] px-3 font-mono text-[12px] font-black uppercase ${TOOL_FACE_OFF}`}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // A browser preference, not part of the plan: two people sharing a setup
 // each keep their own habit.
-const ARRANGE_TIDY_BOARDS_KEY = "gtnh-factory-flow.arrange-tidy-boards.v1";
+const ARRANGE_KEEP_BOARDS_KEY = "gtnh-factory-flow.arrange-keep-boards.v1";
 
 const PaintToolbar = memo(function PaintToolbar({
   paintMode,
@@ -9085,7 +9320,6 @@ const PaintToolbar = memo(function PaintToolbar({
   onDeleteModeChange,
   view,
   onViewChange,
-  dockToggleWarning,
   onAutoArrange,
   folded,
   foldAll,
@@ -9105,9 +9339,8 @@ const PaintToolbar = memo(function PaintToolbar({
   /** The view menu rides this row's corner slot; see BoardViewMenu. */
   view: BoardView;
   onViewChange: (patch: Partial<BoardView>) => void;
-  dockToggleWarning?: string;
   /** Runs the arrange; the fold-out's setting rides along per press. */
-  onAutoArrange: (options: { tidyBoardInteriors: boolean }) => void;
+  onAutoArrange: (options: { keepBoards: boolean }) => void;
   folded: boolean;
   /**
    * The whole row folds into the brush, the bin and whole-board keys
@@ -9118,6 +9351,7 @@ const PaintToolbar = memo(function PaintToolbar({
   onToggleGroup: (group: ToolGroupId | undefined) => void;
   shiftedDown: boolean;
 }) {
+  const checklistMode = useFactoryStore((state) => state.checklistMode);
   const activeColor = GT_NODE_COLORS[activeColorTag];
   // Every fold-out on this row opens on CLICK and closes on outside click or
   // Escape, like the view sheet and the Setup Rules sheet. They used to open
@@ -9137,18 +9371,18 @@ const PaintToolbar = memo(function PaintToolbar({
   // lift its z while either is out, same as it does for the palette.
   const [isViewMenuOpen, setViewMenuOpen] = useState(false);
   // The arrange sheet: one setting and the button that runs it. The setting
-  // is remembered per browser; the default respects the boards you drew.
-  const [tidyBoardInteriors, setTidyBoardInteriors] = useState(() => {
+  // is remembered per browser; the default dumps every board.
+  const [keepBoards, setKeepBoards] = useState(() => {
     try {
-      return localStorage.getItem(ARRANGE_TIDY_BOARDS_KEY) === "1";
+      return localStorage.getItem(ARRANGE_KEEP_BOARDS_KEY) === "1";
     } catch {
       return false;
     }
   });
-  const onToggleTidyBoards = useCallback(() => {
-    setTidyBoardInteriors((was) => {
+  const onToggleKeepBoards = useCallback(() => {
+    setKeepBoards((was) => {
       try {
-        localStorage.setItem(ARRANGE_TIDY_BOARDS_KEY, was ? "0" : "1");
+        localStorage.setItem(ARRANGE_KEEP_BOARDS_KEY, was ? "0" : "1");
       } catch {
         // Private windows without storage still get the toggle for the session.
       }
@@ -9333,10 +9567,9 @@ const PaintToolbar = memo(function PaintToolbar({
               <BoardViewMenu
             view={view}
             onChange={onViewChange}
-            dockToggleWarning={dockToggleWarning}
             open={isViewMenuOpen}
             onOpenChange={setViewMenuOpen}
-            arrange={{ tidyBoardInteriors, onToggleTidyBoards, onArrange: onAutoArrange }}
+            arrange={{ keepBoards, onToggleKeepBoards, onArrange: onAutoArrange }}
           />
         </ToolTray>
     </>
@@ -9379,11 +9612,14 @@ const PaintToolbar = memo(function PaintToolbar({
         // OVER it and take its clicks: the colours were once visible and
         // unpickable. The row lifts above every other toolbar for as long as
         // any of its fold-outs is out.
-        isDrawMenuOpen || isViewMenuOpen
+        isDrawMenuOpen || isViewMenuOpen || checklistMode
           ? "z-40"
           : "z-20",
       ].join(" ")}
     >
+      <ToolTray>
+        <ChecklistKeys />
+      </ToolTray>
       <ToolGroup
         id="paint"
         folded={folded}
@@ -9400,33 +9636,6 @@ const PaintToolbar = memo(function PaintToolbar({
     </>
   );
 });
-
-/**
- * The pill's numbers, eased: the flow figure and its percent glide to a new
- * solve on the value-motion clock. A leaf so the per-frame re-render is one
- * text fragment, not the edge. When the ratio appears or disappears the value
- * list changes length, which the tween treats as a snap — correct, because
- * there is no honest halfway between "has a percent" and "has none".
- */
-function EdgeRateLabelText({ data }: { data: EdgeLabelInput | undefined }) {
-  // The unit is read live: turning a rate dial re-renders this leaf and
-  // nothing upstream of it.
-  useRateDisplayUnits();
-  const { flowing, ratio } = getEdgeRateLabelValues(data);
-  const unit = data ? edgeUnit(data) : "/s";
-  // SOLVE and POOL: every line carries exactly what its taker asked, so
-  // the ratio would read 100% on every label. The rate alone.
-  const solveMode = useFactoryStore((state) => state.project.solveMode === true);
-  const hasRatio = ratio !== undefined && !solveMode;
-  return (
-    <MotionNumberText
-      values={hasRatio ? [flowing, ratio] : [flowing]}
-      render={(shown) =>
-        formatEdgeRateLabelFrom(unit, shown[0] ?? flowing, hasRatio ? shown[1] : undefined)
-      }
-    />
-  );
-}
 
 function ResourceEdgeComponent({
   id,
@@ -9502,7 +9711,9 @@ function ResourceEdgeComponent({
   // highlighted and bundle-primary lines, which is exactly why only some lines
   // were thickening. In thickness mode the published width wins for every line.
   const flowWidthTarget =
-    flowRate?.thickness === true ? Number(style?.strokeWidth ?? FLOW_MODE_MIN_WIDTH) : undefined;
+    flowRate?.thickness === true
+      ? drawnStrokeWidth(Number(style?.strokeWidth ?? FLOW_MODE_MIN_WIDTH))
+      : undefined;
   // Eased, so a solver change reads as the pipe swelling rather than as a
   // different pipe being swapped in. Only the volume width tweens: the
   // highlight thickening below stays instant, because hover feedback that
@@ -9588,14 +9799,9 @@ function ResourceEdgeComponent({
   const visualSource = visualSourceCandidates[0];
   const visualTarget = visualTargetCandidates[0];
   // Direction has one voice: the marching dashes when pulse mode is on,
-  // chevrons only when it is off — and only in free-dock mode. With wires
-  // pinned to their ports, which side a wire attaches on already says which
-  // way it flows (inputs left, outputs right), so the chevrons are noise
-  // there. Module state is safe to read here: a mode flip re-signs every
-  // route and the settle pass re-issues every edge.
+  // arrows when it is off - at every zoom, larger at a glance.
   const showArrowHead =
     flowRate?.pulse !== true &&
-    publishedGridFreeDock &&
     (isHighlighted || hasEdgeDetail(detailLevel, EDGE_DETAIL_ARROWS));
   // Every wire routes individually through the board-wide grid solve — the
   // solve's lane sharing is what makes a fan-out ride as one ribbon, which
@@ -9629,10 +9835,18 @@ function ResourceEdgeComponent({
   // every frame for a quarter second, and past a few hundred wires that is
   // the O(edges)-per-frame bill ARCHITECTURE.md forbids — those boards snap,
   // as they always did. (Module state read here is fine; see showArrowHead.)
+  // A wire crossing BETWEEN the fallback and a real route snaps. The
+  // fallback stands at the port rows, so morphing out of one draws the wire
+  // sliding from its old fixed dock to where the router put it - the
+  // "it goes back to the old mode for a second" report. Wire-to-wire moves
+  // (a card dragged, a re-solve) still glide.
+  const wasSolvedRef = useRef(true);
+  const routeSourceChanged = wasSolvedRef.current !== Boolean(routedEdge.solved);
+  wasSolvedRef.current = Boolean(routedEdge.solved);
   const liveRoute = useMotionRoute(
     routedEdge.points,
     routedEdge.path,
-    moveMotion && publishedGridRouteEdges.length <= 300,
+    moveMotion && !routeSourceChanged && publishedGridRouteEdges.length <= 300,
   );
   // LIGHTNING. A power wire draws JAGGED: the router's route, zigzagged
   // after the fact so the router, the lanes and the hit-testing all still
@@ -9680,54 +9894,11 @@ function ResourceEdgeComponent({
     !hasEdgeDetail(detailLevel, EDGE_DETAIL_LABELS)
       ? undefined
       : trimPolylineEnds(routedEdge.points, 26);
-  const hoverPathD = hoverTrimmedPoints ? pointsToSvgPath(hoverTrimmedPoints) : undefined;
-
-  // The rate pill: on only in label mode, and never parked on a card — a
-  // pill with no clear stretch of wire to sit on goes away entirely.
-  const showRateLabel = Boolean(
-    data?.showLabel &&
-      data.resource &&
-      !routedEdge.labelHidden &&
-      hasEdgeDetail(detailLevel, EDGE_DETAIL_LABELS),
-  );
-  // The pulse canvas paints over the whole board and punches back out what
-  // the dashes must stay under (see edge-pulse.ts). The pill publishes its
-  // box for that punch-out: measured once per mount/text change through a
-  // ResizeObserver — never per frame — and centred on the label anchor.
-  const labelBoxRef = useRef<HTMLDivElement>(null);
-  const labelBoxX = routedEdge.labelX;
-  const labelBoxY = routedEdge.labelY;
-  useLayoutEffect(() => {
-    if (!showRateLabel) {
-      retractEdgeLabelBox(id);
-      return;
-    }
-    const element = labelBoxRef.current;
-    const publish = () => {
-      const pill = labelBoxRef.current;
-      if (!pill) {
-        return;
-      }
-      // offsetWidth/Height are pre-transform layout px, which are flow px:
-      // zoom is a transform on the viewport, not a layout input.
-      publishEdgeLabelBox(id, {
-        left: labelBoxX - pill.offsetWidth / 2,
-        top: labelBoxY - pill.offsetHeight / 2,
-        width: pill.offsetWidth,
-        height: pill.offsetHeight,
-      });
-    };
-    publish();
-    if (!element || typeof ResizeObserver === "undefined") {
-      return () => retractEdgeLabelBox(id);
-    }
-    const observer = new ResizeObserver(publish);
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-      retractEdgeLabelBox(id);
-    };
-  }, [id, labelBoxX, labelBoxY, showRateLabel]);
+  // Checklist clicks cannot start a wire, so there is no reason to reserve
+  // 26 px at each port. That reservation erased short wires' entire target.
+  // Keep the complete, currently drawn path clickable at every zoom.
+  const checklistMode = useFactoryStore((state) => state.checklistMode);
+  const hoverPathD = !checklistMode && hoverTrimmedPoints ? pointsToSvgPath(hoverTrimmedPoints) : undefined;
 
   // Hand this line's dashes to the board's pulse canvas (see edge-pulse.ts).
   // Published after commit rather than during render because it is a
@@ -9834,6 +10005,16 @@ function ResourceEdgeComponent({
 
   return (
     <>
+      {checklistMode && liveRoute.path ? (
+        <ViewportPortal>
+          {/* Only the invisible hit target clears port hit boxes. The visible
+              wire keeps its usual depth behind machines and drawers. */}
+          <svg width={1} height={1} aria-hidden className="pointer-events-none absolute left-0 top-0 overflow-visible" style={{ zIndex: 30 }}>
+            <path data-checklist-edge={id} d={liveRoute.path} fill="none" stroke="transparent"
+              strokeWidth={Math.max(14, coreStrokeWidth + 6)} style={{ pointerEvents: "stroke" }} />
+          </svg>
+        </ViewportPortal>
+      ) : null}
       {(
         <>
           <path
@@ -9862,9 +10043,11 @@ function ResourceEdgeComponent({
               // the starved dots spawning whole gave the wire away instantly.
               strokeDasharray: data?.timelapseDraw
                 ? undefined
-                : isGlobalView && isEdgeStarved(data)
-                  ? "2 8"
-                  : style?.strokeDasharray,
+                : flowRate?.idle
+                  ? idleDots(coreStrokeWidth)
+                  : isGlobalView && isEdgeStarved(data)
+                    ? "2 8"
+                    : style?.strokeDasharray,
               strokeLinecap: "round",
               strokeLinejoin: "round",
               strokeOpacity: isHighlighted ? 1 : 0.72,
@@ -9883,9 +10066,11 @@ function ResourceEdgeComponent({
               stroke: edgeColor,
               strokeDasharray: data?.timelapseDraw
                 ? undefined
-                : isGlobalView && isEdgeStarved(data)
-                  ? "2 8"
-                  : style?.strokeDasharray,
+                : flowRate?.idle
+                  ? idleDots(coreStrokeWidth)
+                  : isGlobalView && isEdgeStarved(data)
+                    ? "2 8"
+                    : style?.strokeDasharray,
               strokeLinecap: "round",
               strokeLinejoin: "round",
               // Zoom changes how much of the board you can see, never how the
@@ -9948,39 +10133,34 @@ function ResourceEdgeComponent({
           style={{ pointerEvents: "none" }}
         />
       ) : null}
-      {/* Direction chevrons, one near each end when the marching dashes are
-          off: the source's says "flow leaves here", the target's "flow lands
-          here". Both are pulled back off the cards — the last stretch of a
-          wire sits in the margin or under the card, where an arrow drowns.
-          The wire's own colour, lifted a step brighter over a dark halo —
-          tinted like the line it rides but never lost inside it — sized to
-          the stroke: a regular little arrow on a thin wire, sitting INSIDE
-          the stroke on a fat pipe. */}
+      {/* Direction arrows (Jack, 2026-09-08: "very visible, but still look
+          good and be the same colour as the edge"): FILLED arrowheads in the
+          wire's own colour lifted brighter, edged in a deep shade of the same
+          colour under a soft shadow so they read on the pipe and on the paper alike, sized to the stroke - a little
+          wider than a thin wire, a little wider than a fat pipe - one near
+          each end and one every few cells along a long run, never across a
+          corner. At a glance they draw double size so they survive the zoom. */}
       {showArrowHead
-        ? getRouteChevrons(liveRoute.points, coreStrokeWidth).map((chevron, index) => (
-            <g key={index} style={{ pointerEvents: "none" }}>
-              <polyline
-                points={chevron}
-                stroke="#111827"
-                strokeWidth={Math.min(2 + coreStrokeWidth * 0.12, 4) + 2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-                opacity={isEdgeStarved(data) ? 0.75 : 0.9}
-              />
-              <polyline
-                points={chevron}
-                stroke={brightenHexColor(edgeColor, 0.35)}
-                strokeWidth={Math.min(2 + coreStrokeWidth * 0.12, 4)}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-                opacity={isEdgeStarved(data) ? 0.8 : 1}
-                style={{
-                  filter: isHighlighted ? "drop-shadow(0 0 4px var(--glow-halo))" : undefined,
-                }}
-              />
-            </g>
+        ? getRouteArrows(liveRoute.points, coreStrokeWidth, isGlobalView).map((arrow, index) => (
+            <polygon
+              key={index}
+              points={arrow}
+              fill={brightenHexColor(edgeColor, 0.55)}
+              stroke={darkenHexColor(edgeColor, 0.6)}
+              strokeWidth={isGlobalView ? 2.5 : 1.5}
+              strokeLinejoin="round"
+              opacity={isEdgeStarved(data) ? 0.8 : 1}
+              style={{
+                pointerEvents: "none",
+                // The outline is a DEEP shade of the wire's own colour, not
+                // black (Jack: a black edge read as spots ahead of the tip
+                // where it crossed the pipe); a soft shadow lifts the head
+                // off pipe and paper alike.
+                filter: isHighlighted
+                  ? "drop-shadow(0 0 4px var(--glow-halo))"
+                  : "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.75))",
+              }}
+            />
           ))
         : null}
       {hoverPathD ? (
@@ -10130,44 +10310,6 @@ function ResourceEdgeComponent({
             </circle>
           ))
         : null}
-      {showRateLabel && data?.resource ? (
-        // The rate pill, back by request as a VIEW mode (the tag button in
-        // the board toolbar), and deliberately lean this time: what flows
-        // and how fast, at the route's midpoint. No dragging, no popover —
-        // the port chips carry the full story.
-        <EdgeLabelRenderer>
-          <div
-            ref={labelBoxRef}
-            className="nodrag nopan absolute flex cursor-pointer items-center gap-1.5 border border-[var(--mc-15)] bg-[#2b2d32] px-1.5 py-0.5 text-[12px] font-medium text-white shadow-[inset_1px_1px_0_rgba(255,255,255,0.18),inset_-1px_-1px_0_rgba(0,0,0,0.55)]"
-            style={{
-              transform: `translate(-50%, -50%) translate(${routedEdge.labelX}px, ${routedEdge.labelY}px)`,
-              pointerEvents: "all",
-              borderColor: isHighlighted ? "var(--glow-line)" : edgeColor,
-            }}
-            onMouseEnter={applyEdgeFlowScope}
-            onMouseLeave={() => setHoveredFlowScope(undefined)}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              window.dispatchEvent(
-                new CustomEvent(FLOW_EDGE_LABEL_SELECT_EVENT, {
-                  detail: { edgeIds: data.bundle?.edgeIds ?? [id] },
-                }),
-              );
-            }}
-          >
-            <ResourceIcon
-              resource={data.resource}
-              size="sm"
-              showAmount={false}
-              bare
-              className="!h-[18px] !w-[18px]"
-            />
-            <span className="leading-none tracking-tight tabular-nums">
-              <EdgeRateLabelText data={data} />
-            </span>
-          </div>
-        </EdgeLabelRenderer>
-      ) : null}
     </>
   );
 }
@@ -10754,12 +10896,54 @@ const directEdgePathMemo = new Map<
   }
 >();
 
+/**
+ * How far a wire's INK runs on past its dock into a drawer. A drawer is a
+ * hexagon drawn inside its rectangle, so a wire that stopped at the
+ * rectangle's edge ended in mid-air short of the slanted corners (Jack,
+ * 2026-09-08: "they need to end actually inside"). Only the drawn path
+ * carries on; the route, the arrows (which keep their setback from the
+ * dock) and the hop maths all keep the real endpoint. Wires draw under the
+ * cards, so the extra ink is hidden by the hexagon itself.
+ */
+const STORAGE_INK_OVERSHOOT = 30;
+
+function isStorageNodeId(id: string | undefined): boolean {
+  if (!id) return false;
+  return useFactoryStore.getState().project.storages?.some((storage) => storage.id === id) ?? false;
+}
+
+/** The route's points with each drawer end carried on into the drawer. */
+function inkPointsFor(
+  points: Array<{ x: number; y: number }>,
+  sourceNodeId: string | undefined,
+  targetNodeId: string | undefined,
+): Array<{ x: number; y: number }> {
+  if (points.length < 2) return points;
+  const intoSource = isStorageNodeId(sourceNodeId);
+  const intoTarget = isStorageNodeId(targetNodeId);
+  if (!intoSource && !intoTarget) return points;
+  const out = points.slice();
+  const extend = (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    const length = Math.hypot(to.x - from.x, to.y - from.y);
+    if (length < 1) return to;
+    return {
+      x: to.x + ((to.x - from.x) / length) * STORAGE_INK_OVERSHOOT,
+      y: to.y + ((to.y - from.y) / length) * STORAGE_INK_OVERSHOOT,
+    };
+  };
+  if (intoSource) out[0] = extend(points[1]!, points[0]!);
+  if (intoTarget) out[out.length - 1] = extend(points[points.length - 2]!, points[points.length - 1]!);
+  return out;
+}
+
 function getDirectEdgePath({
   edgeId,
   routeIndex,
+  sourceNodeId,
   sourceX,
   sourceY,
   sourcePosition,
+  targetNodeId,
   targetX,
   targetY,
   targetPosition,
@@ -10783,8 +10967,31 @@ function getDirectEdgePath({
   // The grid solve owns every settled route; the simple L-shape covers the
   // two transient cases — a mid-drag edge following the pointer, and an edge
   // whose endpoints have not been measured yet.
+  const fresh = useSmartRouting ? getBestDirectEdgePoints({ edgeId }) : undefined;
+  // No fresh route: the wire's LAST one stands in. A card is unmeasured for
+  // a frame after it mounts, and a wire touching it is left out of that
+  // solve - which used to drop the wire onto the port-anchored L-shape for
+  // a moment, so deleting a drawer (or anything else that mounts a card)
+  // flashed the old fixed-dock look and then slid into place (Jack,
+  // 2026-09-08). Only a wire that has never been routed falls back now.
+  const stale = fresh === undefined && useSmartRouting ? getLastDirectEdgePoints(edgeId) : undefined;
+  // A wire the router has never seen - one just made by a drawer split, a
+  // heal, a paste - has nothing to stand in. Its first frame is the
+  // ARRANGER'S PROXY PATH between the two cards (board-arrange-optimize.ts:
+  // leave at the rim point facing the far card, octilinear, one diagonal),
+  // which is the shape the router is about to draw. The port-anchored
+  // L-shape below is the last resort, for a card that is not even measured:
+  // it stands at the port rows, which is the fixed-dock look free docking
+  // replaced, and Jack sees one frame of it as the wire "going back to the
+  // old mode" (2026-09-08).
+  const guess =
+    fresh === undefined && stale === undefined && useSmartRouting
+      ? proxyBetweenNodes(sourceNodeId, targetNodeId)
+      : undefined;
   const points =
-    (useSmartRouting ? getBestDirectEdgePoints({ edgeId }) : undefined) ??
+    fresh ??
+    stale ??
+    guess ??
     getSimpleOrthogonalEdgePoints({
       sourceX,
       sourceY,
@@ -10793,6 +11000,7 @@ function getDirectEdgePath({
       targetY,
       targetPosition,
     });
+  const solved = Boolean(fresh ?? stale);
 
   // Hop bumps are sized from the width this line actually draws at, so a
   // highlighted (thickened) line still clears what it crosses.
@@ -10820,8 +11028,9 @@ function getDirectEdgePath({
   };
 
   const result: RoutedEdgePath = {
+    solved,
     path: pointsToHoppedSvgPath(
-      points,
+      inkPointsFor(points, sourceNodeId, targetNodeId),
       collectHoppedRouteSegments(edgeId, routeIndex, points),
       width,
     ),
@@ -10926,6 +11135,34 @@ function getBestDirectEdgePoints({
 }
 
 
+
+/**
+ * The shape the router is about to draw between two cards, for a wire that
+ * has no route yet: the arranger's own proxy path over the measured card
+ * rectangles. Undefined when either card is unmeasured.
+ */
+function proxyBetweenNodes(
+  sourceNodeId: string | undefined,
+  targetNodeId: string | undefined,
+): Array<{ x: number; y: number }> | undefined {
+  const source = getMeasuredNodeBoundsById(sourceNodeId);
+  const target = getMeasuredNodeBoundsById(targetNodeId);
+  if (!source || !target) {
+    return undefined;
+  }
+  return proxyPath(source, target).map((point) => ({
+    x: snapRouteCoord(point.x),
+    y: snapRouteCoord(point.y),
+  }));
+}
+
+/**
+ * The last route the router gave this wire, whatever solve it belongs to.
+ * Stale by definition; it stands in only while the fresh answer is missing.
+ */
+function getLastDirectEdgePoints(edgeId?: string): Array<{ x: number; y: number }> | undefined {
+  return edgeId ? directRouteCache.get(edgeId)?.route.points : undefined;
+}
 
 function snapRouteCoord(value: number) {
   return Math.round(value / EDGE_ROUTE_SNAP_GRID) * EDGE_ROUTE_SNAP_GRID;
@@ -11902,7 +12139,9 @@ function measuredPortOffsetY(
     return undefined;
   }
   const measured = getMeasuredSlotEndpoint({ nodeId, handleId, edgeSide });
-  return measured ? measured.y - geometry.y : undefined;
+  // Whole pixels: the measurement jitters by a fraction of a pixel between
+  // paints, and the arrange must be the same function of the same board.
+  return measured ? Math.round(measured.y - geometry.y) : undefined;
 }
 
 /**
@@ -11973,7 +12212,7 @@ function estimateNodeCardSize(
  */
 const ZONE_PAPERS: readonly string[] = BOARD_PAPER_IDS;
 
-function computeAutoArrangement(
+async function computeAutoArrangement(
   baseProject: FactoryProject,
   result: ThroughputResult | undefined,
   taste: ArrangeTaste,
@@ -11986,7 +12225,8 @@ function computeAutoArrangement(
      */
     tidyBoardInteriors: boolean;
   },
-): {
+  onProgress?: (progress: ArrangeProgress) => void,
+): Promise<{
   moves: Array<{ id: string; position: { x: number; y: number } }>;
   wireRoutes: Array<{ id: string; waypoints: Array<{ x: number; y: number }> }>;
   resetEdgeIds: string[];
@@ -11995,7 +12235,7 @@ function computeAutoArrangement(
   addBoards: FactoryPocket[];
   setOwners: Array<{ id: string; pocketId?: string }>;
   setBoardThemes: Array<{ id: string; theme: string }>;
-} {
+}> {
   const recipesById = new Map(baseProject.recipes.map((recipe) => [recipe.id, recipe]));
   // Frames refitted by the interior passes, read by every OUTER pass so a
   // parent sizes its nested board by the frame it is about to wear.
@@ -12142,6 +12382,10 @@ function computeAutoArrangement(
               ? measuredPortOffsetY(edge.target, edge.targetHandle, Position.Left)
               : boundaryPortY.get(`${edge.id}:${targetRep}`),
           weight: 1 + Math.log10(1 + Math.max(transferred, 0)),
+          width: Math.min(
+            publishedEdgeStrokeWidths.get(edge.id) ?? DEFAULT_EDGE_STROKE_WIDTH,
+            LANE_CAPACITY,
+          ),
         });
       }
       return { cards, wires, sizeById };
@@ -12171,67 +12415,9 @@ function computeAutoArrangement(
     }`;
   const addBoards: FactoryPocket[] = [];
   const setOwners: Array<{ id: string; pocketId?: string }> = [];
-  const scout = makeGatherer(baseProject).gatherLevel(undefined);
-  if (scout.cards.length > 0) {
-    const scouted = arrangeBoard({ cards: scout.cards, wires: scout.wires, taste });
-    const scoutPositionById = new Map(
-      scouted.moves.map((move) => [move.id, move.position] as const),
-    );
-    // Membership falls out of the geometry: every island rect covers
-    // exactly its own cards. Locked boards helped shape the islands but
-    // are never claimed by one.
-    const islandMembers: string[][] = scouted.islands.map(() => []);
-    for (const card of scout.cards) {
-      if (lockedBoardIds.has(card.id)) {
-        continue;
-      }
-      const position = scoutPositionById.get(card.id);
-      const size = scout.sizeById.get(card.id);
-      if (!position || !size) {
-        continue;
-      }
-      const centreX = position.x + size.width / 2;
-      const centreY = position.y + size.height / 2;
-      const index = scouted.islands.findIndex(
-        (island) =>
-          // The stray shelf and interchange buffers wear no backdrop; their
-          // cards stay loose between the zones on purpose.
-          island.backdrop &&
-          centreX >= island.x &&
-          centreX <= island.x + island.width &&
-          centreY >= island.y &&
-          centreY <= island.y + island.height,
-      );
-      if (index >= 0) {
-        islandMembers[index].push(card.id);
-      }
-    }
-    // Fresh zones number past any "Zone N" already standing on the plan.
-    let zoneNumber = 1;
-    for (const pocket of basePockets) {
-      const match = /^Zone (\d+)$/.exec(pocket.name);
-      if (match) {
-        zoneNumber = Math.max(zoneNumber, Number(match[1]) + 1);
-      }
-    }
-    for (const members of islandMembers) {
-      if (members.length < 2) {
-        continue;
-      }
-      const zone: FactoryPocket = {
-        id: mintZoneId(),
-        name: `Zone ${zoneNumber}`,
-        position: { x: 0, y: 0 },
-        expanded: true,
-      };
-      zoneNumber += 1;
-      addBoards.push(zone);
-      for (const id of members) {
-        setOwners.push({ id, pocketId: zone.id });
-      }
-    }
-  }
-
+  // No zones (Jack, 2026-09-08): the arrange no longer wraps islands in
+  // fresh boards. A layout that minimises crossings and length separates
+  // its natural groups by itself, and a board is the player's to draw.
   // Everything the zoning did not claim stays loose on the canvas.
   const zoneOwner = new Map(setOwners.map((owner) => [owner.id, owner.pocketId]));
 
@@ -12407,7 +12593,25 @@ function computeAutoArrangement(
   // The root pass: boards as meta cards at their fresh sizes, wire length
   // between the blocks doing the placing.
   const root = gatherLevel(undefined);
-  const arranged = arrangeBoard({ cards: root.cards, wires: root.wires, taste });
+  // The judge routes the real wires at each candidate layout; it exists
+  // only when every card on the level is a plain card (no boards).
+  const rootIsPlain = root.cards.every((card) => !isPocketId(project, card.id));
+  const judgeInput = rootIsPlain
+    ? buildArrangeJudgeInput(root.cards.map((card) => card.id))
+    : undefined;
+  if (typeof window !== "undefined") {
+    (window as unknown as { __gtnhArrangeInput?: unknown }).__gtnhArrangeInput = {
+      cards: root.cards,
+      wires: root.wires,
+      taste,
+    };
+  }
+  // The judged arrange is dozens of route solves; it runs in a worker so
+  // the page keeps breathing, and reports where it is for the loader.
+  const { result: arranged } = await arrangeInWorker(
+    { cards: root.cards, wires: root.wires, taste, judgeInput },
+    onProgress,
+  );
   moves.push(...arranged.moves);
 
   // How far each locked top-level board moved: waypoints pinned on wires
@@ -12441,7 +12645,7 @@ function computeAutoArrangement(
     waypoints: Array<{ x: number; y: number }>;
   }> = [];
   for (const edge of project.edges) {
-    if (!edge.waypoints?.length && !edge.labelOffset) {
+    if (!edge.waypoints?.length) {
       continue;
     }
     const sourceTop = representativeAt(undefined, edge.source);
@@ -13420,6 +13624,20 @@ function getConnectionSnap(toX: number, toY: number) {
   return point ? { point, side: best.target.side, target: best.target } : undefined;
 }
 
+/** The colour pulled toward black by `amount` (0 leaves it, 1 is black). */
+function darkenHexColor(color: string, amount: number) {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) {
+    return color;
+  }
+  const value = Number.parseInt(match[1], 16);
+  const drop = (channel: number) => Math.max(0, Math.round(channel * (1 - amount)));
+  const r = drop((value >> 16) & 0xff);
+  const g = drop((value >> 8) & 0xff);
+  const b = drop(value & 0xff);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
 function brightenHexColor(color: string, amount: number) {
   const match = /^#([0-9a-f]{6})$/i.exec(color);
   if (!match) {
@@ -13509,35 +13727,47 @@ const ARROW_SETBACK = 10;
  */
 let lastWaypointRemovalAt = 0;
 
+/** A long run wears an arrow every this many px (8 cells). */
+const ARROW_SPACING = 160;
+
 /**
- * Direction chevrons along a routed wire, as SVG polyline point strings.
- * One near each end (source and target) when the route is long enough, one
- * in the middle when it is not. Sized to the stroke: wider than a thin wire
- * (a regular little arrow), capped so it fits INSIDE a full-lane pipe.
+ * Direction arrows along a routed wire, as SVG polygon point strings
+ * (filled triangles: tip, then the two wing corners behind it). One near
+ * each end when the route is long enough, one in the middle when it is
+ * not, and one every ARROW_SPACING along a long run - each lying wholly
+ * within one straight run, never folded over a corner. Sized to the stroke,
+ * a little wider than the wire so the head reads as a head on a fat pipe
+ * too; at a glance everything grows again so the arrows survive the zoom.
  */
-function getRouteChevrons(
+function getRouteArrows(
   points: Array<{ x: number; y: number }>,
   strokeWidth: number,
+  glance: boolean,
 ): string[] {
   const segments = getPolylineSegments(points);
   const total = segments.reduce((sum, segment) => sum + segment.length, 0);
-  if (total < 24) {
+  if (total < 16) {
     return [];
   }
+  // Bigger at every zoom (Jack, 2026-09-08: "the arrows need to be
+  // larger" zoomed in, "a little bit larger" zoomed out): half again
+  // the old head up close, and the glance head grown by a fifth.
+  const scale = glance ? 1.6 : 1;
+  const length = Math.min(Math.max(16, strokeWidth * 2.2), 32) * scale;
+  const halfWidth = Math.min(Math.max(8, strokeWidth * 1.0), 16) * scale;
 
-  // Two regimes: a thin wire wears a regular little arrow wider than
-  // itself; a pipe wide enough to hold one gets a chevron sized to sit
-  // INSIDE with clear water on both sides — not rubbing the pipe walls.
-  const halfWidth =
-    strokeWidth >= 7 ? Math.max(2.8, Math.min(strokeWidth * 0.3, 5)) : 3.5;
-  const length = halfWidth * 1.6;
-
-  // The point and travel direction at `distance` along the polyline.
+  // Segment starts along the polyline, so an arrow can be kept inside one.
+  const starts: number[] = [];
+  let walked = 0;
+  for (const segment of segments) {
+    starts.push(walked);
+    walked += segment.length;
+  }
   const at = (distance: number): { x: number; y: number; dx: number; dy: number } => {
-    let walked = 0;
-    for (const segment of segments) {
-      if (walked + segment.length >= distance || segment === segments[segments.length - 1]) {
-        const t = Math.min(Math.max((distance - walked) / segment.length, 0), 1);
+    for (let i = 0; i < segments.length; i += 1) {
+      const segment = segments[i];
+      if (distance <= starts[i] + segment.length || i === segments.length - 1) {
+        const t = Math.min(Math.max((distance - starts[i]) / segment.length, 0), 1);
         return {
           x: segment.start.x + (segment.end.x - segment.start.x) * t,
           y: segment.start.y + (segment.end.y - segment.start.y) * t,
@@ -13545,27 +13775,60 @@ function getRouteChevrons(
           dy: (segment.end.y - segment.start.y) / segment.length,
         };
       }
-      walked += segment.length;
     }
     const lastPoint = points[points.length - 1];
     return { x: lastPoint.x, y: lastPoint.y, dx: 1, dy: 0 };
   };
-
-  const chevronAt = (tipDistance: number): string => {
-    const { x, y, dx, dy } = at(tipDistance);
+  // The arrow whose tip would sit at `tip` slid, if need be, so the whole
+  // head lies on one straight run; undefined when no run there is long
+  // enough to hold it.
+  const settle = (tip: number): number | undefined => {
+    for (let i = 0; i < segments.length; i += 1) {
+      const start = starts[i];
+      const end = start + segments[i].length;
+      if (tip - length >= start - 0.01 && tip <= end + 0.01) {
+        return tip;
+      }
+      if (tip > start && tip - length < start && i > 0) {
+        // Folded over the corner at `start`: back onto the run before it
+        // if that run can hold the head, else forward onto this one.
+        const before = segments[i - 1];
+        if (before.length >= length) return start;
+        if (segments[i].length >= length) return start + length;
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+  const arrowAt = (tip: number): string => {
+    const { x, y, dx, dy } = at(tip);
     const backX = x - dx * length;
     const backY = y - dy * length;
-    // Perpendicular wings behind the tip.
     const wingX = -dy * halfWidth;
     const wingY = dx * halfWidth;
-    return `${backX + wingX},${backY + wingY} ${x},${y} ${backX - wingX},${backY - wingY}`;
+    return `${x},${y} ${backX + wingX},${backY + wingY} ${backX - wingX},${backY - wingY}`;
   };
 
-  // Short wire: one chevron at the middle says everything there is room for.
+  // Short wire: one arrow in the middle says everything there is room for.
   if (total < 2 * ARROW_SETBACK + 3 * length) {
-    return [chevronAt(total / 2 + length / 2)];
+    const tip = settle(total / 2 + length / 2);
+    return tip === undefined ? [] : [arrowAt(tip)];
   }
-  return [chevronAt(ARROW_SETBACK + length), chevronAt(total - ARROW_SETBACK)];
+  const wanted: number[] = [ARROW_SETBACK + length];
+  const spacing = ARROW_SPACING * scale;
+  const last = total - ARROW_SETBACK;
+  for (let tip = wanted[0] + spacing; tip < last - spacing / 2; tip += spacing) {
+    wanted.push(tip);
+  }
+  wanted.push(last);
+  const tips: number[] = [];
+  for (const tip of wanted) {
+    const settled = settle(tip);
+    if (settled === undefined) continue;
+    if (tips.some((other) => Math.abs(other - settled) < length * 1.5)) continue;
+    tips.push(settled);
+  }
+  return tips.map(arrowAt);
 }
 
 function isCompatibleResourceConnection(
@@ -13837,21 +14100,6 @@ function getEdgeResource(
       output?.iconAtlas?.dominantColor ??
       storage?.iconAtlas?.dominantColor,
   };
-}
-
-function edgeMatchesSearch(
-  edge: FactoryEdge,
-  resource: Pick<ResourceAmount, "id" | "displayName">,
-  query: string,
-) {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (normalizedQuery.length < 2) {
-    return false;
-  }
-
-  return `${resource.displayName ?? ""} ${resource.id} ${edge.resourceId}`
-    .toLowerCase()
-    .includes(normalizedQuery);
 }
 
 function recipeContainsResourceKey(recipe: Recipe | undefined, resourceKey: string) {

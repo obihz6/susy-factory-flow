@@ -48,7 +48,8 @@ describe("applying a shared plan's view", () => {
     const workspace = readWorkspaceViewSnapshot();
 
     expect(board.canvasPattern).toBe("cross");
-    expect(board.calmMode).toBe(true);
+    // calmMode is deliberately NOT applied: no switch turns it back off.
+    expect(board.calmMode).toBe(false);
     expect(board.glanceMode).toBe("identity");
     expect("lineHeatMode" in board).toBe(false);
     expect(workspace.leftPanelOpen).toBe(false);
@@ -135,7 +136,6 @@ describe("applying a shared plan's view", () => {
   it("captures what it applies, so a re-share carries the same arrangement", () => {
     const view: PlanViewState = {
       canvasPattern: "none",
-      calmMode: true,
       rateUnit: "minute",
       rightPanelOpen: false,
       favouritesOnly: true,

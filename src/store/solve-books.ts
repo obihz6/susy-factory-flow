@@ -27,23 +27,26 @@ import type { FactoryProject, ThroughputResult } from "@/lib/model/types";
 
 /**
  * Nodes plus edges above which the solve leaves the main thread. The 86-machine
- * community platline (41 nodes + 96 edges = 137) solves in ~100ms and stays
- * synchronous; the measured wall grows roughly cubically past that (328 nodes
- * = 8s, 656 = 57s), so everything bigger is worker work.
+ * community platline (41 nodes + 96 edges = 137) solves in ~100ms on the
+ * homegrown simplex and a 118-machine oil board (44 + 104 = 148) in 575ms -
+ * each a felt freeze on every edit, while the worker's HiGHS does either in
+ * under 50ms. The measured wall grows roughly cubically past that (328
+ * nodes = 8s, 656 = 57s), so everything bigger is worker work.
  */
-const SYNC_SOLVE_LIMIT = 220;
+const SYNC_SOLVE_LIMIT = 120;
 
 /**
  * Size is not the whole story: a 59-machine platline with three loose cell
  * wires solves in 3.8s (84% inside the simplex - the hidden Tank each
  * cross-form wire expands into makes the LP much harder) while the same
  * board without them takes 0.27s. Two more reasons to leave the main thread:
- * the LAST solve, wherever it ran, took longer than this budget - a slow
- * board stays async until a fast solve proves otherwise - and a plan
+ * this plan's last MAIN-THREAD solve took longer than this budget (three
+ * frames: past it every edit is a visible stutter, and in Firefox a hang
+ * that long clips the board's sounds, see board-sounds.ts), and a plan
  * carrying cross-form wires past a token size, so that board's very first
  * solve never freezes the tab either.
  */
-const SLOW_SOLVE_MS = 150;
+const SLOW_SOLVE_MS = 50;
 const CROSS_FORM_SYNC_LIMIT = 100;
 /**
  * SOLVE MODE is a different animal on the homegrown simplex: its LP is
@@ -57,7 +60,19 @@ const CROSS_FORM_SYNC_LIMIT = 100;
  */
 const SOLVE_MODE_SYNC_LIMIT = 40;
 
+/**
+ * The last MAIN-THREAD solve's wall time, and the plan it was measured on.
+ * Only a synchronous solve may write it: the worker runs HiGHS, roughly ten
+ * times faster than the simplex the main thread would run, so its timing
+ * says nothing about how long the tab would freeze. It used to count, and
+ * a plan whose solve-mode books came back from the worker in 44ms was then
+ * solved synchronously on the way back to build mode - 575ms with the tab
+ * frozen, on a board that had already proven slow. A slow plan therefore
+ * stays with the worker for the session; another plan opened later decides
+ * by its own size.
+ */
 let lastSolveDurationMs: number | undefined;
+let lastSolveProjectId: string | undefined;
 
 /**
  * AUTO RECALCULATION (Jack, 2026-09-07). On by default: every edit solves,
@@ -141,15 +156,20 @@ export function solveBooks(project: FactoryProject): ThroughputResult {
 
 function solveBooksUngated(project: FactoryProject): ThroughputResult {
   const size = project.nodes.length + project.edges.length;
+  const provenSlow =
+    lastSolveDurationMs !== undefined &&
+    lastSolveDurationMs > SLOW_SOLVE_MS &&
+    lastSolveProjectId === project.id;
   const expectSlow =
     size > SYNC_SOLVE_LIMIT ||
-    (lastSolveDurationMs !== undefined && lastSolveDurationMs > SLOW_SOLVE_MS) ||
+    provenSlow ||
     (size > CROSS_FORM_SYNC_LIMIT && project.edges.some((edge) => edge.crossForm)) ||
     ((project.solveMode === true || project.poolMode === true) && size > SOLVE_MODE_SYNC_LIMIT);
   if (!expectSlow || !workerAvailable()) {
     const started = performance.now();
     const result = calculateThroughput(project);
     lastSolveDurationMs = performance.now() - started;
+    lastSolveProjectId = project.id;
     currentKey = undefined;
     lastBooks = result;
     return result;
@@ -220,12 +240,10 @@ function getWorker(): Worker {
         solveMs?: number;
       }>,
     ) => {
-      const { key, result, error, solveMs } = event.data;
+      const { key, result, error } = event.data;
       inFlight = undefined;
       if (result) {
-        if (solveMs !== undefined) {
-          lastSolveDurationMs = solveMs;
-        }
+        // `solveMs` is deliberately not read: see lastSolveDurationMs.
         deliver(key, result);
       } else {
         console.error("solve worker error:", error);

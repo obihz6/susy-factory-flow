@@ -26,6 +26,19 @@
  *   begins mid-wakeup.
  * - Fundamentals sit at 200Hz+ (laptop speakers roll off below), and the
  *   whole mix runs through one gentle lowpass so nothing spits.
+ * - FIREFOX HANDS THE GRAPH ITS ORDERS AT THE END OF THE TASK. Gecko queues
+ *   every node creation, connection and start() and flushes the queue to
+ *   the audio thread only when the current task finishes; Chrome's audio
+ *   thread picks them up at once. So a note scheduled 30ms ahead by a
+ *   click that then solves or renders for 600ms in the same task is, in
+ *   Firefox, never heard - its whole envelope is in the past by the time
+ *   the graph sees it - and a 150ms hang clips its first 120ms (measured
+ *   2026-09-08 with a MediaRecorder on the real output: Chrome played
+ *   whole through both, Firefox lost or clipped them, and yielding one
+ *   macrotask before the hang played whole). Hence `playBoardSound` on
+ *   Gecko schedules from a macrotask of its own, whatever the caller does
+ *   next; and callers that can, play first and mutate in a later task
+ *   (the mode keys), which puts the note on time as well as whole.
  */
 
 const KEY = "gtnh-factory-flow.board-sounds.v1";
@@ -116,6 +129,7 @@ export function suppressBoardSound(kind: BoardSoundKind, ms: number): void {
 }
 
 export type BoardSoundKind =
+  | "checklistOn" | "checklistOff" | "checklistCheck" | "checklistRestore"
   | "place" // a machine card lands: one flat thump
   | "placeProduct" // a drawer spawns to CATCH a product: thump stepping down
   | "placeSource" // a drawer spawns to SUPPLY something: thump stepping up
@@ -209,6 +223,13 @@ const ATTACK = 0.01;
  * eats the front of the note.
  */
 const SCHEDULE_AHEAD = 0.03;
+
+/**
+ * Gecko flushes audio graph commands at the end of the task (header). Only
+ * Firefox's UA carries "Gecko/<date>"; Chrome and Safari say "like Gecko".
+ */
+const DEFERS_GRAPH_COMMANDS_TO_TASK_END =
+  typeof navigator !== "undefined" && /\bGecko\/\d/.test(navigator.userAgent);
 
 function getContext(): AudioContext | undefined {
   if (typeof window === "undefined") {
@@ -662,6 +683,25 @@ function schedule(kind: BoardSoundKind, ctx: AudioContext, out: AudioNode, step 
       puff(ctx, out, { frequency: 1600, q: 1.6, duration: 0.04, peak: 0.06, delay: 0.03 });
       blip(ctx, out, { from: 587, to: 587, duration: 0.05, peak: 0.06, delay: 0.01 });
       break;
+    case "checklistOn":
+      puff(ctx, out, { frequency: 1200, q: 1.3, duration: 0.08, peak: 0.12 });
+      blip(ctx, out, { from: 740, to: 880, duration: 0.08, peak: 0.09, delay: 0.04 });
+      break;
+    case "checklistOff":
+      puff(ctx, out, { frequency: 650, q: 0.8, duration: 0.1, peak: 0.1 });
+      blip(ctx, out, { from: 440, to: 370, duration: 0.07, peak: 0.07 });
+      break;
+    case "checklistCheck":
+      // Two pencil strokes, then a soft tap.
+      puff(ctx, out, { frequency: 1800, q: 1.2, duration: 0.035, peak: 0.14 });
+      puff(ctx, out, { frequency: 2400, q: 1.1, duration: 0.075, peak: 0.1, delay: 0.03 });
+      blip(ctx, out, { from: 880, to: 880, duration: 0.045, peak: 0.065, delay: 0.07 });
+      break;
+    case "checklistRestore":
+      // An eraser rub, softer and lower than the pencil.
+      puff(ctx, out, { frequency: 800, q: 0.7, duration: 0.1, peak: 0.13 });
+      puff(ctx, out, { frequency: 600, q: 0.8, duration: 0.06, peak: 0.07, delay: 0.055 });
+      break;
     case "tick":
       // A switch thrown: the adjust tap's little sibling, half its voice,
       // with a grain of air so it reads as a key and not a note.
@@ -770,6 +810,12 @@ export function playBoardSound(
     // Never schedule against a suspended clock: resume first, play in the
     // callback. Sounds fire from user gestures, so the resume succeeds.
     void ctx.resume().then(play).catch(() => {});
+    return;
+  }
+  if (DEFERS_GRAPH_COMMANDS_TO_TASK_END) {
+    // A task of its own, so nothing the caller does after asking - a solve,
+    // a render - stands between the note and the audio thread (header).
+    window.setTimeout(play, 0);
     return;
   }
   play();

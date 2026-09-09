@@ -1,5 +1,7 @@
 "use client";
 
+import { checklistCursorStyle } from "./flow/ChecklistMode";
+
 import { useMemo, useRef } from "react";
 import { Cloud, Zap } from "lucide-react";
 import { MotionNumberText } from "./flow/board-motion";
@@ -138,6 +140,7 @@ interface MachineGroup {
  */
 export function MachineShoppingList() {
   const project = useFactoryStore((state) => state.project);
+  const checklistMode = useFactoryStore((state) => state.checklistMode);
   const lastResult = useFactoryStore((state) => state.lastResult);
   // The power column follows the power dial (EU/t or amps of a tier).
   useRateDisplayUnits();
@@ -502,7 +505,8 @@ export function MachineShoppingList() {
                 average={uniform ? { euT: build?.avgEuT, madeEuT: build?.avgMadeEuT, steamLs: build?.avgSteamLs } : undefined}
                 state={uniform ? (build?.state ?? "ok") : "ok"}
                 wash={uniform && build && !build.isMultiblock ? build.tier : undefined}
-                onClick={() => focusNext(group.label, group.nodeIds)}
+                checklist={checklistMode ? group.nodeIds.every((id) => project.checklist?.cards.includes(id)) : undefined}
+                onClick={() => checklistMode ? useFactoryStore.getState().toggleChecklist("cards", group.nodeIds) : focusNext(group.label, group.nodeIds)}
               />
               {uniform
                 ? null
@@ -526,7 +530,8 @@ export function MachineShoppingList() {
                       average={{ euT: buildLine.avgEuT, madeEuT: buildLine.avgMadeEuT, steamLs: buildLine.avgSteamLs }}
                       state={buildLine.state}
                       wash={buildLine.isMultiblock ? undefined : buildLine.tier}
-                      onClick={() => focusNext(buildLine.key, buildLine.nodeIds)}
+                      checklist={checklistMode ? buildLine.nodeIds.every((id) => project.checklist?.cards.includes(id)) : undefined}
+                      onClick={() => checklistMode ? useFactoryStore.getState().toggleChecklist("cards", buildLine.nodeIds) : focusNext(buildLine.key, buildLine.nodeIds)}
                     />
                   ))}
             </div>
@@ -637,6 +642,7 @@ function ListLine({
   state,
   wash,
   onClick,
+  checklist,
 }: {
   icon?: MachineHandlerIcon;
   /** A build sub-line: the icon column carries the tree branch instead. */
@@ -655,6 +661,7 @@ function ListLine({
   /** Tier whose colour faintly washes the whole line. */
   wash?: VoltageTier;
   onClick: () => void;
+  checklist?: boolean;
 }) {
   const stalled = state !== "ok";
   // A multiblock's supply is a number, not a tier, so its chip wears the
@@ -734,13 +741,16 @@ function ListLine({
   // story is about the row, and a target the width of a chip made the panel
   // feel like a secret.
   return (
-    <MinecraftTooltip content={hatchStory}>
+    <MinecraftTooltip content={checklist === undefined ? hatchStory : checklist ? "Completed — click to restore" : "Click to mark these machines complete"}>
       <button
         type="button"
         onClick={onClick}
+        aria-pressed={checklist}
+        data-checklist-done={checklist}
+        data-checklist-row={checklist !== undefined ? "true" : undefined}
         // The wash sits at ~12% - present enough to read as the tier's
         // colour without competing with the chips that name it.
-        style={wash ? { backgroundColor: `${GT_TIER_COLORS[wash].background}1f` } : undefined}
+        style={{ ...checklistCursorStyle, ...(wash ? { backgroundColor: `${GT_TIER_COLORS[wash].background}1f` } : {}) }}
         className="relative flex w-full items-center gap-1.5 py-0.5 pl-2 pr-2 text-left hover:bg-[var(--mc-71)]"
       >
         {indent ? (

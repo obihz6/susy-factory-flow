@@ -28,15 +28,17 @@ export const EDGE_DETAIL_LABELS = 4;
 export const EDGE_DETAIL_PULSE = 8;
 
 /**
- * At a glance, a line is its route: no rate chip, no arrowhead, no marching
+ * At a glance, a line is its route and its ARROWS: no rate chip, no marching
  * dashes, no hover surface. Each of those is per-edge cost paid hundreds of
  * times over for something a few pixels tall — dropping the chips alone was
- * worth 22 to 59fps of panning on a 300-node plan — and none of them can be
- * read at that size anyway.
+ * worth 22 to 59fps of panning on a 300-node plan. The arrows stay (Jack,
+ * 2026-09-08: "when I zoom out, the arrows go away. I don't want that") and
+ * draw twice their size at a glance, so they read at the zoom the glance
+ * takes over at.
  */
 export const EDGE_DETAIL_BY_LEVEL: Record<NodeDetailLevel, number> = {
   [NODE_DETAIL_FULL]: EDGE_DETAIL_ARROWS | EDGE_DETAIL_LABELS | EDGE_DETAIL_PULSE,
-  [NODE_DETAIL_GLANCE]: EDGE_DETAIL_GLOBAL,
+  [NODE_DETAIL_GLANCE]: EDGE_DETAIL_GLOBAL | EDGE_DETAIL_ARROWS,
 };
 
 /**
