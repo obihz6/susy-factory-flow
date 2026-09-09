@@ -116,20 +116,48 @@ if [[ -f "$SUSY_INSTANCE_DIR/options.txt" ]]; then
   sed -i 's/^pauseWhenEmpty:.*/pauseWhenEmpty:false/' "$SUSY_INSTANCE_DIR/options.txt" || true
 fi
 
-# Command-line -D properties beat JAVA_TOOL_OPTIONS, so stale susy.oracle
-# flags left over in a launcher's per-instance JvmArgs would silently redirect
-# the dump and icons away from the paths this script watches.
+# Prism only applies JvmArgs when OverrideJavaArgs=true. Without that flag the
+# oracle jar is visible in the mod list, but `susy.oracle.autorun` is absent and
+# the client simply opens the selected world — exactly the symptom this runner
+# is meant to prevent. Back up the launcher config and restore it on exit so the
+# export is non-destructive.
+prism_instance_cfg=""
+prism_instance_cfg_backup=""
+restore_prism_instance_cfg() {
+  if [[ -n "$prism_instance_cfg" && -n "$prism_instance_cfg_backup" && -f "$prism_instance_cfg_backup" ]]; then
+    cp "$prism_instance_cfg_backup" "$prism_instance_cfg" 2>/dev/null || true
+    rm -f "$prism_instance_cfg_backup"
+  fi
+}
+# The runtime cleanup trap below also restores this file. Keep this early
+# restore trap until the runtime process exists so failures during setup do not
+# leave Prism configured with oracle arguments.
+trap restore_prism_instance_cfg EXIT
+
+run_id="$(date +%s)-$$"
 if [[ -n "${PRISMINSTANCEID:-}" ]]; then
-  instance_cfg="$(dirname "$SUSY_INSTANCE_DIR")/instance.cfg"
-  if [[ -f "$instance_cfg" ]]; then
-    sed -i -E -e 's/(^|[[:space:]]|=)-Dsusy\.oracle\.[^[:space:]]*/\1/g' \
-      -e '/^JvmArgs=/s/[[:space:]]+$//' "$instance_cfg"
+  prism_instance_cfg="$(dirname "$SUSY_INSTANCE_DIR")/instance.cfg"
+  if [[ -f "$prism_instance_cfg" ]]; then
+    prism_instance_cfg_backup="$(mktemp "${TMPDIR:-/tmp}/susy-instance.cfg.XXXXXX")"
+    cp "$prism_instance_cfg" "$prism_instance_cfg_backup"
+    # Use the shared Node patcher: instance.cfg is a QSettings INI file and
+    # JvmArgs must be in [General]. Shell text insertion previously put it in
+    # [UI] and mangled Windows backslashes.
+    node "$repo_root/tools/dataset-pipeline/scripts/susy/patch-prism-instance.mjs" \
+      --config "$prism_instance_cfg" \
+      --run-id "$run_id" \
+      --recipedump-path "$recipedump_path" \
+      --icon-dir "$rendered_icon_dir"
+    echo "Configured and verified Prism [General] oracle JVM arguments in $prism_instance_cfg."
+  else
+    echo "WARNING: Prism instance.cfg not found at $prism_instance_cfg; relying on JAVA_TOOL_OPTIONS."
   fi
 fi
 
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} \
 -Dsusy.oracle.autorun=true \
 -Dsusy.oracle.dumpRecipes=true \
+-Dsusy.oracle.runId=$run_id \
 -Dsusy.oracle.recipedumpPath=$recipedump_path \
 -Dsusy.oracle.iconDir=$rendered_icon_dir"
 
@@ -168,14 +196,18 @@ tail -n 0 -f "$runtime_log" &
 tail_pid=$!
 
 stop_runtime() {
-  kill "$tail_pid" 2>/dev/null || true
+  kill "${tail_pid:-}" 2>/dev/null || true
   if [[ -n "${runtime_pid:-}" ]]; then
     kill -TERM "-$runtime_pid" 2>/dev/null || true
     sleep 5
     kill -KILL "-$runtime_pid" 2>/dev/null || true
   fi
 }
-trap stop_runtime EXIT
+cleanup_runtime() {
+  stop_runtime
+  restore_prism_instance_cfg
+}
+trap cleanup_runtime EXIT
 
 deadline=$((SECONDS + SUSY_EXPORT_TIMEOUT_SECONDS))
 dump_ready=0
@@ -221,7 +253,7 @@ while (( SECONDS < deadline )); do
   sleep 5
 done
 
-stop_runtime
+cleanup_runtime
 trap - EXIT
 
 if (( dump_ready != 1 )); then

@@ -127,14 +127,26 @@ loaded after 180 seconds, and reports if no dump appears after 300 seconds. It a
 restores the original Prism `instance.cfg` after completion. The oracle falls back to
 recipe-only extraction when HEI is unavailable or the client is not render-ready.
 
+The pipeline uses the downloaded standalone instance by default so extraction is
+deterministic and does not depend on Prism or another launcher GUI. The instance
+is stored in `temp/.minecraft-fresh` for the current run (or the configured
+bootstrap directory) and is pinned into `temp/susy-pipeline.json` after the
+download step. To opt back into an explicitly supplied/local instance, set
+`SUSY_USE_DOWNLOADED_INSTANCE=0` and use `--instance`/`SUSY_INSTANCE_DIR`.
+
+When a full interactive pipeline finishes, it asks whether the downloaded
+instance and its adjacent Java runtime should be deleted. Non-interactive runs
+keep them and log their location; this is safe for later resume runs.
+
 The runner resolves the instance itself, in this order:
 
-1. `SUSY_INSTANCE_DIR` when set (validated: pack.toml + real mod jars).
-2. Auto-detection: `./temp/.minecraft`, repo-local SUSY checkouts under
+1. The pinned downloaded instance from the pipeline config (default).
+2. `SUSY_INSTANCE_DIR` when set (validated: pack.toml + real mod jars).
+3. Auto-detection: `./temp/.minecraft`, repo-local SUSY checkouts under
    `./temp`, known launcher instance roots (Prism/PolyMC/MultiMC/ATLauncher/
    CurseForge/GDLauncher, Linux and Windows paths) and a bounded
    `*supersymmetry*` scan under the home directory.
-3. Nothing found: a barebone instance is downloaded into `./temp/.minecraft`
+4. Nothing found: a barebone instance is downloaded into `./temp/.minecraft`
    (`bootstrap-susy-instance.mjs`) — pack repo files, every packwiz-declared
    mod (CurseForge-API-excluded mods are rescued straight from the CDN), a
    local Temurin 8 JRE (1.12.2 Forge cannot run on modern JVMs), the Forge

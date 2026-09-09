@@ -21,7 +21,14 @@ await executeStandaloneStep("download", async (logger, config) => {
     "resolve-susy-instance.mjs",
   );
   const args = [resolver, "--json"];
-  if (config.settings?.instanceExplicit) {
+  const useDownloadedInstance = config.settings?.useDownloadedInstance !== false &&
+    process.env.SUSY_USE_DOWNLOADED_INSTANCE !== "0";
+  const forceBootstrap = process.env.SUSY_FORCE_BOOTSTRAP === "1" ||
+    (useDownloadedInstance && config.settings?.instanceSource === "bootstrap") ||
+    (useDownloadedInstance && !config.settings?.instanceExplicit);
+  if (forceBootstrap) args.push("--force-bootstrap");
+  if (process.env.SUSY_BOOTSTRAP_DIR) args.push("--bootstrap-dir", process.env.SUSY_BOOTSTRAP_DIR);
+  if (config.settings?.instanceExplicit && !forceBootstrap) {
     args.push("--instance", config.paths.instanceDir);
   } else {
     args.push("--bootstrap-dir", config.paths.instanceDir);
@@ -46,6 +53,11 @@ await executeStandaloneStep("download", async (logger, config) => {
   }
 
   config.paths.instanceDir = path.resolve(resolved.instanceDir);
+  config.settings.useDownloadedInstance = useDownloadedInstance;
+  config.settings.instanceSource = resolved.source;
+  // Pin every later step to the instance selected here. In the default mode
+  // this is the standalone downloaded instance, never a Prism auto-detection.
+  config.settings.instanceExplicit = true;
   config.pack.versionId = config.pack.versionId ?? resolved.version;
   config.pack.versionLabel = config.pack.versionLabel ??
     (resolved.version ? `SUSY ${resolved.version}` : undefined);

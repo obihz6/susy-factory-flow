@@ -218,6 +218,71 @@ function jarVersion(filePath) {
  * build output and a repo-local checkout — highest version wins, newest
  * build breaks ties (mtime is coarse on some filesystems, so version leads).
  */
+/**
+ * Patch a Prism/MultiMC instance.cfg without relying on shell quoting.
+ *
+ * instance.cfg is a QSettings INI file: JvmArgs is read from [General], and
+ * backslashes in values are escape characters. Keep paths slash-normalized and
+ * remove stale JvmArgs keys from every other section.
+ */
+export function patchPrismInstanceConfigText(text, { runId, recipedumpPath, iconDir }) {
+  const oracleArgs = [
+    "-Dsusy.oracle.autorun=true",
+    "-Dsusy.oracle.dumpRecipes=true",
+    `-Dsusy.oracle.runId=${runId}`,
+    `-Dsusy.oracle.recipedumpPath=${normalizeJvmPath(recipedumpPath)}`,
+    `-Dsusy.oracle.iconDir=${normalizeJvmPath(iconDir)}`,
+  ].join(" ");
+  const lines = String(text ?? "").split(/\r?\n/);
+  const output = [];
+  let section = "";
+  let foundGeneral = false;
+  let wroteOverride = false;
+  let wroteJvmArgs = false;
+
+  const finishGeneral = () => {
+    if (section.toLowerCase() !== "general") return;
+    if (!wroteOverride) output.push("OverrideJavaArgs=true");
+    if (!wroteJvmArgs) output.push(`JvmArgs=${oracleArgs}`);
+  };
+
+  for (const line of lines) {
+    const sectionMatch = /^\[([^\]]+)\]$/.exec(line);
+    if (sectionMatch) {
+      finishGeneral();
+      section = sectionMatch[1];
+      foundGeneral ||= section.toLowerCase() === "general";
+      wroteOverride = false;
+      wroteJvmArgs = false;
+      output.push(line);
+      continue;
+    }
+    if (section.toLowerCase() === "general" && /^OverrideJavaArgs=/.test(line)) {
+      output.push("OverrideJavaArgs=true");
+      wroteOverride = true;
+      continue;
+    }
+    if (section.toLowerCase() === "general" && /^JvmArgs=/.test(line)) {
+      output.push(`JvmArgs=${oracleArgs}`);
+      wroteJvmArgs = true;
+      continue;
+    }
+    if (section.toLowerCase() !== "general" && /^JvmArgs=/.test(line)) continue;
+    output.push(line);
+  }
+  finishGeneral();
+  if (!foundGeneral) {
+    output.push("[General]", "OverrideJavaArgs=true", `JvmArgs=${oracleArgs}`);
+  }
+
+  const hadCrlf = /\r\n/.test(String(text ?? ""));
+  return output.join(hadCrlf ? "\r\n" : "\n");
+}
+
+function normalizeJvmPath(value) {
+  return String(value ?? "").replaceAll("\\", "/");
+}
+
 export function findOracleJar(repoRoot, env = process.env) {
   if (env.SUSY_HEI_ORACLE_JAR) {
     if (fs.existsSync(env.SUSY_HEI_ORACLE_JAR)) return env.SUSY_HEI_ORACLE_JAR;

@@ -49,9 +49,10 @@ const explicitInstance = flag("--instance") ?? process.env.SUSY_INSTANCE_DIR;
 const bootstrapRef = flag("--ref") ?? process.env.SUSY_BOOTSTRAP_REF;
 const jsonOutput = args.includes("--json");
 const bootstrapIfMissing = args.includes("--bootstrap-if-missing");
+const forceBootstrap = args.includes("--force-bootstrap") || process.env.SUSY_FORCE_BOOTSTRAP === "1";
 const noBootstrap = args.includes("--no-bootstrap");
 const bootstrapDir = path.resolve(
-  flag("--bootstrap-dir") ?? path.join(repoRoot, "temp", ".minecraft"),
+  flag("--bootstrap-dir") ?? process.env.SUSY_BOOTSTRAP_DIR ?? path.join(repoRoot, "temp", ".minecraft"),
 );
 
 function resolveResult(result) {
@@ -199,7 +200,12 @@ function resultFor(info, source) {
 
 // --- Explicit instance wins ------------------------------------------------
 
-if (explicitInstance) {
+if (forceBootstrap) {
+  if (noBootstrap) {
+    fail("--force-bootstrap cannot be combined with --no-bootstrap.");
+  }
+  console.error(`resolve-susy-instance: forcing a fresh standalone instance in ${bootstrapDir}...`);
+} else if (explicitInstance) {
   const dir = path.resolve(explicitInstance);
   const info = inspectInstanceDir(dir);
   if (info.kind === "instance") {
@@ -217,13 +223,13 @@ if (explicitInstance) {
 
 // --- Detection --------------------------------------------------------------
 
-const detected = bestCandidate();
+const detected = forceBootstrap ? undefined : bestCandidate();
 if (detected) {
   resolveResult(resultFor(detected, detected.source));
   process.exit(0);
 }
 
-if (noBootstrap || !bootstrapIfMissing) {
+if (!forceBootstrap && (noBootstrap || !bootstrapIfMissing)) {
   resolveResult({ found: false, bootstrapDir });
   console.error(
     "resolve-susy-instance: no Supersymmetry instance found " +
@@ -235,7 +241,9 @@ if (noBootstrap || !bootstrapIfMissing) {
 // --- Bootstrap fallback -------------------------------------------------------
 
 console.error(
-  `resolve-susy-instance: no instance found; downloading a barebone one into ${bootstrapDir}...`,
+  forceBootstrap
+    ? `resolve-susy-instance: downloading a fresh barebone one into ${bootstrapDir}...`
+    : `resolve-susy-instance: no instance found; downloading a barebone one into ${bootstrapDir}...`,
 );
 const bootstrap = path.join(scriptDir, "bootstrap-susy-instance.mjs");
 const bootstrapArgs = [bootstrap, bootstrapDir];

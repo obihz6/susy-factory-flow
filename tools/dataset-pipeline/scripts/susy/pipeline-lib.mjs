@@ -99,6 +99,11 @@ export function createInitialConfig(options = {}) {
     settings: {
       retries: positiveInteger(options.retries, 3),
       bootstrap: options.bootstrap !== false,
+      // SUSY exports default to a self-contained downloaded client. This keeps
+      // extraction deterministic and avoids depending on a launcher GUI.
+      useDownloadedInstance: options.useDownloadedInstance !== false,
+      instanceSource: undefined,
+      downloadedInstanceStatus: undefined,
     },
     selectedVersions: Array.isArray(options.selectedVersions) ? options.selectedVersions : [],
     includeLocal: options.includeLocal === true,
@@ -163,6 +168,11 @@ export async function executeStandaloneStep(step, action, options = {}) {
 
 export function logPath(config, step) {
   return path.join(path.resolve(config.paths.tempDir), "logs", `${step}.log`);
+}
+
+/** Return the standalone script filename for a pipeline step. */
+export function pipelineStepScriptName(step) {
+  return step === "package" ? "package-dataset.mjs" : `${step}.mjs`;
 }
 
 export function rawExportDir(config) {

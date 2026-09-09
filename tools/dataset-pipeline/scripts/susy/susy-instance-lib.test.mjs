@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   compareVersions,
@@ -8,6 +9,7 @@ import {
   findOracleJar,
   inspectInstanceDir,
   parsePackToml,
+  patchPrismInstanceConfigText,
 } from "./susy-instance-lib.mjs";
 
 const PACK_TOML = [
@@ -173,6 +175,48 @@ describe("findLauncherInstanceInfo", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "susy-plain-"));
     fs.mkdirSync(path.join(dir, "mods"), { recursive: true });
     expect(findLauncherInstanceInfo(dir)).toBeUndefined();
+  });
+});
+
+describe("Prism oracle launch configuration", () => {
+  it("enables Prism's per-instance JVM argument override before injecting autorun flags", () => {
+    const runnerDir = path.dirname(fileURLToPath(import.meta.url));
+    const windowsRunner = fs.readFileSync(path.join(runnerDir, "run-susy-export.ps1"), "utf8");
+    const unixRunner = fs.readFileSync(path.join(runnerDir, "run-susy-export.sh"), "utf8");
+
+    for (const runner of [windowsRunner, unixRunner]) {
+      expect(runner).toMatch(/OverrideJavaArgs=true/);
+      expect(runner).toContain("susy.oracle.autorun=true");
+      expect(runner).toContain("susy.oracle.dumpRecipes=true");
+    }
+  });
+});
+
+describe("patchPrismInstanceConfigText", () => {
+  it("writes JvmArgs only in General and preserves Windows paths", () => {
+    const original = [
+      "[General]",
+      "OverrideJavaArgs=false",
+      "JvmArgs=",
+      "name=Supersymmetry",
+      "",
+      "[UI]",
+      "JvmArgs=stale",
+      "",
+    ].join("\r\n");
+    const patched = patchPrismInstanceConfigText(original, {
+      runId: "run-1",
+      recipedumpPath: "C:\\Users\\wuzhi\\Documents\\susy-factory-flow\\temp\\raw-export\\recipedump.json",
+      iconDir: "C:\\Users\\wuzhi\\Documents\\susy-factory-flow\\temp\\raw-export\\rendered-icons",
+    });
+    const general = patched.match(/\[General\]\r?\n([\s\S]*?)(?=\r?\n\[|$)/)?.[1] ?? "";
+    expect(general).toContain("OverrideJavaArgs=true");
+    expect(general).toContain("-Dsusy.oracle.autorun=true");
+    expect(general).toContain("-Dsusy.oracle.recipedumpPath=C:/Users/wuzhi/Documents/susy-factory-flow/temp/raw-export/recipedump.json");
+    expect(general).toContain("-Dsusy.oracle.iconDir=C:/Users/wuzhi/Documents/susy-factory-flow/temp/raw-export/rendered-icons");
+    expect((patched.match(/^JvmArgs=/gm) ?? [])).toHaveLength(1);
+    expect(patched).toContain("[UI]\r\n");
+    expect(patched).not.toContain("JvmArgs=stale");
   });
 });
 

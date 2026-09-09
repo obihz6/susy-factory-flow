@@ -247,40 +247,20 @@ function Set-PrismOracleJvmArguments {
   $original = [System.IO.File]::ReadAllText($configPath)
   $script:PrismInstanceConfigPath = $configPath
   $script:PrismInstanceConfigOriginal = $original
-  $oracleArgs = @(
-    "-Dsusy.oracle.autorun=true",
-    "-Dsusy.oracle.dumpRecipes=true",
-    "-Dsusy.oracle.runId=$RunId",
-    "-Dsusy.oracle.recipedumpPath=`"$RecipedumpPath`"",
-    "-Dsusy.oracle.iconDir=`"$RenderedIconDir`""
-  )
-  $lines = $original -split "`r?`n", -1
-  $found = $false
-  for ($index = 0; $index -lt $lines.Count; $index++) {
-    if ($lines[$index] -notmatch "^JvmArgs=") { continue }
-    $existing = $lines[$index].Substring(8)
-    $existing = [regex]::Replace($existing, '-Dsusy\.oracle\.(?:autorun|dumpRecipes)=(?:true|false)', '')
-    $existing = [regex]::Replace($existing, '-Dsusy\.oracle\.(?:recipedumpPath|iconDir)=(?:"[^"]*"|\S+)', '')
-    $existing = $existing.Trim()
-    $arguments = $oracleArgs -join ' '
-    if ($existing) { $arguments = "$arguments $existing" }
-    $lines[$index] = "JvmArgs=$arguments"
-    $found = $true
-    break
-  }
-  if (-not $found) {
-    $lines += "JvmArgs=$($oracleArgs -join ' ')"
-  }
-  [System.IO.File]::WriteAllText($configPath, ($lines -join [Environment]::NewLine))
-  Write-Log "Configured oracle JVM arguments in Prism instance.cfg for this launch."
 
-  # Verify the config was written correctly.
-  $verifyConfig = [System.IO.File]::ReadAllText($configPath)
-  if ($verifyConfig -match "JvmArgs=.*susy\.oracle") {
-    Write-Log "Verified: instance.cfg contains oracle JVM args."
-  } else {
-    Write-Log "WARNING: Could not verify oracle JVM args in instance.cfg!"
+  # Delegate the INI rewrite to Node so the Windows and Unix runners use the
+  # same section-aware implementation and the same path normalization rules.
+  $patcher = Join-Path $PSScriptRoot "patch-prism-instance.mjs"
+  $patchOutput = & node $patcher `
+    --config $configPath `
+    --run-id $RunId `
+    --recipedump-path $RecipedumpPath `
+    --icon-dir $RenderedIconDir
+  if ($LASTEXITCODE -ne 0) {
+    Fail "Could not patch Prism [General] oracle JVM settings in instance.cfg."
   }
+  Write-Log "Configured oracle JVM arguments in [General] of Prism instance.cfg (OverrideJavaArgs=true)."
+  Write-Log "Verified: Prism [General] contains slash-safe oracle JVM args."
 }
 
 function Restore-PrismJvmArguments {

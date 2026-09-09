@@ -7,6 +7,7 @@ import {
   getConfigPath,
   logPath,
   parseCliArgs,
+  pipelineStepScriptName,
   updateConfigPaths,
 } from "./pipeline-lib.mjs";
 
@@ -71,5 +72,10 @@ describe("SUSY pipeline configuration", () => {
     expect(getConfigPath({ config: "temp/custom.json" })).toBe(
       path.resolve("temp/custom.json"),
     );
+  });
+
+  it("maps the package pipeline step to its actual script name", () => {
+    expect(pipelineStepScriptName("package")).toBe("package-dataset.mjs");
+    expect(pipelineStepScriptName("normalize")).toBe("normalize.mjs");
   });
 });
