@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createInitialConfig,
@@ -78,6 +79,12 @@ describe("SUSY pipeline configuration", () => {
   it("maps the package pipeline step to its actual script name", () => {
     expect(pipelineStepScriptName("package")).toBe("package-dataset.mjs");
     expect(pipelineStepScriptName("normalize")).toBe("normalize.mjs");
+  });
+
+  it("keeps the extract runner dependency imported", () => {
+    const extractSource = readFileSync(new URL("./extract.mjs", import.meta.url), "utf8");
+    expect(extractSource).toMatch(/parseCliArgs,\s*repoRoot,\s*runCommand,/s);
+    expect(extractSource).toContain("await runCommand(command, args");
   });
 
   it("clears stale failure metadata after a successful retry", async () => {

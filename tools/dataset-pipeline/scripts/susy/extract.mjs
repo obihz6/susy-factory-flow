@@ -5,6 +5,7 @@ import {
   executeStandaloneStep,
   parseCliArgs,
   repoRoot,
+  runCommand,
 } from "./pipeline-lib.mjs";
 
 const options = parseCliArgs();
