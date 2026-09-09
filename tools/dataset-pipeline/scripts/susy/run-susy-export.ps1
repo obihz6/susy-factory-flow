@@ -279,6 +279,21 @@ function Get-InstanceLogPath {
 }
 
 $launcherManaged = [bool]$resolved.prismInstanceId -and [string]::IsNullOrWhiteSpace($env:SUSY_LAUNCH_COMMAND)
+
+# Kill any existing Prism process so it picks up the new JVM args.
+if ($launcherManaged) {
+  Write-Log "Checking for existing Prism processes..."
+  $existingPrism = Get-Process -Name "PrismLauncher" -ErrorAction SilentlyContinue
+  if ($existingPrism) {
+    Write-Log "Killing existing Prism process (PID $($existingPrism.Id)) to ensure clean launch with oracle JVM args."
+    Stop-Process -Name "PrismLauncher" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    if (Get-Process -Name "PrismLauncher" -ErrorAction SilentlyContinue) {
+      Write-Log "WARNING: Could not kill existing Prism process. The oracle may not be loaded."
+    }
+  }
+}
+
 if ($launcherManaged) { Set-PrismOracleJvmArguments }
 $proc = $null
 $launchDesc = ""
@@ -376,6 +391,12 @@ try {
         (Select-String -LiteralPath $instanceLog -Pattern "SUSY HEI oracle run $RunId (client autorun handler registered|export started)" -Quiet)) {
       $oracleSeen = $true
       Write-Log "SUSY HEI oracle run $RunId is running inside the Prism client."
+    }
+
+    # Log progress every 30 seconds to show the script is still waiting.
+    if ($handoffStartedAt -and (Get-Date).Second % 30 -eq 0) {
+      $elapsed = ((Get-Date) - $handoffStartedAt).TotalSeconds
+      Write-Log "Waiting for oracle... elapsed: $([math]::Round($elapsed, 1))s"
     }
 
     if (Test-Path -LiteralPath $RecipedumpPath) {
