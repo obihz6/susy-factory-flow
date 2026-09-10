@@ -79,6 +79,12 @@ if (-not $resolved -or $resolved.found -ne $true) {
 
 $InstanceDir = [System.IO.Path]::GetFullPath($resolved.instanceDir)
 if (-not (Test-Path -LiteralPath $InstanceDir)) { Fail "Resolved instance '$InstanceDir' does not exist." }
+$Java8 = if ($env:SUSY_JAVA_8) { $env:SUSY_JAVA_8 } elseif ($resolved.java8) { $resolved.java8 } else { $null }
+if (-not $Java8 -or -not (Test-Path -LiteralPath $Java8)) {
+  Fail "Java 8 was not resolved before the instance launch. Set SUSY_JAVA_8 or rerun the bootstrap."
+}
+$env:JAVA_HOME = Split-Path -Parent (Split-Path -Parent $Java8)
+$env:Path = "$(Split-Path -Parent $Java8);$env:Path"
 $InstanceLogPath = Join-Path $InstanceDir "logs\latest.log"
 
 $VersionId = if ($env:SUSY_DATASET_VERSION_ID) { $env:SUSY_DATASET_VERSION_ID } else { $resolved.version }
@@ -402,9 +408,9 @@ try {
         if (-not (Test-Path -LiteralPath $fallbackJar)) {
           Fail "No start script and no binClient-modified.jar in the instance; cannot launch."
         }
-        $launchDesc = "java -jar binClient-modified.jar nogui"
+        $launchDesc = "`"$Java8`" -jar binClient-modified.jar nogui"
         Write-Log "No start script found; falling back to: $launchDesc"
-        $proc = Start-Process -FilePath "java" `
+        $proc = Start-Process -FilePath $Java8 `
           -ArgumentList @("-jar", "binClient-modified.jar", "nogui") `
           -WorkingDirectory $InstanceDir -PassThru `
           -RedirectStandardOutput $RuntimeLog -RedirectStandardError $RuntimeErrLog -WindowStyle Hidden

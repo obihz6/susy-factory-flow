@@ -59,7 +59,14 @@ fi
 : "${SUSY_INSTANCE_DIR:=$INSTANCEDIR}"
 : "${SUSY_DATASET_VERSION_ID:=$VERSION}"
 : "${SUSY_DATASET_VERSION_LABEL:=SUSY $VERSION}"
-: "${SUSY_HEI_ORACLE_JAR:=$ORACLEJAR}"
+: "${SUSY_HEI_ORACLE_JAR:=${ORACLEJAR:-}}"
+: "${SUSY_JAVA_8:=${JAVA8:-}}"
+if [[ -z "$SUSY_JAVA_8" || ! -f "$SUSY_JAVA_8" ]]; then
+  echo "Java 8 was not resolved before the client launch. Set SUSY_JAVA_8 or rerun the download step." >&2
+  exit 1
+fi
+export JAVA_HOME="$(dirname "$(dirname "$SUSY_JAVA_8")")"
+export PATH="$(dirname "$SUSY_JAVA_8"):$PATH"
 : "${SUSY_DATASET_OUT_DIR:=$repo_root/public/datasets/susy/$SUSY_DATASET_VERSION_ID}"
 : "${SUSY_RAW_EXPORT_DIR:=$repo_root/temp/raw-export}"
 if [[ -z "${SUSY_LAUNCH_COMMAND:-}" && -n "${LAUNCHSCRIPT:-}" ]]; then
@@ -185,7 +192,7 @@ if [[ -z "${SUSY_LAUNCH_COMMAND:-}" ]]; then
     chmod +x "$start_script"
     SUSY_LAUNCH_COMMAND="bash '$(realpath "$start_script")'"
   else
-    SUSY_LAUNCH_COMMAND="xvfb-run -a bash -lc 'cd \"$SUSY_INSTANCE_DIR\" && java -jar binClient-modified.jar nogui'"
+    SUSY_LAUNCH_COMMAND="xvfb-run -a bash -lc 'cd \"$SUSY_INSTANCE_DIR\" && \"$SUSY_JAVA_8\" -jar binClient-modified.jar nogui'"
     echo "No start script found; falling back to: $SUSY_LAUNCH_COMMAND"
   fi
 fi

@@ -147,12 +147,15 @@ The runner resolves the instance itself, in this order:
    CurseForge/GDLauncher, Linux and Windows paths) and a bounded
    `*supersymmetry*` scan under the home directory.
 4. Nothing found: a barebone instance is downloaded into `./temp/.minecraft`
-   (`bootstrap-susy-instance.mjs`) — pack repo files, every packwiz-declared
-   mod (CurseForge-API-excluded mods are rescued straight from the CDN), a
-   local Temurin 8 JRE (1.12.2 Forge cannot run on modern JVMs), the Forge
-   client runtime and a generated `launch-susy-client.sh` (+ `.cmd` on
-   Windows). Every step is resumable; `SUSY_BOOTSTRAP=0` disables the
-   fallback and `SUSY_BOOTSTRAP_REF` pins a release tag or branch.
+   (`bootstrap-susy-instance.mjs`) — Java 8 is resolved first, before the
+   instance scan or pack download. The bootstrap then downloads pack repo files,
+   every packwiz-declared mod (CurseForge-API-excluded mods are rescued straight
+   from the CDN), the Forge client runtime, and a generated
+   `launch-susy-client.sh` (+ `.cmd` on Windows). Java is cached under
+   `./temp/.minecraft-runtime/jre8` (outside the instance), or an existing
+   runtime can be selected with `SUSY_JAVA_8`. Every step is resumable;
+   `SUSY_BOOTSTRAP=0` disables the fallback and `SUSY_BOOTSTRAP_REF` pins a
+   release tag or branch.
 
 Version id and label come from the instance's pack.toml unless
 `SUSY_DATASET_VERSION_ID`/`SUSY_DATASET_VERSION_LABEL` override them; the

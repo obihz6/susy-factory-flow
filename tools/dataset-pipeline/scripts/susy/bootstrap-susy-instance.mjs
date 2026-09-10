@@ -17,15 +17,19 @@
  *   SUSY_JAVA_8             path to a Java 8 binary to use instead of
  *                           downloading one
  *   GITHUB_TOKEN            optional, for the release lookup
- * Output (stdout): JSON { instanceDir, version, minecraft, forge, ref, launchScript }.
+ * Output (stdout): JSON { instanceDir, version, minecraft, forge, ref, java8, launchScript }.
  */
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { parsePackToml } from "./susy-instance-lib.mjs";
+import { resolveJava8 } from "./java8-runtime.mjs";
 
-const target = path.resolve(process.argv[2] ?? path.join("temp", ".minecraft"));
+const bootstrapArgs = process.argv.slice(2);
+const targetArgument = bootstrapArgs.find((value) => !value.startsWith("--"));
+const refArgumentIndex = bootstrapArgs.indexOf("--ref");
+const requestedRef = refArgumentIndex >= 0 ? bootstrapArgs[refArgumentIndex + 1] : undefined;
+const target = path.resolve(targetArgument ?? path.join("temp", ".minecraft"));
 // Bootstrap artifacts (JRE, installer jars) live OUTSIDE the instance: the
 // bundled packwiz indexes everything not ignored, and a JRE's locale trees
 // make its indexer choke.
@@ -117,6 +121,7 @@ function run(binary, args, options = {}) {
 
 async function resolveRef() {
   if (process.env.SUSY_BOOTSTRAP_REF) return process.env.SUSY_BOOTSTRAP_REF;
+  if (requestedRef) return requestedRef;
   log("looking up the latest Supersymmetry release...");
   const release = await githubJson(`https://api.github.com/repos/${packRepo}/releases/latest`);
   if (!release?.tag_name) throw new Error("No Supersymmetry release found.");
@@ -159,73 +164,10 @@ async function downloadPack(ref) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. A Java 8 runtime (game + Forge installer requirement)
+// 2. Mods through packwiz-installer
 // ---------------------------------------------------------------------------
 
 const isWindows = process.platform === "win32";
-const javaBinaryName = isWindows ? "java.exe" : "java";
-
-/** Adoptium's per-OS asset naming: windows ships a zip, the rest a tarball. */
-function adoptiumUrl() {
-  const platform = { win32: "windows", darwin: "mac", linux: "linux" }[process.platform];
-  if (!platform) throw new Error(`Unsupported platform: ${process.platform}`);
-  const arch = process.arch === "arm64" ? "aarch64" : "x64";
-  return `https://api.adoptium.net/v3/binary/latest/8/ga/${platform}/${arch}/jre/hotspot/normal/eclipse`;
-}
-
-function extractArchive(archive, into) {
-  fs.mkdirSync(into, { recursive: true });
-  // bsdtar (Windows 10+, macOS) and GNU tar both handle tar.gz; bsdtar also
-  // handles the Adoptium Windows zip, so one command serves everywhere.
-  runTar(["-xf", archive, "-C", into, "--strip-components", "1"]);
-}
-
-async function resolveJava8() {
-  if (process.env.SUSY_JAVA_8) {
-    if (!fs.existsSync(process.env.SUSY_JAVA_8)) {
-      throw new Error(`SUSY_JAVA_8=${process.env.SUSY_JAVA_8} does not exist.`);
-    }
-    return process.env.SUSY_JAVA_8;
-  }
-  const versionPattern = /(?:^|[-_])8(?:[-_.]|$)|jdk8|jre8|1\.8/i;
-  const jvmRoots = isWindows
-    ? [
-        "C:\\Program Files\\Eclipse Adoptium",
-        "C:\\Program Files\\Java",
-        "C:\\Program Files (x86)\\Java",
-        "C:\\Program Files\\Zulu",
-        path.join(os.homedir(), ".jdks"),
-      ]
-    : ["/usr/lib/jvm", path.join(os.homedir(), ".jdks")];
-  for (const root of jvmRoots) {
-    let entries;
-    try {
-      entries = await fs.promises.readdir(root);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!versionPattern.test(entry)) continue;
-      const binary = path.join(root, entry, "bin", javaBinaryName);
-      if (fs.existsSync(binary)) return binary;
-    }
-  }
-
-  const jreDir = path.join(runtimeDir, "jre8");
-  const jreBin = path.join(jreDir, "bin", javaBinaryName);
-  if (fs.existsSync(jreBin)) return jreBin;
-
-  log("no local Java 8 found; downloading a Temurin 8 JRE...");
-  const archive = path.join(runtimeDir, isWindows ? "jre8.zip" : "jre8.tar.gz");
-  await downloadFile(adoptiumUrl(), archive);
-  extractArchive(archive, jreDir);
-  await fs.promises.rm(archive, { force: true });
-  if (!fs.existsSync(jreBin)) throw new Error("Temurin JRE 8 did not unpack as expected.");
-  return jreBin;
-}
-
-// ---------------------------------------------------------------------------
-// 3. Mods through packwiz-installer
 // ---------------------------------------------------------------------------
 
 async function installMods(java8) {
@@ -527,6 +469,10 @@ function shellQuote(value) {
 // ---------------------------------------------------------------------------
 
 fs.mkdirSync(target, { recursive: true });
+// Resolve Java before looking up or downloading any instance files. Minecraft
+// 1.12.2/Forge requires Java 8, and doing this first prevents a later launcher
+// step from waiting on a missing runtime for its long watchdog interval.
+const java8 = await resolveJava8({ runtimeDir, logger: log });
 const ref = await resolveRef();
 await downloadPack(ref);
 
@@ -535,7 +481,6 @@ if (!pack.minecraft || !pack.forge) {
   throw new Error(`pack.toml is missing [versions] (minecraft=${pack.minecraft}, forge=${pack.forge}).`);
 }
 
-const java8 = await resolveJava8();
 await installMods(java8);
 const forgeVersionId = await installForge(java8, pack.minecraft, pack.forge);
 const launchScript = await writeLaunchScript(java8, pack.minecraft, pack.forge, forgeVersionId);
@@ -548,6 +493,7 @@ console.log(
       minecraft: pack.minecraft,
       forge: pack.forge,
       ref,
+      java8,
       launchScript,
     },
     null,

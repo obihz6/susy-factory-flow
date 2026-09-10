@@ -32,6 +32,7 @@ import {
   findOracleJar,
   inspectInstanceDir,
 } from "./susy-instance-lib.mjs";
+import { resolveJava8 } from "./java8-runtime.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..", "..", "..", "..");
@@ -54,6 +55,15 @@ const noBootstrap = args.includes("--no-bootstrap");
 const bootstrapDir = path.resolve(
   flag("--bootstrap-dir") ?? process.env.SUSY_BOOTSTRAP_DIR ?? path.join(repoRoot, "temp", ".minecraft"),
 );
+
+// Java 8 is a prerequisite for the 1.12.2 client and Forge installer. Resolve
+// it before any instance scan so a missing runtime is downloaded immediately,
+// rather than allowing a later client launch to sit in its long watchdog.
+const java8 = await resolveJava8({
+  runtimeDir: `${bootstrapDir}-runtime`,
+  logger: (message) => console.error(`resolve-susy-instance: ${message}`),
+});
+process.env.SUSY_JAVA_8 = java8;
 
 function resolveResult(result) {
   if (jsonOutput) {
@@ -195,6 +205,7 @@ function resultFor(info, source) {
     prismInstanceId: launcher?.instanceId,
     prismFlatpakAppId: launcher?.flatpakAppId,
     oracleJar: findOracleJar(repoRoot),
+    java8,
   };
 }
 
