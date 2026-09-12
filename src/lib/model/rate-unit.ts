@@ -11,7 +11,7 @@ export type RateUnit = "tick" | "second" | "minute" | "hour" | "eu";
 /** The four clocks; `eu` is the odd one out (see UNITS). */
 export type TimeRateUnit = Exclude<RateUnit, "eu">;
 
-import { getVoltageTierMaxEuT } from "./tiers";
+import { GT_VOLTAGE_TIERS, getVoltageTierMaxEuT } from "./tiers";
 import type { MachineTier } from "./types";
 
 const UNITS: Record<RateUnit, { multiplier: number; per: string }> = {
@@ -111,6 +111,10 @@ export function rateUnitSuffix(fluid: boolean): string {
  * singleton pattern as the rate unit above, for the same reason.
  */
 export type PowerDisplayUnit = "eu" | Exclude<MachineTier, "DEMO">;
+
+export function isPowerDisplayUnit(value: unknown): value is PowerDisplayUnit {
+  return value === "eu" || GT_VOLTAGE_TIERS.some(({ tier }) => tier === value);
+}
 
 const powerState: { unit: PowerDisplayUnit } = { unit: "eu" };
 

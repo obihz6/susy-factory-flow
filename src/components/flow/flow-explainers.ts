@@ -1,5 +1,5 @@
 import type { EdgeThroughput, FactoryProject, ThroughputResult } from "@/lib/model/types";
-import { formatCompact, formatNumberWithThousands, formatRate, makeResourceKey } from "@/lib/model";
+import { formatCompact, formatPowerValue, formatNumberWithThousands, formatRate, makeResourceKey } from "@/lib/model";
 import {
   energyPerUnitDisplaySuffix,
   energyPerUnitDisplayValue,
@@ -76,11 +76,12 @@ const TOL = 0.005;
  * to stay visible instead of rounding to a flat 0.00.
  */
 export function formatSlotRate(value: number, kind: string): string {
-  return `${formatCompact(value * rateMultiplierForKind(kind))}${rateSuffixForKind(kind)}`;
+  return `${formatSlotRateBare(value, kind)}${rateSuffixForKind(kind)}`;
 }
 
 export function formatSlotRateBare(value: number, kind = "item"): string {
-  return formatCompact(value * rateMultiplierForKind(kind));
+  const shown = value * rateMultiplierForKind(kind);
+  return kind === "power" ? formatPowerValue(shown) : formatCompact(shown);
 }
 
 /**
@@ -94,7 +95,7 @@ export const ENERGY_READING_TEXT = "text-amber-300";
 
 /** "200 EU/Item" / "2.5 EU/L" - or "6.25 A LV/Item" under the amps dial: a canvas energy reading. */
 export function formatEnergyPerUnit(euPerUnit: number, kind: string): string {
-  return `${formatCompact(energyPerUnitDisplayValue(euPerUnit))}${energyPerUnitDisplaySuffix(kind)}`;
+  return `${formatPowerValue(energyPerUnitDisplayValue(euPerUnit))}${energyPerUnitDisplaySuffix(kind)}`;
 }
 
 /**
@@ -107,7 +108,7 @@ export function formatEnergyPerUnitParts(
   kind: string,
 ): { value: string; unit: string } {
   return {
-    value: formatCompact(energyPerUnitDisplayValue(euPerUnit)),
+    value: formatPowerValue(energyPerUnitDisplayValue(euPerUnit)),
     unit: energyPerUnitDisplaySuffix(kind).trim(),
   };
 }

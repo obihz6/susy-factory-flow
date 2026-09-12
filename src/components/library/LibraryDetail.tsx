@@ -82,8 +82,10 @@ export interface LibraryDetailEntry {
   marks?: TileMarks;
   /** The post whose comments show; a private design has none. */
   commentsPlanId?: string;
-  /** The big button: Open, or Open a copy. */
+  /** The main action, with an optional adjacent action such as Open a copy. */
   primary: { label: string; onClick: () => void };
+  secondary?: { label: string; onClick: () => void };
+  actionBusy?: boolean;
   /** The icon keys under it. */
   keys?: DetailKey[];
   /** Owned: the Edit key and the form it opens. Tags only where they exist. */
@@ -186,7 +188,11 @@ export function LibraryDetail({
           // Not next/image: the picture is served by our own route and
           // changes when the post is re-shared.
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={entry.previewUrl} alt="" className="h-full w-full object-contain compact:h-auto compact:max-h-[calc(36*var(--ui-vh))]" />
+          <img
+            src={entry.previewUrl}
+            alt=""
+            className="h-full w-full object-contain compact:h-auto compact:max-h-[calc(36*var(--ui-vh))]"
+          />
         ) : picture === "loading" ? null : (
           <div className="flex h-full w-full items-center justify-center gap-2 text-[12px] text-[var(--mc-ink-muted)] compact:h-16">
             <ImageIcon className="h-4 w-4 opacity-50" aria-hidden />
@@ -334,13 +340,19 @@ export function LibraryDetail({
             {/* OPEN, then the keys: one job each, read by their label. */}
             {editing ? null : (
               <div className="flex shrink-0 flex-col items-end gap-1 compact:w-full compact:items-stretch">
-                <button
-                  type="button"
-                  onClick={entry.primary.onClick}
-                  className="flex h-6 items-center border-2 border-[var(--mc-33)] bg-[var(--mc-61)] px-2.5 text-[11px] font-bold text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-85)] hover:border-cyan-400 hover:text-cyan-200 compact:h-9 compact:justify-center compact:text-[13px]"
-                >
-                  {entry.primary.label}
-                </button>
+                <div className="flex items-center gap-1.5 compact:w-full">
+                  {[entry.primary, ...(entry.secondary ? [entry.secondary] : [])].map((action) => (
+                    <button
+                      key={action.label}
+                      type="button"
+                      onClick={action.onClick}
+                      disabled={entry.actionBusy}
+                      className="flex h-6 items-center whitespace-nowrap border-2 border-[var(--mc-33)] bg-[var(--mc-61)] px-2.5 text-[11px] font-bold text-[var(--mc-ink)] shadow-[inset_1px_1px_0_var(--mc-85)] hover:border-cyan-400 hover:text-cyan-200 disabled:opacity-50 compact:h-9 compact:flex-1 compact:justify-center compact:text-[13px]"
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex max-w-[360px] flex-wrap items-center justify-end gap-1 compact:max-w-none compact:justify-start">
                   {entry.onEdit ? (
                     <IconKey
@@ -427,7 +439,7 @@ export function LibraryDetail({
           <div className="grid grid-cols-2 gap-4 compact:grid-cols-1">
             <div className="flex min-w-0 flex-col gap-3">
               {/* COMMENTS: only on something posted. */}
-          {entry.commentsPlanId ? <PlanComments planId={entry.commentsPlanId} /> : null}
+              {entry.commentsPlanId ? <PlanComments planId={entry.commentsPlanId} /> : null}
             </div>
             <div className="flex min-w-0 flex-col gap-3">
               {/* NEEDS AND MAKES: tight columns, all of them. */}
@@ -538,6 +550,8 @@ function StatColumns({ label, stats }: { label: string; stats: PlanResourceStat[
             >
               <span className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden">
                 <ResourceIcon
+
+                  itemZoom={1.5}
                   resource={{ ...stat, id: stat.resourceId, amount: 1 }}
                   bare
                   tooltip={false}
@@ -549,9 +563,7 @@ function StatColumns({ label, stats }: { label: string; stats: PlanResourceStat[
                         : fluidArtPixels(16)
                       : undefined
                   }
-                  className={
-                    stat.kind === "fluid" ? "!h-4 !w-4" : "!h-4 !w-4 origin-center scale-150"
-                  }
+                  className="!h-4 !w-4"
                 />
               </span>
               <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-300">

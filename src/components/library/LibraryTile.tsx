@@ -451,7 +451,7 @@ export function Face({ icon, size }: { icon: EntryIcon | undefined; size: number
     <span
       aria-hidden
       // The sprite drop shadow the board's pickers give their items.
-      className="flex shrink-0 items-center justify-center overflow-hidden [filter:drop-shadow(1px_2px_2px_rgba(0,0,0,0.55))]"
+      className="flex shrink-0 items-center justify-center overflow-hidden"
       style={{ width: size, height: size }}
     >
       {drawable && icon ? (

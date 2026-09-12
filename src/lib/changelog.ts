@@ -5,12 +5,10 @@
  * THEIR board, never how it was built. Newest first. ONE entry per release,
  * where a release is a deploy to the live site, not a commit (see version.ts).
  *
- * BE BRIEF. Every note is ONE short sentence naming what changed, and four
- * notes is the ceiling. No second sentence explaining what it used to do, no
- * reasoning, no reassurance: the reader either clicked the chip out of mild
- * curiosity or had the popup put in front of them uninvited, and neither of
- * them asked for an essay. If a change cannot be said in a line, it is
- * probably two changes or one nobody needs told about.
+ * Default to a short headline and at most four one-sentence notes. Release
+ * 3.1.4 uses eight short bullets to cover the machine audit; its full
+ * engineering explanation lives behind a link after Jack found it too verbose
+ * in the dialog. Keep the in-app notes scannable.
  *
  * The LIST, though, runs all the way back, and that is deliberate. The dialog
  * opens on the releases a given reader has not seen - usually one to four - and
@@ -48,6 +46,112 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "3.1.7",
+    date: "2026-09-11",
+    headline: "Whole item icons and consistent resource shadows",
+    notes: [
+      "Item icons keep their zoom while fitting the whole item inside its slot, with matching shadows in the item panel and input/output rows.",
+      "Fluid icons share the same shadow and have subtly rounded corners, including textured fluids and plain colour swatches.",
+      "Verified icon sizing and shadows across Chrome and Firefox, including interface scaling and board zoom.",
+      "Dangote Distillus now has adjustable power: Distillery mode scales parallels with voltage assuming 12 layers, while Tower mode keeps 12 parallels and 3× speed.",
+    ],
+  },
+  {
+    version: "3.1.6",
+    date: "2026-09-11",
+    headline: "Hatch supplies, fusion reactors and power display units",
+    notes: [
+      "Show power as *EU/t or amps at any voltage tier* using the selector beside the rate unit; your choice is remembered, resource rows update immediately, and readings below 0.01 show *<0.01* while zero stays zero.",
+      "Corrected energy-machine unlock labels: *Compact Fusion Reactor LuV, Eye of Harmony UMV, Dyson Swarm UIV, Large Naquadah Reactor ZPM, and Antimatter Forge UIV*.",
+      "*Fusion reactors keep their correct controllers, overclocks, and compact parallels.* Reactor mark fixes operating power; recipe startup requirements determine which controllers are available.",
+      "The board toolbar shrinks in stages: *mode labels, mode icons, then folded tools*, accounting for Firefox text size without squeezing buttons together.",
+      "*Water and air hatch toggles* on eligible multiblock input rows fully supply the fluid when on; switch off to restore normal supply. Hatch counts and flow limits are assumed sufficient.",
+    ],
+  },
+  {
+    version: "3.1.4",
+    date: "2026-09-11",
+    headline: "Machine accuracy, wiring, and clearer totals",
+    notes: [
+      "*Wiring and buffers preserve recipe amounts.* Fixes EBF input ratios and duplicate Auto Workbench ingredients; affected wired choices repair on load.",
+      "*Neutron Activator:* type any pipe height from four upward, with corrected whole-tick and sub-tick throughput.",
+      "*Utupu-Tanuri:* Vacuum Furnace mode now gets the correct coils, heat requirements, speed, energy discounts and parallels.",
+      "*HILE:* one real laser-source selector controls parallel capacity and voltage limits; operating power remains separate.",
+      "*PrAss:* both modes gain amps and machine-casing controls, with correct normal-mode parallels and precise-mode recipe requirements.",
+      "*LFTR Fuel 3 now produces 1A UV.* Brick Coke Ovens no longer receive free overclocks from old voltage settings.",
+      "*Machine list:* one row per card, accurate fractional Solve/Pool counts, and corrected peak/average power for shared recipes.",
+      "*Visual corrections:* fixed machine structure pictures and consistent input/output colors across drawers, targets and totals.",
+    ],
+    actions: [{
+      label: "Full engineering notes",
+      href: "https://github.com/jackwrichards/gtnh-factory-flow/blob/main/docs/releases/3.1.4.md",
+    }],
+  },
+  {
+    version: "3.1.2",
+    date: "2026-09-11",
+    headline: "Clearer machine controls",
+    notes: [
+      "Machine cards gain *touch power controls*, clearer recipe spacing and circuit icons, and consistent icon sizes in Firefox and Chrome.",
+      "Older setups keep their *original operating voltage and amps* when first converted to the new power controls.",
+      "Net resources return to *the correct side*: deficits under Inputs and surpluses under Outputs.",
+      "Private designs retry account saves after interruptions and show *whether the account has a copy*.",
+    ],
+  },
+  {
+    version: "3.1.1",
+    date: "2026-09-11",
+    headline: "A more compact workspace",
+    notes: [
+      "Public setups open as *view-only tabs*, with private copies, display settings and checklists available.",
+      "A shared header holds *compressible tabs*, with plan details above the canvas and quicker tab closing.",
+      "The compact inspector adds *Raw/Net and Peak/Average switches*, multiblock supply details and editable product targets.",
+      "Power popups *open below machines* when space above is limited, and selection uses clear blue outlines.",
+    ],
+  },
+  {
+    version: "3.1.0",
+    date: "2026-09-09",
+    headline: "Power by amps and hatch voltage",
+    notes: [
+      "Set multiblock *amps and voltage* or raw EU/t, with Shift-scroll snapping amps through 1, 4, 16, 64…",
+      "Power tooltips show *output improvements, actual draw and average consumption*, with controls alongside.",
+      "Industrial Farms offer *Full farms* planting, with manual seed counts still available.",
+      "View options include *Fixed edge width* to keep wires the same thickness at every rate.",
+    ],
+  },
+  {
+    version: "3.0.3",
+    date: "2026-09-09",
+    headline: "Narrower machine cards",
+    notes: [
+      "Machine cards are *another grid space narrower*, three in all, so more of a plan fits on the screen.",
+      "Item names, rates and bars are a *little smaller*, and more long names fit on their two lines.",
+      "Four machines were wearing *the wrong picture*: both coke ovens, the electrolyzers and the thorium reactor.",
+      "The board's *help sheet* spreads across the screen again instead of reading as one long list.",
+    ],
+  },
+  {
+    version: "3.0.2",
+    date: "2026-09-09",
+    headline: "Boards stuck in presentation colours are fixed",
+    notes: [
+      "A board left in *softened presentation colours* comes back to its normal status colours on its next load.",
+      "Exporting an image can no longer leave your board in those colours.",
+    ],
+  },
+  {
+    version: "3.0.1",
+    date: "2026-09-09",
+    headline: "Narrower cards, and What's new is back",
+    notes: [
+      "Machine cards are *two grid spaces narrower*, so more of a plan fits on the screen.",
+      "A long item name now *wraps onto two lines* instead of ending in three dots.",
+      "The machine picture sits on a *square window* between the two rails.",
+      "The *version chip* opens these notes again, with the full history behind it.",
+    ],
+  },
   {
     version: "3.0.0",
     date: "2026-09-05",

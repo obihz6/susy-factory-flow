@@ -259,6 +259,8 @@ function normalizeGregtech(domain) {
         metadata: {
           recipeMapId: recipeMap.id,
           specialValue: Number(rawRecipe.specialValue) || 0,
+          ...(recipeMap.id === "gt.recipe.fusionreactor" && Number.isFinite(rawRecipe.fusionStartupEu)
+            ? { fusionStartupEu: rawRecipe.fusionStartupEu } : {}),
         },
       });
 

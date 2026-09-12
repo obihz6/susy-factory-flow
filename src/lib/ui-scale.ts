@@ -1,8 +1,8 @@
 /**
  * The interface size, as a setting.
  *
- * The planner reads best at what a browser calls 130% (Jack, 2026-09-07: "130
- * is the new 100%"), so that is what the setting's 100% renders at. The chrome
+ * The setting's 100% renders at 117% on desktop (10% smaller than the
+ * previous 130% baseline, Jack, 2026-09-10). The chrome
  * (top bar, both columns, the toolbars over the board, dialogs, menus) is
  * scaled with CSS `zoom` on the app shell (`.ui-scale-shell` in globals.css),
  * and the board is scaled through its own camera instead: React Flow measures
@@ -27,7 +27,7 @@
  * body keeps its positioning box unzoomed (real pixels both ways) and wears
  * `.ui-zoom` on its visual box so its contents are drawn at the setting.
  *
- * Phones keep their size: on a viewport that is compact at 1:1 the base is 1,
+ * Phones use a 0.9 base on a viewport that is compact at 1:1,
  * because the drawers are 344px wide and a 390px phone has no room for a
  * third more. The base is read once per page load.
  *
@@ -42,6 +42,7 @@ import { useSyncExternalStore } from "react";
 import {
   DEFAULT_UI_SCALE_PERCENT,
   PHONE_MEDIA_QUERY,
+  UI_SCALE_PHONE_BASE,
   UI_SCALE_BASE,
   UI_SCALE_INVERSE_VAR,
   UI_SCALE_MAX_PERCENT,
@@ -88,7 +89,7 @@ export function getStoredUiScalePercent(): number {
 let baseCache: number | undefined;
 
 /**
- * 1.3 on a desktop-sized window, 1 on a phone. Read once per page load.
+ * 1.17 on a desktop-sized window, 0.9 on a phone. Read once per page load.
  * Also 1 where there is no matchMedia to ask (the server, jsdom tests): the
  * boot script is what zooms the shell, and it did not run there either.
  */
@@ -99,7 +100,7 @@ export function getUiScaleBase(): number {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return 1;
   }
-  baseCache = window.matchMedia(PHONE_MEDIA_QUERY).matches ? 1 : UI_SCALE_BASE;
+  baseCache = window.matchMedia(PHONE_MEDIA_QUERY).matches ? UI_SCALE_PHONE_BASE : UI_SCALE_BASE;
   return baseCache;
 }
 

@@ -47,30 +47,51 @@ export function cells(n: number): number {
 /* Card geometry — the sizes every node component builds itself out of.    */
 /* ---------------------------------------------------------------------- */
 
-/** Every recipe card is this wide. 18 cells. */
-// Four cells wider since 2026-09-06: the machine picture sits BETWEEN the
-// two rails now (where the arrow was) instead of in a band above them, and
-// the middle column needs 96px beside a 140px input rail and a 176px output
-// rail to show a structure render at a readable size.
-export const RECIPE_NODE_WIDTH = cells(22); // 440
+/** Every recipe card is this wide. 19 cells.
+ *
+ * The machine PICTURE sits between the two rails (2026-09-06), where the
+ * arrow was, and it is the flex-1 middle: 96px, the size a structure render
+ * reads at. THREE cells came back off the card on 2026-09-09 without ever
+ * touching it - 22 to 21 to 20 to 19 - and every one of them came out of the
+ * two item chips and the output coupling instead: 140 to 112 a chip, 34 to
+ * 30 the coupling. The picture has been 96px throughout, which is the
+ * measurement to re-check first if this number moves again.
+ *
+ * What pays for it is the NAME, which wraps to two lines rather than
+ * truncating. The chip's name column is down to 70px, so a name past about
+ * 22 characters now clips on the second line; the hover carries the whole
+ * one. That is the trade, and it is the reason not to take a fourth cell.
+ */
+export const RECIPE_NODE_WIDTH = cells(19); // 380
 
 /** Card padding either side of the rails (inside the 2px frame). */
 export const RECIPE_NODE_PAD_X = 8;
 
-/** Inner width available to the rails: 360 − 2×(2 frame + 8 pad). */
-export const RECIPE_RAIL_AREA_WIDTH = RECIPE_NODE_WIDTH - 2 * (2 + RECIPE_NODE_PAD_X); // 340
+/** Inner width available to the rails after frame and padding. */
+export const RECIPE_RAIL_AREA_WIDTH = RECIPE_NODE_WIDTH - 2 * (2 + RECIPE_NODE_PAD_X); // 360
 
 /** The input chip, and the chip half of an output row. */
-export const PORT_CHIP_WIDTH = 140; // 7 cells
+export const PORT_CHIP_WIDTH = 112;
 
 /** The `→` divider between the two rails. */
 export const RAIL_DIVIDER_WIDTH = 16;
 
-/** Chip + 2px gap + the 34px coupling (`.flow-plug` in globals.css). */
-export const OUTPUT_RAIL_WIDTH = PORT_CHIP_WIDTH + 2 + 34; // 176
+/** Chip + 2px gap + the 30px coupling (`.flow-plug` in globals.css). */
+export const OUTPUT_RAIL_WIDTH = PORT_CHIP_WIDTH + 2 + 30; // 144
 
 /** One port row. Two cells, so a rail of any length stays on the grid. */
 export const PORT_ROW_HEIGHT = cells(2); // 40
+
+/**
+ * The floor under the machine picture, which is the flex-1 middle between
+ * the two rails and grows with them. TWO port rows (2026-09-09): at three
+ * it stood a whole row taller than the rails on the commonest card of all,
+ * the one input and two outputs, and the picture floated in a window with
+ * nothing under it. Two rows against the picture's 96px reads square.
+ *
+ * It must stay a whole number of CELLS or a short card lands off the grid.
+ */
+export const PICTURE_MIN_HEIGHT = PORT_ROW_HEIGHT * 2; // 80
 
 /** The title row. */
 export const HEAD_ROW_HEIGHT = cells(2); // 40

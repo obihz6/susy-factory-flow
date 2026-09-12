@@ -6,7 +6,7 @@
  */
 import { powerPlannerData } from "../planner-data";
 import type { PowerModel, PowerSourceDefinition } from "../types";
-import { formatAmount, items, lifespanHours, liters, percent, stat, tierPower } from "./helpers";
+import { formatAmount, items, lifespanHours, liters, percent, stat } from "./helpers";
 
 const thtr: PowerSourceDefinition = {
   id: "thtr",
@@ -112,9 +112,10 @@ const lftr: PowerSourceDefinition = {
     const fuel =
       powerPlannerData.lftrFuels.find((entry) => entry.name === read.select("fuel")) ??
       powerPlannerData.lftrFuels[0];
-    // 16 amps of the fuel's base tier: "Net Amps (EV)" names the tier.
-    const tierName = fuel.powerLabel.match(/\(([A-Z]+)\)/)?.[1] ?? "EV";
-    const euPerTick = tierPower(tierName).voltage * 16;
+    // RecipeLoaderLFTR burns 100 L in 100 seconds (1 L/s). Its output
+    // metadata x4 in MTENuclearReactor agrees with EU/L divided by 20.
+    // Use that numeric value: parsing the display label missed mixed-case LuV.
+    const euPerTick = fuel.euPerLiter / 20;
     const inputs = [liters(fuel.name, 1), liters("Li2BeF4", 2)];
     const outputs = [
       liters("U-Salt", fuel.uSalt / 100),

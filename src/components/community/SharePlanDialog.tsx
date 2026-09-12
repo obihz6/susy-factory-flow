@@ -229,24 +229,55 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
             <LoaderCircle className="h-5 w-5 animate-spin" />
           </div>
         ) : !user ? (
-          // Temporarily disabled for this fork (see feature-toggles.ts): a
-          // notice where the sign-in form would be, so Share still explains
-          // itself instead of offering a login that cannot work.
-          !LOGIN_ENABLED ? (
-            <div className="space-y-3">
-              <p className="text-sm text-fg-subtle">
-                Sharing is temporarily unavailable in this build: it needs an
-                account, and community accounts are switched off here.
-              </p>
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded border border-line-strong px-3 py-1.5 text-sm hover:bg-surface-raised"
-                >
-                  Close
-                </button>
-              </div>
+          <div className="space-y-3">
+            <p className="text-sm text-fg-subtle">
+              Sharing needs an account so your posts stay yours: just a username and password.
+            </p>
+            <AuthForm onSignedIn={setUser} />
+          </div>
+        ) : linkedPost ? (
+          <div className="space-y-3">
+            <p className="text-sm">
+              This design is posted as{" "}
+              <span className="font-semibold text-fg">{linkedPost.name}</span>. Every save
+              updates the post: there is nothing to update by hand.
+            </p>
+            <p className="text-xs text-fg-subtle">
+              {isPublic
+                ? "Public: it shows in Public setups. Anyone with the link can view it and open their own copy."
+                : "Private: only you can see it. The link opens nothing for anyone else."}
+            </p>
+            {error ? <p className="text-sm text-red-500">{error}</p> : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void copyShareLink()}
+                className="inline-flex items-center gap-1.5 rounded border border-line-strong px-3 py-1.5 text-sm hover:bg-surface-raised"
+              >
+                {isLinkCopied ? (
+                  <Check className="h-4 w-4 text-emerald-500" />
+                ) : (
+                  <Link2 className="h-4 w-4" />
+                )}
+                Copy link
+              </button>
+              <button
+                type="button"
+                onClick={() => void setLinkedVisibility(!isPublic)}
+                className="inline-flex items-center gap-1.5 rounded border border-line-strong px-3 py-1.5 text-sm hover:bg-surface-raised"
+              >
+                {isPublic ? "Make it private" : "Make it public"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  openLibrary({ kind: "all" });
+                }}
+                className="inline-flex items-center gap-1.5 rounded border border-line-strong px-3 py-1.5 text-sm hover:bg-surface-raised"
+              >
+                See it in your library
+              </button>
             </div>
           ) : (
             <div className="space-y-3">

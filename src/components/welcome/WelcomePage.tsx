@@ -284,7 +284,7 @@ function CommunityShelf() {
   const open = async (plan: CommunityPlanSummary) => {
     setBusyId(plan.id);
     try {
-      await openCommunityPost({ id: plan.id, name: plan.name, isMine: plan.isMine === true });
+      await openCommunityPost({ id: plan.id, name: plan.name, isMine: plan.isMine === true, authorName: plan.authorName });
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : "Opening the setup failed.");
     } finally {

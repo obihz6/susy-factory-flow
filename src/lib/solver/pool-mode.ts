@@ -6,7 +6,8 @@ import {
 } from "../model/resources";
 import { applyRecipeInputOverrides } from "../model/recipe-input-overrides";
 import { applyMachineHandlerToRecipe } from "../model/recipe-rules";
-import { expandSharedMachines } from "../model/shared-machine";
+import { expandSharedMachines, inheritSharedMachineExpansion } from "../model/shared-machine";
+import { expandHatchSupplies } from "./hatch-supply";
 import { poolSideOf } from "../model/storage-role";
 import type {
   FactoryProject,
@@ -126,7 +127,13 @@ export function getPoolProject(project: FactoryProject): FactoryProject {
   // Shared machines expand first (one hidden node per recipe section), so
   // the pool and every diagnosis see the same graph the solve ran on.
   const expanded = expandSharedMachines(project);
-  return expanded.poolMode ? expandPool(expanded).project : expanded;
+  if (!expanded.poolMode) return expandHatchSupplies(expanded);
+  const pool = expandPool(expanded);
+  const supplied = expandHatchSupplies(pool.project);
+  // Later diagnoses/solves may receive this graph again. Preserve the pool's
+  // identity and hidden helper IDs rather than pooling the private sources.
+  expansionCache.set(supplied, { ...pool, project: supplied });
+  return supplied;
 }
 
 export function expandPool(project: FactoryProject): PoolExpansion {
@@ -363,5 +370,6 @@ export function expandPool(project: FactoryProject): PoolExpansion {
   // on to every diagnosis: asking to expand it again must answer with
   // itself, never pool the pools.
   expansionCache.set(expansion.project, expansion);
+  inheritSharedMachineExpansion(project, expansion.project);
   return expansion;
 }

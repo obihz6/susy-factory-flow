@@ -19,9 +19,7 @@ describe("ResourceIcon", () => {
   });
 
   describe("fluids", () => {
-    // The dataset carries no art for fluids — not one fluid reference has an
-    // iconPath or an atlas entry — so without a fallback they render as an empty
-    // slot everywhere in the app.
+    // Older plans and custom fluids can have no artwork; they still need a face.
     function renderFluid(id: string, displayName: string, dominantColor?: string) {
       return render(
         <ResourceIcon
@@ -143,11 +141,11 @@ describe("ResourceIcon", () => {
     );
 
     const sprite = screen.getByAltText("Iron Ingot");
-    expect(sprite.className).toContain("invisible");
+    expect(sprite.parentElement?.className).toContain("invisible");
 
     fireEvent.load(sprite);
 
-    expect(sprite.className).not.toContain("invisible");
+    expect(sprite.parentElement?.className).not.toContain("invisible");
   });
 
   it("names only the item on a slot that rotates through what it accepts", async () => {

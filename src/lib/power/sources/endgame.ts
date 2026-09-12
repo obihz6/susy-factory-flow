@@ -31,7 +31,7 @@ const lnr: PowerSourceDefinition = {
   id: "large-naquadah-reactor",
   name: "Large Naquadah Reactor",
   group: "endgame",
-  unlock: "UHV",
+  unlock: "ZPM",
   blurb: "Naquadah fuel times coolant and booster.",
   settings: [
     {
@@ -105,7 +105,7 @@ function buildFusion(compact: boolean): PowerSourceDefinition {
     id: compact ? "compact-fusion-reactor" : "fusion-reactor",
     name: compact ? "Compact Fusion Reactor" : "Fusion Reactor",
     group: "endgame",
-    unlock: compact ? "UEV" : "LuV",
+    unlock: "LuV",
     blurb: compact
       ? "The fusion recipes at 64x the scale."
       : "Makes plasma; charges its own drain.",
@@ -171,7 +171,7 @@ const eoh: PowerSourceDefinition = {
   id: "eye-of-harmony",
   name: "Eye of Harmony",
   group: "endgame",
-  unlock: "UV",
+  unlock: "UMV",
   blurb: "A materials machine with a power bill.",
   settings: [
     {
@@ -245,7 +245,7 @@ const antimatter: PowerSourceDefinition = {
   id: "antimatter",
   name: "Antimatter Forge",
   group: "endgame",
-  unlock: "UMV",
+  unlock: "UIV",
   blurb: "Grows and burns antimatter.",
   settings: [
     {
@@ -297,7 +297,7 @@ const dysonSwarm: PowerSourceDefinition = {
   id: "dyson-swarm",
   name: "Dyson Swarm",
   group: "endgame",
-  unlock: "UEV",
+  unlock: "UIV",
   blurb: "Orbital modules beaming power down.",
   settings: [
     {

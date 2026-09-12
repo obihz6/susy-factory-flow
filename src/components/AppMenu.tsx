@@ -38,7 +38,7 @@ export function AppMenu({
         onClick={() => setOpen((open) => !open)}
         aria-expanded={isOpen}
         aria-label={isOpen ? "Close the menu" : "Open the menu"}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised"
       >
         {isOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
       </button>

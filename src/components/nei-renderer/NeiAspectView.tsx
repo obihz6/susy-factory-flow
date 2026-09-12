@@ -105,7 +105,7 @@ function AspectGlyph({
     <span
       role="img"
       aria-label={name}
-      className="minecraft-pixel-art relative block max-w-none"
+      className="minecraft-pixel-art relative block shrink-0 max-w-none"
       style={{ width: size, height: size }}
     >
       <span

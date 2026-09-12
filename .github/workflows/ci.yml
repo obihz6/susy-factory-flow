@@ -35,3 +35,17 @@ jobs:
       - run: npm run typecheck
 
       - run: npm run test
+
+  icon-browsers:
+    name: Icon sizing in Chromium and Firefox
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium firefox
+      - run: npm run test:icons:browsers

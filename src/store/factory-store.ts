@@ -1,6 +1,10 @@
 "use client";
 
-import { create } from "zustand";
+import { normalizeFullFarms } from "@/lib/model/full-farms";
+
+import { normalizeProjectHatchInputs } from "@/lib/solver/hatch-input";
+
+import { create, type StateCreator, type StoreApi } from "zustand";
 import { createEmptyProject } from "@/examples";
 import type { DatasetManifest, RecipeDataset } from "@/lib/datasets";
 import {
@@ -25,12 +29,13 @@ import { normalizeLoadedProject } from "@/lib/model/project-normalize";
 import { playBoardSound, quietBoardSoundsFor, suppressBoardSound } from "@/lib/board-sounds";
 import { GT_VOLTAGE_TIERS } from "@/lib/model/tiers";
 import {
-  setActivePowerDisplayUnit,
   setActiveRateUnit,
+  setActivePowerDisplayUnit,
   type PowerDisplayUnit,
   type RateUnit,
 } from "@/lib/model/rate-unit";
 import { registerBooksSink, solveBooks, solveBooksNow } from "./solve-books";
+import { applyEdgeInputOverride } from "@/lib/model/edge-input-overrides";
 import { applyRecipeInputOverrides, inputOverrideAmount } from "@/lib/model/recipe-input-overrides";
 import type { AlternativeCycleFace } from "@/lib/nei/alternative-cycle";
 import { createCropFarmPlaceholderRecipe, isCropFarmRecipe } from "@/lib/model/passive-production";
@@ -148,6 +153,9 @@ export interface BoardCameraRequest {
 }
 
 interface FactoryStore {
+  /** Public viewing sessions never accept edits to their project. */
+  isReadOnly: boolean;
+  loadViewedProject: (project: FactoryProject) => void;
   checklistMode: boolean;
   setChecklistMode: (active: boolean) => void;
   toggleChecklist: (kind: "cards" | "edges", ids: string[]) => void;
@@ -241,7 +249,7 @@ interface FactoryStore {
   /** Board-wide display unit for rates: per tick / second / minute / hour. */
   rateUnit: RateUnit;
   setRateUnit: (unit: RateUnit) => void;
-  /** EU/t, or amps of a chosen tier - the board-wide power display dial. */
+  /** Display only: EU/t or equivalent amps at a chosen voltage. */
   powerDisplayUnit: PowerDisplayUnit;
   setPowerDisplayUnit: (unit: PowerDisplayUnit) => void;
   /** Recalculate the books by hand: what the solve key does while automatic recalculation is off. */
@@ -941,10 +949,63 @@ export interface PendingResourceConnection {
 /** Never reused within a session, so a chip's dismiss can name its entry. */
 let lastRecipeAddId = 0;
 
-export const useFactoryStore = create<FactoryStore>((set, get) => ({
+function withViewerGuard(
+  initialize: (
+    set: StoreApi<FactoryStore>["setState"],
+    get: StoreApi<FactoryStore>["getState"],
+    write: StoreApi<FactoryStore>["setState"],
+    setPresentation: StoreApi<FactoryStore>["setState"],
+  ) => FactoryStore,
+): StateCreator<FactoryStore> {
+  return (write, get) => {
+    // One backstop for every edit path, including async completions and keyboard
+    // actions. A rejected edit must not change the solve or undo history either.
+    const set: typeof write = (update) =>
+      write((state) => {
+        const next = typeof update === "function" ? update(state) : update;
+        if (state.isReadOnly && next.project && next.project !== state.project)
+          return state;
+        return next;
+      });
+    // System hydration and board-window navigation are permitted in a viewer.
+    // Neither creates edit history or a saved personal design.
+    const setPresentation: typeof write = (update) => {
+      if (!get().isReadOnly) {
+        set(update);
+        return;
+      }
+      write((state) => {
+        const next = typeof update === "function" ? update(state) : update;
+        return {
+          ...next,
+          undoHistory: state.undoHistory,
+          redoHistory: state.redoHistory,
+        };
+      });
+    };
+    return initialize(set, get, write, setPresentation);
+  };
+}
+
+export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, write, setPresentation) => ({
+  isReadOnly: false,
+  loadViewedProject: (project) => {
+    quietBoardSoundsFor(1500);
+    const nextProject = normalizeLoadedProject(project);
+    write({
+      isReadOnly: true,
+      project: nextProject,
+      lastResult: solveBooks(nextProject),
+      undoHistory: [], redoHistory: [],
+      selectedNodeId: undefined, selectedBoardIds: [],
+      pendingBoardSelectionIds: undefined, pendingResourceConnection: undefined,
+      nodeColorPaintMode: undefined, checklistMode: false,
+      recipeBrowserResource: undefined, powerMenuOpen: false,
+    });
+  },
   checklistMode: false,
   setChecklistMode: (checklistMode) => set({ checklistMode, ...(checklistMode ? { nodeColorPaintMode: undefined, pendingResourceConnection: undefined } : {}) }),
-  toggleChecklist: (kind, ids) => set((state) => {
+  toggleChecklist: (kind, ids) => setPresentation((state) => {
     const valid = new Set(kind === "cards"
       ? [...state.project.nodes, ...(state.project.storages ?? [])].map((entry) => entry.id)
       : state.project.edges.map((entry) => entry.id));
@@ -955,12 +1016,14 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     const restore = targets.every((id) => checked.has(id));
     for (const id of targets) { if (restore) checked.delete(id); else checked.add(id); }
     playBoardSound(restore ? "checklistRestore" : "checklistCheck");
-    return withProjectHistory(state, { project: touchProject({ ...state.project, checklist: { ...checklist, [kind]: [...checked] } }) });
+    const project = { ...state.project, checklist: { ...checklist, [kind]: [...checked] } };
+    return state.isReadOnly ? { project } : withProjectHistory(state, { project: touchProject(project) });
   }),
-  clearChecklist: () => set((state) => {
+  clearChecklist: () => setPresentation((state) => {
     if (!state.project.checklist) return state;
     playBoardSound("checklistRestore");
-    return withProjectHistory(state, { project: touchProject({ ...state.project, checklist: undefined }) });
+    const project = { ...state.project, checklist: undefined };
+    return state.isReadOnly ? { project } : withProjectHistory(state, { project: touchProject(project) });
   }),
   project: initialProject,
   undoHistory: [],
@@ -1013,11 +1076,14 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     setActiveRateUnit(unit);
     set({ rateUnit: unit });
   },
+
   powerDisplayUnit: "eu",
   setPowerDisplayUnit: (unit) => {
-    // Same view-only rule as the rate unit above.
     setActivePowerDisplayUnit(unit);
     set({ powerDisplayUnit: unit });
+    try {
+      localStorage.setItem("gtnh-factory-flow.power-display-unit.v1", unit);
+    } catch { /* Storage can be unavailable; the display still works. */ }
   },
   solveNow: () => {
     set({ lastResult: solveBooksNow(get().project) });
@@ -1041,7 +1107,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   markHydratedProject: (project) => {
     quietBoardSoundsFor(1500);
     const nextProject = normalizeLoadedProject(project);
-    set({
+    write({
+      isReadOnly: false,
       project: nextProject,
       selectedNodeId: nextProject.nodes[0]?.id,
       selectedRecipeId: nextProject.nodes[0]?.recipeId ?? nextProject.recipes[0]?.id,
@@ -1093,7 +1160,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     }));
   },
   setDataset: (dataset) => {
-    set((state) => ({
+    setPresentation((state) => ({
       dataset,
       project: refreshProjectResourceIcons(state.project, dataset),
       recipeResourceHistory: refreshResourceHistoryIcons(state.recipeResourceHistory, dataset),
@@ -1110,7 +1177,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     }));
   },
   refreshProjectRecipes: (recipes, migration = {}) => {
-    set((state) => {
+    setPresentation((state) => {
       if (recipes.length === 0) {
         return state;
       }
@@ -1206,6 +1273,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     scheduleIdleBrowserWork(() => saveResourceHistory([]));
   },
   browseResource: (resource, mode = "recipes") => {
+    if (get().isReadOnly) return;
     let nextHistory: RecipeBrowserResource[] | undefined;
     set((state) => {
       const recipeResourceHistory = updateResourceHistory(state.recipeResourceHistory, resource);
@@ -2459,7 +2527,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     });
   },
   setPoolCellRatios: (ratios) => {
-    set((state) => {
+    setPresentation((state) => {
       const current = state.project.poolCellRatios ?? {};
       let changed = false;
       const merged = { ...current };
@@ -3764,7 +3832,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     return createdBoardId;
   },
   expandPocket: (pocketId) => {
-    set((state) => {
+    setPresentation((state) => {
       const pocket = (state.project.pockets ?? []).find((entry) => entry.id === pocketId);
       if (!pocket || pocket.expanded) {
         return state;
@@ -3897,7 +3965,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     });
   },
   minimizePocket: (pocketId) => {
-    set((state) => {
+    setPresentation((state) => {
       const pocket = (state.project.pockets ?? []).find((entry) => entry.id === pocketId);
       if (!pocket?.expanded) {
         return state;
@@ -4413,7 +4481,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       });
     });
   },
-}));
+})));
 
 function withProjectHistory(
   state: FactoryStore,
@@ -4528,6 +4596,7 @@ function addRecipeNodeToState(
   const node: FactoryNode = {
     id: createId("node"),
     recipeId: recipe.id,
+    cropFullFarmCount: isCropFarmRecipe(recipe) ? 1 : undefined,
     machineCount: 1,
     parallel: 1,
     machineHandlerId: spawnHandler?.id,
@@ -4624,6 +4693,7 @@ function addConnectedRecipeNodeToState(
   const nextNode: FactoryNode = {
     id: createId("node"),
     recipeId: recipe.id,
+    cropFullFarmCount: isCropFarmRecipe(recipe) ? 1 : undefined,
     machineCount: 1,
     parallel: 1,
     machineHandlerId: spawnHandler?.id,
@@ -5140,83 +5210,6 @@ function isContextualRecipeInput(
 
 function applyEdgeInputOverrides(project: FactoryProject, edges: FactoryEdge[]): FactoryProject {
   return edges.reduce((nextProject, edge) => applyEdgeInputOverride(nextProject, edge), project);
-}
-
-function applyEdgeInputOverride(
-  project: FactoryProject,
-  edge: FactoryEdge,
-  resource?: Pick<
-    ResourceAmount,
-    "kind" | "id" | "displayName" | "iconPath" | "iconAtlas" | "dominantColor" | "tooltip"
-  > &
-    Partial<Pick<ResourceAmount, "amount">>,
-): FactoryProject {
-  // The pick lands on the SECTION the wire names: a shared machine's second
-  // recipe keeps its own oredict choices.
-  const targetSection = splitSectionHandleId(edge.targetHandle).section;
-  const targetNode = nodeSectionForHandle(project, edge.target, edge.targetHandle);
-  const targetRecipe = project.recipes.find((recipe) => recipe.id === targetNode?.recipeId);
-  if (!targetNode || !targetRecipe) {
-    return project;
-  }
-  // Power cards: never stamp an input override. Their slots are exact (no
-  // oredict, no alternatives), and a stamped override OUTLIVES the wire -
-  // wiring benzene once left the slot benzene through every later fuel
-  // switch, because the override repainted whatever the rebuilt recipe said.
-  if (targetRecipe.power) {
-    return project;
-  }
-
-  const targetHandle = parseResourceHandleId(edge.targetHandle);
-  const inputIndex =
-    targetHandle?.side === "input" && targetHandle.slotIndex !== undefined
-      ? targetHandle.slotIndex
-      : targetRecipe.inputs.findIndex(
-          (input) =>
-            isRecipeInputConsumed(input) &&
-            resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, input),
-        );
-  const input = inputIndex >= 0 ? targetRecipe.inputs[inputIndex] : undefined;
-  if (
-    !input ||
-    !isRecipeInputConsumed(input) ||
-    !resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, input)
-  ) {
-    return project;
-  }
-
-  const alternative = input.alternatives?.find(
-    (entry) => entry.kind === edge.resourceKind && entry.id === edge.resourceId,
-  );
-  const override: Recipe["inputs"][number] = {
-    ...input,
-    ...alternative,
-    kind: edge.resourceKind,
-    id: edge.resourceId,
-    // Only converts when the kind actually changes — see the helper. Taking
-    // the cell's fluid amount unconditionally inflated same-kind cell wiring
-    // by 1000×.
-    amount: resource?.amount ?? inputOverrideAmount(input, edge.resourceKind, alternative),
-    displayName:
-      resource?.displayName ?? edge.label ?? alternative?.displayName ?? input.displayName,
-    iconPath: resource?.iconPath ?? alternative?.iconPath ?? input.iconPath,
-    iconAtlas: resource?.iconAtlas ?? alternative?.iconAtlas ?? input.iconAtlas,
-    dominantColor: resource?.dominantColor ?? alternative?.dominantColor ?? input.dominantColor,
-    tooltip: resource?.tooltip ?? alternative?.tooltip ?? input.tooltip,
-    alternatives: undefined,
-  };
-
-  return {
-    ...project,
-    nodes: project.nodes.map((node) =>
-      node.id === edge.target
-        ? withSectionInputOverrides(node, targetSection, {
-            ...targetNode.recipeInputOverrides,
-            [String(inputIndex)]: override,
-          })
-        : node,
-    ),
-  };
 }
 
 /**
@@ -5925,7 +5918,7 @@ function touchProject(project: FactoryProject): FactoryProject {
     // a custom rate card never keeps a resource after its last wire goes —
     // whether the wire, the machine at the far end or a whole selection was
     // what got deleted.
-    ...releaseCustomRates(project),
+    ...normalizeProjectHatchInputs(normalizeFullFarms(releaseCustomRates(project))),
     metadata: {
       ...project.metadata,
       updatedAt: new Date().toISOString(),

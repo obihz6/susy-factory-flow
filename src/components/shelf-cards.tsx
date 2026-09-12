@@ -122,6 +122,7 @@ function IoSection({
         <div key={`${stat.kind}:${stat.resourceId}`} className="flex items-center gap-1.5 py-0.5">
           <span className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden">
             <ResourceIcon
+              itemZoom={1.5}
               resource={{ ...stat, id: stat.resourceId, amount: 1 }}
               bare
               tooltip={false}
@@ -129,7 +130,7 @@ function IoSection({
               iconPixelSize={
                 stat.kind === "fluid" ? (isSwatchFluid(stat) ? 36 : fluidArtPixels(20)) : undefined
               }
-              className={stat.kind === "fluid" ? "!h-5 !w-5" : "!h-5 !w-5 origin-center scale-150"}
+              className="!h-5 !w-5"
             />
           </span>
           <span className="min-w-0 flex-1 truncate text-[12px] text-slate-200">

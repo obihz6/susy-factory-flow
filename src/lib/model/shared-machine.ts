@@ -194,6 +194,11 @@ export function hasSharedMachines(project: Pick<FactoryProject, "nodes">): boole
 
 const expansionCache = new WeakMap<FactoryProject, FactoryProject>();
 
+/** A later graph expansion preserves the already-expanded recipe sections. */
+export function inheritSharedMachineExpansion(from: FactoryProject, to: FactoryProject): void {
+  if (expansionCache.get(from) === from) expansionCache.set(to, to);
+}
+
 /**
  * The plan with every extra section stood up as its own hidden node, wires
  * re-pointed at the section they land on (prefix stripped). Memoized per

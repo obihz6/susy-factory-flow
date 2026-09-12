@@ -936,6 +936,8 @@ interface SolveContext {
 interface PlannedRequest extends GridRouteRequest {
   allSources: GridEndpoint[];
   allTargets: GridEndpoint[];
+  /** Rim-to-rim gap, independent of the docks eventually selected. */
+  distanceCells: number;
 }
 
 /** A found route before it is installed: its ends and its vertex chain in cells. */
@@ -1027,6 +1029,7 @@ export function solveGridRoutes(
       targets: pin.request.targets.filter(isFiniteEndpoint),
       allSources: pin.request.sources.filter(isFiniteEndpoint),
       allTargets: pin.request.targets.filter(isFiniteEndpoint),
+      distanceCells: endpointGapCells(pin.request.sources, pin.request.targets),
     };
     if (vertices && source && target) {
       const state = install(context, request, { source, target, vertices, cost: 0 });
@@ -1381,6 +1384,7 @@ function planDocks(requests: GridRouteRequest[]): PlannedRequest[] {
     targets: request.targets.filter(isFiniteEndpoint),
     allSources: request.sources.filter(isFiniteEndpoint),
     allTargets: request.targets.filter(isFiniteEndpoint),
+    distanceCells: endpointGapCells(request.sources, request.targets),
   }));
   for (const request of copies) {
     for (const end of ["source", "target"] as const) {
@@ -1477,6 +1481,32 @@ function planDocks(requests: GridRouteRequest[]): PlannedRequest[] {
     }
   }
   return copies;
+}
+
+/** Nearby cards cannot earn diagonals by docking on their far sides. */
+function endpointGapCells(sources: GridEndpoint[], targets: GridEndpoint[]): number {
+  const a = endpointsRect(sources.filter(isFiniteEndpoint));
+  const b = endpointsRect(targets.filter(isFiniteEndpoint));
+  if (!a || !b) return 0;
+  return Math.max(0, a.left - b.right, b.left - a.right, a.top - b.bottom, b.top - a.bottom) / BOARD_GRID;
+}
+
+/**
+ * Move docks apart instead of rewarding loops that merely add wire length.
+ * A soft preference keeps connections possible when other cards block the
+ * roomier docks. Fixed endpoints and explicitly pinned trips stay put.
+ * Actual straight shots are exempted by the caller, even at one cell.
+ */
+function crampedDockCost(request: PlannedRequest, source: GridEndpoint, target: GridEndpoint): number {
+  if (
+    (request.allSources.length < 2 && request.allTargets.length < 2) ||
+    request.waypoints?.length ||
+    (request.sourceCardId !== undefined && request.sourceCardId === request.targetCardId)
+  ) {
+    return 0;
+  }
+  const travel = (Math.abs(source.x - target.x) + Math.abs(source.y - target.y)) / BOARD_GRID;
+  return Math.max(0, T.dockTravelCells - travel) * (T.turn90 + T.earlyTurn + BOARD_GRID);
 }
 
 /**
@@ -1702,7 +1732,7 @@ function findRoute(context: SolveContext, request: PlannedRequest): RouteFound |
   // grid space, that's fine"): two cards a cell apart have no legal
   // vertex between them - each dock's apron is the other card's edge -
   // so a source dock whose apron IS a facing target dock, straight
-  // across or at 45°, connects there and then, no search.
+  // across, connects there and then, no search. Diagonals need two cells.
   let best: RouteFound | undefined;
   const consider = (found: RouteFound): boolean => {
     if (!best || found.cost < best.cost) {
@@ -1764,7 +1794,7 @@ function findRoute(context: SolveContext, request: PlannedRequest): RouteFound |
 /**
  * TOUCHING DOCKS: two cards one grid space apart have no vertex between
  * them - each dock's apron is the other card's edge - so a source dock
- * whose apron IS a facing target dock, straight across or at 45°,
+ * whose apron IS a facing target dock, straight across,
  * connects there and then. The only route the search cannot find by
  * itself; every longer straight shot the scoring finds on its own.
  */
@@ -1782,29 +1812,22 @@ function directDock(
   }
   let best: RouteFound | undefined;
   for (const source of sources) {
-    const normal = outwardDirection(source.side);
-    for (const dir of [normal, (normal + 1) % 8, (normal + 7) % 8]) {
-      const x = source.x + DIR_DX[dir] * BOARD_GRID;
-      const y = source.y + DIR_DY[dir] * BOARD_GRID;
-      for (const target of targetsAt.get(`${Math.round(x)},${Math.round(y)}`) ?? []) {
-        const back = outwardDirection(target.side);
-        const delta = (dir + 4 - back + 8) % 8;
-        if (delta !== 0 && delta !== 1 && delta !== 7) {
-          continue;
-        }
-        // Leaving or landing off the normal is the 45° bend it is.
-        const bends = (dir === normal ? 0 : 1) + ((dir + 4) % 8 === back ? 0 : 1);
-        const vertex = { x: Math.round(x / BOARD_GRID), y: Math.round(y / BOARD_GRID) };
-        const cost =
-          (dir % 2 === 0 ? BOARD_GRID : BOARD_GRID * T.diagonalLength) +
-          (source.penalty ?? 0) +
-          (target.penalty ?? 0) +
-          bends * T.turn45 +
-          context.occupancy.stepCrossings(DIR_AXIS[dir], vertex.x, vertex.y, vertex.x, vertex.y, false) *
-            T.crossing;
-        if (!best || cost < best.cost) {
-          best = { source, target, vertices: [vertex], cost };
-        }
+    const dir = outwardDirection(source.side);
+    const x = source.x + DIR_DX[dir] * BOARD_GRID;
+    const y = source.y + DIR_DY[dir] * BOARD_GRID;
+    for (const target of targetsAt.get(`${Math.round(x)},${Math.round(y)}`) ?? []) {
+      if ((dir + 4) % 8 !== outwardDirection(target.side)) {
+        continue;
+      }
+      const vertex = { x: Math.round(x / BOARD_GRID), y: Math.round(y / BOARD_GRID) };
+      const cost =
+        BOARD_GRID +
+        (source.penalty ?? 0) +
+        (target.penalty ?? 0) +
+        context.occupancy.stepCrossings(DIR_AXIS[dir], vertex.x, vertex.y, vertex.x, vertex.y, false) *
+          T.crossing;
+      if (!best || cost < best.cost) {
+        best = { source, target, vertices: [vertex], cost };
       }
     }
   }
@@ -1837,7 +1860,9 @@ function routeWithinWindow(
   // A card wired to itself routes with 90° turns ONLY (Jack, 2026-09-08):
   // no diagonal exits, landings or runs. A loop that left at 45° and
   // turned back on itself read as a scribble on the card's own edge.
-  const straightOnly = request.sourceCardId !== undefined && request.sourceCardId === request.targetCardId;
+  const straightOnly =
+    !T.diagonals || request.distanceCells < T.diagonalDistanceCells ||
+    (request.sourceCardId !== undefined && request.sourceCardId === request.targetCardId);
   const sourceAprons = sources.map(apronPoint);
   const targetAprons = targets.map(apronPoint);
   const stops = waypoints.map((point) => ({ x: snapLine(point.x), y: snapLine(point.y) }));
@@ -2008,7 +2033,8 @@ function routeWithinWindow(
         }
         let clean: number | undefined = apron;
         let cleanCost = 0;
-        for (let step = 1; step < T.cleanCells && clean !== undefined; step += 1) {
+        const cleanCells = outward === normal ? T.cleanCells : Math.max(2, T.cleanCells);
+        for (let step = 1; step < cleanCells && clean !== undefined; step += 1) {
           const xi = Math.floor(clean / height);
           const yi = clean % height;
           const cost = priceStep(xi, yi, outward);
@@ -2019,6 +2045,8 @@ function routeWithinWindow(
             cleanCost += cost;
           }
         }
+        // Never offer a one-cell diagonal stub, even in a tight corridor.
+        if (outward !== normal && clean === undefined) continue;
         list.push({
           endpointIndex: i,
           apron,
@@ -2359,7 +2387,21 @@ function routeWithinWindow(
           if (landsTooClose(startOf[currentState], goal)) {
             continue;
           }
-          const cost = currentG + goal.penalty;
+          const source = sources[starts[startOf[currentState]].endpointIndex];
+          const target = targets[goal.endpointIndex];
+          let dockCost = goal.landing ? crampedDockCost(request, source, target) : 0;
+          if (dockCost > 0) {
+            const normal = outwardDirection(source.side);
+            const aligned = DIR_DX[normal] === 0 ? source.x === target.x : source.y === target.y;
+            if (aligned && outwardDirection(target.side) === (normal + 4) % 8) {
+              // Exempt the actual straight path, not just aligned docks:
+              // an obstacle between them can still force a bent route.
+              let state = currentState;
+              while (state >= 0 && (state & 7) === normal) state = cameFrom[state];
+              if (state < 0) dockCost = 0;
+            }
+          }
+          const cost = currentG + goal.penalty + dockCost;
           if (cost < goalCost) {
             goalCost = cost;
             goalState = currentState;
@@ -2393,9 +2435,18 @@ function routeWithinWindow(
         if (turn !== turn) {
           continue;
         }
-        const stepCost = priceStep(xi, yi, dir);
+        let stepCost = priceStep(xi, yi, dir);
         if (stepCost === STEP_BLOCKED) {
           continue;
+        }
+        // Enter a diagonal with two checked cells, then extend it one cell
+        // at a time. This forbids tiny bevels without excluding odd lengths
+        // or adding another dimension to the search state.
+        const steps = (dir & 1) === 1 && dir !== currentDir ? 2 : 1;
+        if (steps === 2) {
+          const secondCost = priceStep(xi + DIR_DX[dir], yi + DIR_DY[dir], dir);
+          if (secondCost === STEP_BLOCKED) continue;
+          stepCost += secondCost;
         }
         let weave = 0;
         if (dir !== currentDir) {
@@ -2404,7 +2455,7 @@ function routeWithinWindow(
             weave += T.crossing / 2;
           }
         }
-        const nextState = (vertexAt(xi + DIR_DX[dir], yi + DIR_DY[dir]) << 3) | dir;
+        const nextState = (vertexAt(xi + DIR_DX[dir] * steps, yi + DIR_DY[dir] * steps) << 3) | dir;
         const cornerCost = context.occupancy.cornerCrossings(xi + cx0, yi + cy0, currentDir, dir) * T.crossing;
         const nextG = currentG + stepCost + turn + weave + cornerCost;
         touch(nextState);
@@ -2451,8 +2502,8 @@ function routeWithinWindow(
         : 0;
     const penalty = (sources[start.endpointIndex]?.penalty ?? 0) + stacked + start.exitCost;
     seeds.push({
-      state: (start.apron << 3) | start.outward,
-      g: penalty,
+      state: (((start.outward & 1) === 1 ? start.clean! : start.apron) << 3) | start.outward,
+      g: penalty + ((start.outward & 1) === 1 ? start.cleanCost : 0),
       startIndex: variant,
     });
     let zx = Math.floor(start.apron / height);
@@ -2487,14 +2538,9 @@ function routeWithinWindow(
     }
     takeLeg(leg);
     totalCost += leg.cost;
-    seeds = [];
-    for (let dir = 0; dir < 8; dir += 1) {
-      const turn = TURN_COSTS[leg.arrivalDir * 8 + dir];
-      if (turn !== turn) {
-        continue;
-      }
-      seeds.push({ state: (stopVertex << 3) | dir, g: turn, startIndex: leg.startIndex });
-    }
+    // Preserve arrival direction: the next search prices the actual turn
+    // and enforces its minimum diagonal run, including at a pinned dot.
+    seeds = [{ state: (stopVertex << 3) | leg.arrivalDir, g: 0, startIndex: leg.startIndex }];
   }
 
   // Goals: landing straight. The clean point must be reached heading in
@@ -2510,11 +2556,11 @@ function routeWithinWindow(
         : 0;
     const penalty = (targets[end.endpointIndex]?.penalty ?? 0) + stacked + end.exitCost;
     goals.push({
-      vertex: end.apron,
+      vertex: (end.outward & 1) === 1 ? end.clean! : end.apron,
       dir: -1,
-      penalty: penalty + T.earlyTurn,
+      penalty: penalty + T.earlyTurn + ((end.outward & 1) === 1 ? end.cleanCost : 0),
       endpointIndex: end.endpointIndex,
-      tail: [],
+      tail: (end.outward & 1) === 1 ? [end.apron] : [],
       landing: true,
     });
     if (end.clean === undefined) {
@@ -2548,6 +2594,9 @@ function routeWithinWindow(
   mergedVertices.push(...finalLeg.goal.tail);
 
   const startVariant = starts[sourceIndex ?? finalLeg.startIndex];
+  if (startVariant && (startVariant.outward & 1) === 1) {
+    mergedVertices.unshift(startVariant.apron);
+  }
   const source = sources[startVariant?.endpointIndex ?? 0] ?? sources[0];
   const target = targets[finalLeg.goal.endpointIndex] ?? targets[0];
   const points = mergedVertices.map((vertex) => ({

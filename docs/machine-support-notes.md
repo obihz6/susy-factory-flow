@@ -1,5 +1,10 @@
 # Machine support notes
 
+This is the historical tooltip-parser survey. For the September player-feedback
+pass and completed fixes, see [the resolution log](machine-feedback-audit.md).
+In particular, the original Utupu-Tanuri entry below did not detect that the
+Vacuum Furnace map bypassed its curated coil math; that is fixed for 3.1.3.
+
 Triage of every machine from `machine-tooltip-survey-2.9.md` whose tooltip
 contains stat-looking lines. Status meanings:
 

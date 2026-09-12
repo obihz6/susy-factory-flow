@@ -354,6 +354,7 @@ export function buildMachineHandlerTemplates(machineType, catalysts) {
 }
 
 function isMultiblockCatalyst(catalyst, tooltip) {
+  if (typeof catalyst?.multiblock === "boolean") return catalyst.multiblock;
   const sourceClass = String(catalyst?.sourceClass ?? "");
   if (/\.multi(?:block)?s?\./i.test(sourceClass) || /multiblock/i.test(sourceClass)) {
     return true;

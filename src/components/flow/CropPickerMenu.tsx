@@ -222,7 +222,7 @@ export function CropPickerMenu({
                 <div className="mt-1.5 space-y-1">
                   {crop.outputs.map((output) => (
                     <div key={output.id} className="flex items-center gap-1.5">
-                      <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden [filter:drop-shadow(1px_1px_1px_rgba(0,0,0,0.55))]">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden">
                         <ResourceIcon
                           resource={{ ...output, chance: undefined }}
                           bare
@@ -273,9 +273,11 @@ export function CropPickerMenu({
                     machineOnly && !onIndustrialFarm ? "opacity-35 saturate-50" : "",
                   ].join(" ")}
                 >
-                  <span className="grid h-12 w-12 place-items-center overflow-hidden [filter:drop-shadow(1px_2px_2px_rgba(0,0,0,0.55))]">
+                  <span className="grid h-12 w-12 place-items-center overflow-hidden">
                     {crop.outputs[0] ? (
                       <ResourceIcon
+
+                        itemZoom={1.4}
                         // Chance badges are spelled out in the hover instead.
                         resource={{ ...crop.outputs[0], chance: undefined }}
                         bare
@@ -283,7 +285,6 @@ export function CropPickerMenu({
                         showAmount={false}
                         showConsumedState={false}
                         size="md"
-                        className="scale-[1.4]"
                       />
                     ) : null}
                   </span>

@@ -7,7 +7,7 @@ import type {
   ResourceKind,
   ThroughputResult,
 } from "@/lib/model/types";
-import { isFreeRecipeInput, isRecipeInputConsumed, makeResourceKey } from "@/lib/model";
+import { isFreeRecipeInput, isOreDictionaryResource, isRecipeInputConsumed, makeResourceKey } from "@/lib/model";
 import { getPoolProject, isPoolStorageId } from "@/lib/solver/pool-mode";
 import { findDeathSpirals, type DeathSpiral } from "./death-spiral";
 import { findClogLocks, type ClogLock } from "./clog-lock";
@@ -17,6 +17,7 @@ import { collectTrashNodeIds } from "@/lib/model/trash";
 import { describeStorage, getStorageRole, getStorageRoles } from "@/lib/model/storage-role";
 import { makeResourceHandleId, sectionHandleId } from "./resource-handles";
 import { sectionOwnerId } from "@/lib/model/shared-machine";
+import { getInputSupplyHatch, isHatchSuppliedInput } from "@/lib/model/hatch-supply";
 import { getSetupRules, type ResolvedSetupRules } from "@/lib/model/setup-rules";
 import { energyPerUnit } from "@/lib/model/rate-unit";
 
@@ -1630,6 +1631,8 @@ function relayedBufferAskPerSecond(
  * recipe slots exactly the way the solver pools their flows.
  */
 export interface RailPort {
+  supplyHatch?: string;
+  hatchSupplied?: boolean;
   side: "input" | "output";
   key: string;
   kind: ResourceKind;
@@ -1713,6 +1716,8 @@ export function buildRailPorts(
   const nodesById = new Map(project.nodes.map((entry) => [entry.id, entry]));
   const recipesById = new Map(project.recipes.map((entry) => [entry.id, entry]));
   const outletCounts = countSourceOutlets(project);
+  const hatchNode = nodesById.get(nodeId);
+  const hatchRecipe = hatchNode ? recipesById.get(hatchNode.recipeId) : undefined;
   const machineNameOf = (id: string): string => {
     const node = nodesById.get(id);
     const recipe = node ? recipesById.get(node.recipeId) : undefined;
@@ -1748,9 +1753,22 @@ export function buildRailPorts(
       }
       seen.add(key);
 
-      const resource = resources.find(
+      const slot = resources.find(
         (entry) => entry.kind === kind && entry.id === resourceId,
       );
+      // Keep the dictionary's matching/handle identity, but show an actual
+      // accepted item, as the recipe search does before a choice is wired in.
+      const face = slot && isOreDictionaryResource(slot)
+        ? slot.alternatives?.find((entry) => entry.kind === slot.kind && !isOreDictionaryResource(entry))
+        : undefined;
+      const resource = slot && face ? {
+        ...slot,
+        displayName: face.displayName,
+        iconPath: face.iconPath,
+        iconAtlas: face.iconAtlas,
+        dominantColor: face.dominantColor,
+        tooltip: face.tooltip,
+      } : slot;
       if (isInput && resource && !isRecipeInputConsumed(resource)) {
         return;
       }
@@ -1919,7 +1937,11 @@ export function buildRailPorts(
         key,
         kind,
         resourceId,
-        displayName: displayName ?? resource?.displayName ?? resourceId,
+        supplyHatch: isInput && hatchNode && hatchRecipe
+          ? getInputSupplyHatch(hatchRecipe, hatchNode, { kind, id: resourceId }) : undefined,
+        hatchSupplied: Boolean(isInput && hatchNode && hatchRecipe
+          && isHatchSuppliedInput(hatchRecipe, hatchNode, { kind, id: resourceId })),
+        displayName: face?.displayName ?? displayName ?? resource?.displayName ?? resourceId,
         handleId: handleFor(side, { kind, id: resourceId }),
         resource,
         connected,
@@ -2151,4 +2173,3 @@ export function buildLimitLadder(
   }
   return capped;
 }
-

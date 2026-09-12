@@ -781,6 +781,7 @@ export function RecipeBrowser({ onLoadDatasetVersion }: RecipeBrowserProps) {
       inputPicks?: RecipeInputPicks,
     ) => {
       const currentState = useFactoryStore.getState();
+      if (currentState.isReadOnly) return;
       const currentResource = currentState.recipeBrowserResource
         ? {
             ...currentState.recipeBrowserResource,

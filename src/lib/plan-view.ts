@@ -33,6 +33,7 @@ export function capturePlanView(): PlanViewState {
     canvasTheme: board.canvasTheme,
     // No `lineHeatMode` any more: line colour rides the status glance mode,
     // which the snapshot already carries.
+    fixedEdgeWidth: board.fixedEdgeWidth,
     linePulseMode: board.linePulseMode,
     // The smart view (bottom-right tray) is deliberately NOT captured: it is
     // a personal reading of the board, not part of its dress, and a saved
@@ -112,6 +113,7 @@ function applyViewSettings(view: PlanViewState | undefined, scope: PlanViewScope
   const flag = (value: boolean | undefined) => (typeof value === "boolean" ? { value } : undefined);
   const boardPatch: Parameters<typeof writeBoardView>[0] = {};
 
+  if (typeof view.fixedEdgeWidth === "boolean") boardPatch.fixedEdgeWidth = view.fixedEdgeWidth;
   if (view.canvasPattern && CANVAS_PATTERNS.includes(view.canvasPattern as CanvasPattern)) {
     boardPatch.canvasPattern = view.canvasPattern as CanvasPattern;
   }

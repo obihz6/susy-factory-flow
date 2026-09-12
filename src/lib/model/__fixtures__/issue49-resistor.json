@@ -1,0 +1,125 @@
+{
+  "id": "oracle:local-2.9.0-beta-2:crafting:shaped:6a7ad9655f8f9abe",
+  "name": "Shaped Crafting: Resistor",
+  "machineType": "Shaped Crafting",
+  "minimumTier": "NONE",
+  "durationTicks": 1,
+  "eut": 0,
+  "inputs": [
+    {
+      "kind": "item",
+      "id": "ic2:itemharz",
+      "amount": 1,
+      "displayName": "Sticky Resin",
+      "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/sticky_resin-c45e34ab6e13.png",
+      "neiSlot": {
+        "x": 25,
+        "y": 8
+      }
+    },
+    {
+      "kind": "item",
+      "id": "oredict:wireFineCopper",
+      "amount": 1,
+      "displayName": "Ore Dictionary: wireFineCopper",
+      "tooltip": ["Ore dictionary: wireFineCopper", "Accepts: Fine Copper Wire"],
+      "alternatives": [
+        {
+          "kind": "item",
+          "id": "gregtech:gt.metaitem.02@19035",
+          "amount": 1,
+          "displayName": "Fine Copper Wire",
+          "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/fine_copper_wire-ca7ebea90242.png"
+        }
+      ]
+    },
+    {
+      "kind": "item",
+      "id": "ic2:itemharz",
+      "amount": 1,
+      "displayName": "Sticky Resin",
+      "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/sticky_resin-c45e34ab6e13.png",
+      "neiSlot": {
+        "x": 61,
+        "y": 8
+      }
+    },
+    {
+      "kind": "item",
+      "id": "oredict:wireGt01Copper",
+      "amount": 1,
+      "displayName": "Ore Dictionary: wireGt01Copper",
+      "tooltip": ["Ore dictionary: wireGt01Copper", "Accepts: 1x Copper Wire"],
+      "alternatives": [
+        {
+          "kind": "item",
+          "id": "gregtech:gt.blockmachines@1360",
+          "amount": 1,
+          "displayName": "1x Copper Wire",
+          "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/1x_copper_wire-dcceaa132e69.png"
+        }
+      ]
+    },
+    {
+      "kind": "item",
+      "id": "oredict:dustCharcoal",
+      "amount": 1,
+      "displayName": "Ore Dictionary: dustCharcoal",
+      "tooltip": ["Ore dictionary: dustCharcoal", "Accepts: Charcoal Dust"],
+      "alternatives": [
+        {
+          "kind": "item",
+          "id": "gregtech:gt.metaitem.01@2536",
+          "amount": 1,
+          "displayName": "Charcoal Dust",
+          "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/charcoal_dust-260b4b61502d.png"
+        }
+      ]
+    },
+    {
+      "kind": "item",
+      "id": "oredict:wireGt01Copper",
+      "amount": 1,
+      "displayName": "Ore Dictionary: wireGt01Copper",
+      "tooltip": ["Ore dictionary: wireGt01Copper", "Accepts: 1x Copper Wire"],
+      "alternatives": [
+        {
+          "kind": "item",
+          "id": "gregtech:gt.blockmachines@1360",
+          "amount": 1,
+          "displayName": "1x Copper Wire",
+          "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/1x_copper_wire-dcceaa132e69.png"
+        }
+      ]
+    },
+    {
+      "kind": "item",
+      "id": "oredict:wireFineCopper",
+      "amount": 1,
+      "displayName": "Ore Dictionary: wireFineCopper",
+      "tooltip": ["Ore dictionary: wireFineCopper", "Accepts: Fine Copper Wire"],
+      "alternatives": [
+        {
+          "kind": "item",
+          "id": "gregtech:gt.metaitem.02@19035",
+          "amount": 1,
+          "displayName": "Fine Copper Wire",
+          "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/fine_copper_wire-ca7ebea90242.png"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "kind": "item",
+      "id": "gregtech:gt.metaitem.01@32716",
+      "amount": 1,
+      "displayName": "Resistor",
+      "iconPath": "/datasets/gtnh/local-2.9.0-beta-2/textures/rendered/resistor-dccdf65cc21a.png",
+      "neiSlot": {
+        "x": 124,
+        "y": 26
+      }
+    }
+  ]
+}

@@ -267,6 +267,8 @@ function IoColumn({
             >
               <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden">
                 <ResourceIcon
+
+                  itemZoom={1.5}
                   resource={{ ...stat, id: stat.resourceId, amount: 1 }}
                   bare
                   tooltip={false}
@@ -278,9 +280,7 @@ function IoColumn({
                         : fluidArtPixels(24)
                       : undefined
                   }
-                  className={
-                    stat.kind === "fluid" ? "!h-6 !w-6" : "!h-6 !w-6 origin-center scale-150"
-                  }
+                  className="!h-6 !w-6"
                 />
               </span>
               <span className="min-w-0 flex-1 truncate text-[14px]">

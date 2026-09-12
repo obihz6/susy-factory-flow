@@ -9,9 +9,9 @@ import type {
 } from "./sync-types";
 
 /**
- * Thrown for a response the sync must treat as "sync is off": the tables
- * are not there yet, or the session is gone. The engine stops and shows the
- * reason rather than retrying every half minute.
+ * Identifies an unavailable account service or session. The sync engine
+ * reports the failure and retries, so an operator's repair can recover
+ * existing open tabs without asking players to reload their work.
  */
 export class LibrarySyncUnavailable extends Error {
   constructor(message: string) {

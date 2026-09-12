@@ -476,8 +476,8 @@ describe("machine handlers and runtime calculations", () => {
       machineHandlerId: "dangote-distillus",
     });
     expect(applied.runtimeCalculation).toBeUndefined();
-    expect(applied.durationTicks).toBe(8);
-    expect(applied.eut).toBe(480);
+    expect(applied.durationTicks).toBe(recipe.durationTicks);
+    expect(applied.eut).toBe(recipe.eut);
     expect(applied.machineType).toBe("Dangote Distillus");
   });
 });

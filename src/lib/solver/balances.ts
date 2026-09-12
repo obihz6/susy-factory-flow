@@ -11,6 +11,7 @@ import type {
 import { collectTrashNodeIds } from "../model/trash";
 import { getStorageRoles } from "../model/storage-role";
 import { clampUtilization } from "./equilibrium";
+import { isHatchSupplyId } from "./hatch-supply";
 
 const EPSILON = 0.000001;
 
@@ -273,8 +274,11 @@ function applyBoundaryDrawerBalances(
     // Leaving a SOURCE drawer: the plan declared this an import.
     const from = storagesById.get(edge.source);
     if (from && roles.get(from.id) === "source") {
-      ensureBalance(balances, boundaryResource(from, edge.label)).importedPerSecond +=
-        transferredPerSecond;
+      if (isHatchSupplyId(from.id)) {
+        addBalanceProduction(balances, boundaryResource(from, edge.label), transferredPerSecond);
+      } else {
+        ensureBalance(balances, boundaryResource(from, edge.label)).importedPerSecond += transferredPerSecond;
+      }
     }
     if (from && roles.get(from.id) === "buffer") {
       bufferNetById.set(from.id, (bufferNetById.get(from.id) ?? 0) - transferredPerSecond);

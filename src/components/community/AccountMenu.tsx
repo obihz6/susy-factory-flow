@@ -43,7 +43,7 @@ export function AccountMenu() {
   }
 
   if (isLoading) {
-    return <div className="h-7 w-20 animate-pulse rounded bg-surface-sunken" aria-hidden />;
+    return <div className="h-5 w-20 animate-pulse rounded bg-surface-sunken" aria-hidden />;
   }
 
   if (!user) {
@@ -52,7 +52,7 @@ export function AccountMenu() {
         <button
           type="button"
           onClick={() => setAuthOpen(true)}
-          className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-line-strong bg-surface px-2.5 font-medium text-fg hover:bg-surface-raised"
+          className="inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-line-strong bg-surface px-2.5 font-medium text-fg hover:bg-surface-raised"
         >
           <User className="h-3.5 w-3.5" /> Sign in
         </button>
@@ -88,7 +88,7 @@ export function AccountMenu() {
         type="button"
         onClick={() => setMenuOpen((open) => !open)}
         aria-expanded={isMenuOpen}
-        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded border border-line-strong bg-surface px-2.5 font-medium text-fg hover:bg-surface-raised"
+        className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded border border-line-strong bg-surface px-2.5 font-medium text-fg hover:bg-surface-raised"
       >
         {user.isAdmin ? (
           <ShieldCheck className="h-3.5 w-3.5 text-cyan-500" />
@@ -99,7 +99,7 @@ export function AccountMenu() {
         <ChevronDown className="h-3 w-3 text-fg-muted" />
       </button>
       {isMenuOpen ? (
-        <div className="absolute right-0 top-9 z-[110] min-w-44 rounded border border-line-strong bg-surface py-1 text-sm shadow-lg">
+        <div className="absolute right-0 top-full mt-1 z-[110] min-w-44 rounded border border-line-strong bg-surface py-1 text-sm shadow-lg">
           <button
             type="button"
             onClick={() => {

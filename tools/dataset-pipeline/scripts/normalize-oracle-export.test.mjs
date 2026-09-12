@@ -37,6 +37,17 @@ function item(id, amount, displayName) {
   return { kind: "item", id, amount, displayName };
 }
 
+it("retains long fusion thresholds independently of legacy specialValue", () => {
+  const dataset = normalize({ domains: [{ id: "gregtech", recipeMaps: [{
+    id: "gt.recipe.fusionreactor", name: "Fusion Reactor",
+    catalysts: [{ resource: item("gregtech:gt.blockmachines@32023", 1, "Compact Fusion Computer MK-V"),
+      multiblock: true, sourceClass: "goodgenerator.blocks.tileEntity.MTELargeFusionComputer5" }],
+    recipes: [{ id: "fusion", durationTicks: 20, eut: 7864320, specialValue: 0, fusionStartupEu: 6_000_000_000,
+      fluidInputs: [fluid("a", 1, "A")], fluidOutputs: [fluid("b", 1, "B")] }],
+  }] }] });
+  expect(dataset.recipes[0].metadata).toMatchObject({ fusionStartupEu: 6_000_000_000, specialValue: 0 });
+});
+
 const RESISTOR = "gregtech:gt.metaitem.01@32716";
 const SMD_RESISTOR = "gregtech:gt.metaitem.03@32011";
 const VACUUM_TUBE = "gregtech:gt.metaitem.01@32700";

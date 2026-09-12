@@ -1,73 +1,39 @@
 "use client";
 
-import { useEffect, useState, type RefObject } from "react";
+import { useLayoutEffect, useState, type RefObject } from "react";
 
-/**
- * When the board's two top toolbars fold into their single-button triggers.
- *
- * Compact mode folds them for a phone, but a desktop board can be just as
- * short of room: the side columns take 676px of the window, and the two rows
- * together want 833px on top of their margins. On a 1400px window they
- * crossed, and the paint tray sat unreachable UNDER the POWER tray. So the
- * fold is decided by the BOARD's own width, not the window's, and it happens
- * one side at a time: the paint row folds first (it is the one visited
- * less, and folding it frees 400px), and the build row only when the board
- * cannot hold even that.
- *
- * The widths are the rows as measured on the live board, each side's 12px
- * margin, and a cell of daylight between them. A fold does not shrink a row
- * to one button: the build fold keeps undo/redo out (124px with the trigger),
- * and the paint fold keeps the bin, the view keys and the export keys out
- * (280px). Each threshold is what the board needs to hold the row ABOVE it
- * once the previous fold has happened.
+/** Responsive board chrome: labeled modes, icon modes, then folded tools.
+ * Measurements are shell pixels. Only rem-sized parts grow with Firefox text
+ * zoom; the 76px power key and 96/44px mode keys keep their fixed widths.
+ * Reserve manual recalculate and the Pool product key in every mode so a
+ * button becoming visible never creates an overlap.
  */
-// Measured on the live board (2026-09-06) after the toolbar rework: the
-// build row is the undo pair and the rate keys. (Pool mode's product key
-// slides out of the centre mode switch, which is no part of either row.)
-// 2026-09-07: plus the recalculation tray (the auto toggle, and the solve
-// key beside it while auto is off): 286 shell px measured with both keys
-// out, 250 with the toggle alone. The wider state decides the fold.
-// Checklist key beside recalculation adds 36 px; its progress opens below.
-const BUILD_ROW_WIDTH = 322;
-const BUILD_ROW_FOLDED_WIDTH = 132;
-// The right row: the mode switch's tray first, the paint tray, arrange,
-// the view tray (annotations and view options) and the bin last; mute and
-// the timelapse door left for Settings. Folded, everything but the paint
-// tray stays out (the trigger stands in for it).
-// Checklist has its own 44 px tray plus the 8 px gap, also while folded.
-const PAINT_ROW_WIDTH = 484;
-const PAINT_ROW_FOLDED_WIDTH = 412;
-const SIDE_MARGINS = 24;
-const BREATH = 24;
-
-export const FOLD_PAINT_BELOW = BUILD_ROW_WIDTH + PAINT_ROW_WIDTH + SIDE_MARGINS + BREATH;
-export const FOLD_BUILD_BELOW = BUILD_ROW_WIDTH + PAINT_ROW_FOLDED_WIDTH + SIDE_MARGINS + BREATH;
-/** Under this even both folded rows cross, so the whole paint row folds. */
-export const BOTH_FOLDED_WIDTH =
-  BUILD_ROW_FOLDED_WIDTH + PAINT_ROW_FOLDED_WIDTH + SIDE_MARGINS + BREATH;
-
 export interface ToolbarFold {
   build: boolean;
   paint: boolean;
-  /**
-   * The WHOLE paint row folds into the brush, bin and whole-board keys
-   * included: the board is too narrow for even the folded rows side by side,
-   * and they stay on ONE line - a second line is a blank band over the board.
-   */
   paintFoldsAll: boolean;
+  modeIconsOnly: boolean;
 }
 
-/** Which toolbars fold on a board this wide. Compact folds both regardless. */
-export function toolbarFoldFor(boardWidth: number, compact: boolean): ToolbarFold {
-  const paintFoldsAll = boardWidth < BOTH_FOLDED_WIDTH;
-  if (compact) {
-    return { build: true, paint: true, paintFoldsAll };
-  }
-  return {
-    paint: boardWidth < FOLD_PAINT_BELOW,
-    build: boardWidth < FOLD_BUILD_BELOW,
-    paintFoldsAll,
-  };
+export function toolbarFoldFor(boardWidth: number, compact: boolean, textScale = 1): ToolbarFold {
+  const scale = Number.isFinite(textScale) ? Math.max(1, textScale) : 1;
+  const buildWidth = 260 * scale + 92;
+  const foldedBuildWidth = 124 * scale + 8;
+  const paintWidth = 124 * scale + 8;
+  const foldedPaintWidth = 40 * scale + 4;
+  const margin = 12 * scale;
+  const gap = 16 * scale;
+  const poolWidth = 52;
+  const labelModesWidth = 296 + 8 * scale;
+  const iconModesWidth = 140 + 8 * scale;
+  const centerFits = (modesWidth: number, rightWidth: number) =>
+    boardWidth >= 2 * Math.max(buildWidth + margin + gap, rightWidth + poolWidth + margin + gap) + modesWidth;
+  const modeIconsOnly = compact || !centerFits(labelModesWidth, paintWidth);
+  const build = compact || !centerFits(iconModesWidth, foldedPaintWidth);
+  const paint = compact || (build
+    ? boardWidth < foldedBuildWidth + paintWidth + 2 * margin + gap
+    : !centerFits(modeIconsOnly ? iconModesWidth : labelModesWidth, paintWidth));
+  return { build, paint, paintFoldsAll: paint, modeIconsOnly };
 }
 
 /** The name the unfolded rows read their width cap from. */
@@ -88,7 +54,7 @@ export function useToolbarFold(
 ): ToolbarFold {
   const [fold, setFold] = useState<ToolbarFold>(() => toolbarFoldFor(Infinity, compact));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = boardRef.current;
     if (!element || typeof ResizeObserver === "undefined") {
       setFold(toolbarFoldFor(Infinity, compact));
@@ -97,10 +63,19 @@ export function useToolbarFold(
     const measure = () => {
       const width = element.clientWidth;
       element.style.setProperty(BOARD_WIDTH_VAR, `${width}px`);
-      const next = toolbarFoldFor(width, compact);
+      const textScale = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
+      const next = toolbarFoldFor(width, compact, textScale);
+      // At the narrowest sizes, use the edge gutters before hiding or
+      // squeezing the always-visible undo/redo and the two fold triggers.
+      const scale = Number.isFinite(textScale) ? Math.max(1, textScale) : 1;
+      const inset = next.build && next.paint
+        ? Math.max(0, Math.min(12 * scale, (width - (168 * scale + 12)) / 2))
+        : 12 * scale;
+      element.style.setProperty("--toolbar-inset", `${inset}px`);
       setFold((current) =>
         current.build === next.build &&
         current.paint === next.paint &&
+        current.modeIconsOnly === next.modeIconsOnly &&
         current.paintFoldsAll === next.paintFoldsAll
           ? current
           : next,
@@ -109,7 +84,14 @@ export function useToolbarFold(
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
-    return () => observer.disconnect();
+    // Text-only zoom can change the controls without changing the board width.
+    // Observe the trays too; this remains resize work, never a canvas-frame read.
+    for (const tray of element.querySelectorAll("[data-toolbar-tray]")) observer.observe(tray);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, [boardRef, compact]);
 
   return fold;

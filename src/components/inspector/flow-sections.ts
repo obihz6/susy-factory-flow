@@ -1,5 +1,5 @@
 import { makeResourceKey } from "@/lib/model/resources";
-import type { FactoryProject, ResourceBalance } from "@/lib/model/types";
+import type { FactoryProject, FactoryStorage, ResourceBalance } from "@/lib/model/types";
 
 /**
  * Outputs are ONE section. Product against byproduct is how a drawer asks its
@@ -26,6 +26,7 @@ export interface FlowSection {
 }
 
 export type FlowRow =
+  | { type: "product"; key: string; section: FlowSection; storage: FactoryStorage; index: number }
   | { type: "header"; key: string; section: FlowSection; collapsed: boolean }
   | { type: "item"; key: string; section: FlowSection; balance: ResourceBalance }
   // A starred resource carries its chart in the row directly beneath it, so a
@@ -77,7 +78,7 @@ export function applyNetFlow(
 
   for (const balance of needs) {
     const net = balance.surplusPerSecond - balance.deficitPerSecond;
-    if (balance.surplusPerSecond <= 0) {
+    if (net < 0 && balance.surplusPerSecond <= 0) {
       nettedNeeds.push(balance);
     } else if (net < 0) {
       nettedNeeds.push({ ...balance, deficitPerSecond: -net, surplusPerSecond: 0 });
@@ -170,6 +171,8 @@ export function buildFlowRows(
   sections: FlowSection[],
   collapsed: Record<FlowSectionId, boolean>,
   favourites: ReadonlySet<string> = new Set(),
+  products: ReadonlyMap<string, FactoryStorage[]> = new Map(),
+  expandedProducts: ReadonlySet<string> = new Set(),
 ): FlowRow[] {
   const rows: FlowRow[] = [];
   for (const section of sections) {
@@ -192,6 +195,11 @@ export function buildFlowRows(
 
     for (const balance of section.items) {
       rows.push({ type: "item", key: `${section.id}:${balance.key}`, section, balance });
+      if (section.id === "output" && expandedProducts.has(balance.key)) {
+        (products.get(balance.key) ?? []).forEach((storage, index) => {
+          rows.push({ type: "product", key: `product:${storage.id}`, section, storage, index });
+        });
+      }
       if (favourites.has(balance.key)) {
         rows.push({
           type: "chart",
@@ -212,7 +220,7 @@ export function buildFlowRows(
  */
 export function measureFlowRows(
   rows: FlowRow[],
-  heights: { header: number; item: number; empty: number; chart: number },
+  heights: { header: number; item: number; empty: number; chart: number; product?: number },
   /**
    * Per-row height scale, for rows mid-arrival or mid-departure (the panel's
    * presence animation). The windowing math reads the ANIMATED height, so
@@ -225,7 +233,7 @@ export function measureFlowRows(
   let offset = 0;
   for (let index = 0; index < rows.length; index += 1) {
     offsets[index] = offset;
-    const base = heights[rows[index].type];
+    const base = heights[rows[index].type] ?? 28;
     offset += factorFor ? Math.round(base * factorFor(rows[index])) : base;
   }
 

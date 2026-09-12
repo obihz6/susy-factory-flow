@@ -718,7 +718,7 @@ function BoardNodeComponent({
             >
               <PackageOpen aria-hidden className="h-3.5 w-3.5" />
             </button>
-            <button
+            <button data-viewer-inspect
               type="button"
               onClick={(event) => {
                 event.stopPropagation();

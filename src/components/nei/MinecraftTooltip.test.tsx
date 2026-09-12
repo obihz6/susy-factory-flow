@@ -18,6 +18,30 @@ describe("MinecraftTooltip", () => {
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
   });
 
+  it.each([
+    [40, 180, "below", "items-start"],
+    [550, 680, "above", "items-end"],
+  ])("places a card tooltip with top %s on the roomy side", async (top, bottom, side, alignment) => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(240);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(240);
+    const { container } = render(
+      <div className="react-flow__node">
+        <MinecraftTooltip placement="above-card" content={<div>Power details</div>} companion={<div>Controls guide</div>}>
+          <button>Power</button>
+        </MinecraftTooltip>
+      </div>,
+    );
+    vi.spyOn(container.firstElementChild!, "getBoundingClientRect").mockReturnValue({
+      top, bottom, left: 200, right: 500, width: 300, height: bottom - top, x: 200, y: top, toJSON: () => ({}),
+    });
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Power" }), { clientX: 300, clientY: top + 10 });
+    await screen.findByText("Power details");
+    const panel = document.querySelector("[data-card-placement]")!;
+    expect(panel.getAttribute("data-card-placement")).toBe(side);
+    expect(panel.classList.contains(alignment)).toBe(true);
+    expect(Number.parseFloat((panel as HTMLElement).style.maxHeight)).toBeGreaterThanOrEqual(240);
+  });
+
   it("clears an open tooltip when a scroll puts something else under the pointer", async () => {
     render(
       <>

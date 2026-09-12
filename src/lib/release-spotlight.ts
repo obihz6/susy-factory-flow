@@ -3,11 +3,16 @@ import { compareVersions } from "@/lib/whats-new";
 /**
  * The release NOTICE: the one thing that is allowed to arrive uninvited.
  *
- * It is the ONLY thing that tells a player a release happened. The changelog
- * dialog, the version chip's unread dot and the Welcome tab's "new in vX"
- * section were all removed (Jack, 2026-09-08), so this is the announcement:
- * a line per change, an icon and a TITLE each, no sentences, read in about
- * four seconds and closed.
+ * It is what ANNOUNCES a release: a line per change, an icon and a TITLE
+ * each, no sentences, read in about four seconds and closed.
+ *
+ * It is no longer the only way to hear about one. The version chip opens the
+ * full changelog again and wears a dot for a release it has not been opened
+ * for (Jack, 2026-09-09: players went looking for what's new and found
+ * nothing to press). The two do different jobs and the difference is the
+ * whole point of keeping both: the notice ARRIVES, once, and is spent; the
+ * chip WAITS to be asked, and holds everything back to the beginning. A
+ * release that does not earn a notice still gets an entry and a dot.
  *
  * ONE PER RELEASE, AND ONLY WHEN THE RELEASE EARNS IT. A version with no entry
  * in `RELEASE_SPOTLIGHTS` shows nothing at all - a bug-fix release should not

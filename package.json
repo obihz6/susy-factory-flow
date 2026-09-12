@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:icons:browsers": "node tools/browser-tests/icon-sizing.mjs",
     "datasets:detect": "node tools/dataset-pipeline/scripts/detect-gtnh-versions.mjs",
     "datasets:manifest": "node tools/dataset-pipeline/scripts/rebuild-manifest.mjs",
     "datasets:susy": "node tools/dataset-pipeline/scripts/susy/orchestrator.mjs build",
@@ -55,10 +56,11 @@
     "eslint-config-next": "16.2.6",
     "eslint-config-prettier": "^10.1.8",
     "jsdom": "^29.1.1",
-    "playwright": "^1.49.1",
+    "playwright-core": "1.63.0",
     "prettier": "^3.8.3",
     "tailwindcss": "^4",
     "typescript": "^5",
+    "vite": "8.0.13",
     "vitest": "^4.1.6"
   }
 }

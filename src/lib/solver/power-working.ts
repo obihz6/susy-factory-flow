@@ -1,7 +1,7 @@
 import { getEnergyHatchType } from "@/lib/machines/energy-hatches";
 import { applyMachineHandlerToRecipe } from "@/lib/model/recipe-rules";
 import { formatCompact } from "@/lib/model/resources";
-import { getVoltageTierMaxEuT, getVoltageTierWithinEuT } from "@/lib/model/tiers";
+import { getVoltageTierMaxEuT } from "@/lib/model/tiers";
 import type { MachineTier, Recipe } from "@/lib/model/types";
 import { getHeatDiscountMultiplier } from "./heat";
 import { getEffectiveVoltageOrdinal } from "./power";
@@ -9,6 +9,7 @@ import { getMachineEutMultiplier } from "./machine-effects";
 import { getOverclockedRecipeStats } from "./overclock";
 import { getNodePowerReport, describePowerStall, type NodePowerReport } from "./power-report";
 import {
+  powerNodeAtBudget,
   listPowerWinsCached,
   nextPowerWin,
   previousPowerWin,
@@ -108,11 +109,11 @@ export function describePowerWorking(
   node: PowerWinNode,
   budgetEuT: number,
 ): PowerWorking {
-  const budgeted = { ...node, powerEuT: budgetEuT };
+  const budgeted = powerNodeAtBudget(node, budgetEuT);
   const report = getNodePowerReport(recipe, budgeted);
   const stats = getOverclockedRecipeStats(recipe, budgeted);
   const effective = recipe.machineType ? applyMachineHandlerToRecipe(recipe, budgeted) : recipe;
-  const tier = getVoltageTierWithinEuT(budgetEuT);
+  const tier = report.tier;
   const voltage = getVoltageTierMaxEuT(tier);
   const amps = budgetEuT / voltage;
   const parallels = Math.max(1, report.parallels);

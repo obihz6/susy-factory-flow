@@ -38,7 +38,7 @@
  * server-render defaults.
  */
 :root {
-  --ui-scale: 1.3;
+  --ui-scale: 1.17;
   /* The EXACT reciprocal, never a rounded decimal: 1.3 x 0.76923 is not 1,
      and an effective zoom of 0.99996 on the board put every card on
      sub-pixel geometry, which doubled the compositor's per-frame layer
@@ -113,6 +113,10 @@
 
   --background: #1b1d21;
   --foreground: #f5f5f5;
+
+  /* Shared input/output accents for rates, drawer frames and editable targets. */
+  --flow-output: var(--color-emerald-300);
+  --flow-input: var(--color-red-300);
 
   --surface: #25272c;
   --surface-raised: #303238;
@@ -1281,6 +1285,12 @@ img {
   border: 1px solid var(--selection);
 }
 
+/* Selected cards already wear blue outlines. Omit the enclosing group frame
+   and its empty-space drag target; drag a selected card to move the group. */
+.factory-flow-board .react-flow__nodesselection {
+  display: none;
+}
+
 .factory-flow-board .react-flow__edge-path {
   cursor: pointer;
   pointer-events: stroke;
@@ -2182,6 +2192,20 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
     inset -1px -1px 0 var(--mc-47);
 }
 
+/* A port name wraps to TWO compact lines instead of ending in three dots:
+   the chip gave up 8px when the card came back to 21 cells, and a second
+   line is what pays for it. CLAMP ONLY — the size and weight are utilities
+   on the element, so a name whose stylesheet has not arrived is small and
+   unclamped rather than 16px text bursting out of the chip. Pure CSS: no
+   text measurement and no observers on a board of a hundred cards. */
+.flow-port-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
 /* A pocket card's port chip: the machine chip's raised tile, in purple. */
 /* Blueprint overwrite picker: every folded board is a target. Amber dashed
    ring on all of them, solid and brighter under the pointer — hover answers
@@ -2221,7 +2245,7 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
 
 .flow-port-bar {
   position: relative;
-  height: 5px;
+  height: 3px;
   overflow: visible;
   background: var(--rail-bar-track);
   box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.35);
@@ -2332,17 +2356,17 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
    by the coupling's state. Sits INSIDE the card at the row's right edge —
    wires reach it exactly the way they reach an input chip. Everything wordy
    (who asks, gets/asks, ×N, the fix) lives in its hover. */
-/* 34px, and the output rail is exactly chip + 2px gap + this — a coupling
+/* 30px, and the output rail is exactly chip + 2px gap + this — a coupling
    wider than the rail hangs off the card's right edge. Keep the two in step:
-   PORT_CHIP_WIDTH_CLASS (140) + 2 + 34 = the rail's w-[176px], which with the
-   input rail (140), the divider (16) and two 4px gaps fills the card's 340px
+   PORT_CHIP_WIDTH_CLASS (132) + 2 + 30 = the rail's w-[164px], which with the
+   input rail (132), the picture (96) and two 4px gaps fills the card's 400px
    inner width exactly. See src/lib/board-grid.ts. */
 .flow-plug {
   position: relative;
   z-index: 5;
   display: flex;
   flex: none;
-  width: 34px;
+  width: 30px;
   align-self: stretch;
   margin-left: 2px;
   flex-direction: column;
@@ -2360,7 +2384,7 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
 .flow-plug-top {
   display: flex;
   justify-content: center;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 800;
   line-height: 10px;
   font-variant-numeric: tabular-nums;
@@ -2420,7 +2444,7 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
   position: relative;
   display: flex;
   flex: none;
-  width: 34px;
+  width: 30px;
   align-self: stretch;
   margin-left: 2px;
   align-items: center;
@@ -2605,4 +2629,12 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
     opacity: 0.8;
     filter: drop-shadow(0 0 5px #ef4444);
   }
+}
+
+/* Public viewing keeps configuration readable, but the controls are inert. */
+[data-view-only] [data-viewer-disabled] {
+  cursor: default;
+}
+[data-view-only] button[data-viewer-disabled] {
+  opacity: 0.5;
 }

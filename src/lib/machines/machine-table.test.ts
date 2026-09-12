@@ -182,6 +182,15 @@ describe("curated machine table", () => {
     // several exist because GTNH rewrote the machine after the reference was
     // written, so the reference tracks a class that is no longer craftable.
     const DIVERGES_FROM_REFERENCE = new Set([
+      // Two recipe-map modes; Java charges 15% EU in distillery mode, not
+      // the reference's 85%. Source boundaries covered in dangote-distillus.test.ts.
+      "Dangote Distillus",
+      // Java's 0.9f, ceil ticks and the custom supplier's floored parallels.
+      // Covered at recipe-rate boundaries in neutron-activator.test.ts.
+      "Neutron Activator",
+      // Real hatch combinations and the independent source-voltage OC cap;
+      // the reference only asks for raw amps. See hile.test.ts.
+      "Hyper-Intensity Laser Engraver",
       "Utupu-Tanuri",
       "Zyngen",
       "Exothermic Hearth",
@@ -318,6 +327,8 @@ describe("curated machine table", () => {
         // gtPlusPlus.xmod.gregtech.common.tileentities.automation; not a
         // recipe-map machine, so the reference never covered it.
         "Auto Workbench",
+        // MTEPreciseAssembler's dedicated precise mode has no speed/parallels bonus.
+        "Precise Assembler",
       ].map(normalizeMachineName),
     );
     // Every entry must trace back to a reference definition or a direct source

@@ -32,6 +32,8 @@ vi.mock("@/lib/designs/design-camera", () => ({
 import { readLibraryTabState } from "@/lib/library/library-tab";
 import { createEmptyProject } from "@/examples";
 import { useDesignStore } from "./design-store";
+import { useFactoryStore } from "./factory-store";
+import { copyViewedPost } from "@/lib/community/open-post";
 
 function summary(id: string, extra: Partial<DesignSummary> = {}): DesignSummary {
   return {
@@ -247,5 +249,75 @@ describe("closing a blank tab", () => {
 
     expect(storage.deleteDesign).not.toHaveBeenCalled();
     expect(records.get("named")?.closed).toBe(true);
+  });
+});
+
+
+describe("public viewing sessions", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    useFactoryStore.getState().markHydratedProject(createEmptyProject());
+    useDesignStore.setState({ activeDesignId: undefined, publicView: undefined, publicViews: [] });
+    library(summary("a"));
+    storage.readActiveDesignId.mockReturnValue("a");
+    await useDesignStore.getState().hydrate();
+  });
+
+  it("flushes your outgoing design but never saves the viewed post into it", async () => {
+    useFactoryStore.getState().renameProject("My last edit");
+    const post = { ...createEmptyProject(), name: "Someone else's setup" };
+    await useDesignStore.getState().viewPublicProject({ id: "post", name: post.name }, post);
+    expect(storage.writeDesign).toHaveBeenCalledTimes(1);
+    expect(storage.writeDesign.mock.calls[0][0].project.nodes).toEqual([]);
+    expect(storage.writeDesign.mock.calls[0][0].project.name).not.toBe(post.name);
+    expect(useDesignStore.getState().designs).toHaveLength(1);
+    expect(useDesignStore.getState().activeDesignId).toBeUndefined();
+    storage.writeDesign.mockClear();
+    await useDesignStore.getState().saveActiveProject("a", post);
+    await useDesignStore.getState().saveActiveProject(undefined, post);
+    await useDesignStore.getState().reloadActiveDesign();
+    expect(storage.writeDesign).not.toHaveBeenCalled();
+    expect(useFactoryStore.getState().project.name).toBe(post.name);
+    await useDesignStore.getState().switchToDesign("a");
+    expect(storage.writeDesign).not.toHaveBeenCalled();
+    expect(useFactoryStore.getState().isReadOnly).toBe(false);
+    expect(useDesignStore.getState().publicView).toBeUndefined();
+  });
+
+  it("keeps multiple public tabs while switching to personal designs and closes only the chosen view", async () => {
+    const store = useDesignStore.getState();
+    await store.viewPublicProject({ id: "one", name: "One" }, { ...createEmptyProject(), name: "One" });
+    await store.viewPublicProject({ id: "two", name: "Two" }, { ...createEmptyProject(), name: "Two" });
+    await store.switchToDesign("a");
+    expect(useDesignStore.getState().publicViews.map((view) => view.id)).toEqual(["one", "two"]);
+    storage.writeDesign.mockClear();
+    await store.switchToPublicView("one");
+    expect(useFactoryStore.getState().isReadOnly).toBe(true);
+    expect(useFactoryStore.getState().project.name).toBe("One");
+    expect(useDesignStore.getState().publicViews.map((view) => view.id)).toEqual(["one", "two"]);
+    storage.writeDesign.mockClear();
+    await store.switchToPublicView("two");
+    expect(storage.writeDesign).not.toHaveBeenCalled();
+    await store.closePublicView("one");
+    expect(useDesignStore.getState().publicView?.id).toBe("two");
+    expect(useDesignStore.getState().publicViews.map((view) => view.id)).toEqual(["two"]);
+    await store.closePublicView("two");
+    expect(useDesignStore.getState().publicViews).toEqual([]);
+    expect(useFactoryStore.getState().isReadOnly).toBe(false);
+  });
+
+  it("only Open a copy creates a design, and the copy is editable and unlinked", async () => {
+    const post = { ...createEmptyProject(), name: "Public setup", metadata: { communityPlanId: "post" } };
+    await useDesignStore.getState().viewPublicProject({ id: "post", name: post.name }, post);
+    storage.writeDesign.mockClear();
+    await copyViewedPost();
+    expect(storage.writeDesign).toHaveBeenCalledTimes(1);
+    const copy = storage.writeDesign.mock.calls[0][0];
+    expect(copy.id).not.toBe("a");
+    expect(copy.project.metadata?.communityPlanId).toBeUndefined();
+    expect(useDesignStore.getState().activeDesignId).toBe(copy.id);
+    expect(useDesignStore.getState().designs).toHaveLength(2);
+    expect(useDesignStore.getState().publicView).toBeUndefined();
+    expect(useFactoryStore.getState().isReadOnly).toBe(false);
   });
 });

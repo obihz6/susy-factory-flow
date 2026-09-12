@@ -12,6 +12,7 @@ import gregtech.api.interfaces.IStoneType;
 import gregtech.api.recipe.RecipeMap;
 import gregtech.api.recipe.RecipeMapBackend;
 import gregtech.api.util.GTRecipe;
+import gregtech.api.util.GTRecipeConstants;
 import gtneioreplugin.util.DimensionHelper;
 import gtneioreplugin.util.GT5OreLayerHelper;
 import gtneioreplugin.util.GT5OreSmallHelper;
@@ -221,6 +222,9 @@ public final class GtnhCalcOracleExporter {
                     exportedRecipe.put("durationTicks", Integer.valueOf(Math.max(1, recipe.mDuration)));
                     exportedRecipe.put("eut", Long.valueOf(recipe.mEUt));
                     exportedRecipe.put("specialValue", Integer.valueOf(recipe.mSpecialValue));
+                    if ("gt.recipe.fusionreactor".equals(map.unlocalizedName)) {
+                        exportedRecipe.put("fusionStartupEu", recipe.getMetadataOrDefault(GTRecipeConstants.FUSION_THRESHOLD, 0L));
+                    }
                     List<Integer> itemInputSlots = new ArrayList<Integer>();
                     List<Integer> fluidInputSlots = new ArrayList<Integer>();
                     List<Map<String, Object>> itemInputs = itemStacks(
@@ -2126,6 +2130,8 @@ public final class GtnhCalcOracleExporter {
                     catalyst.put("resource", resource);
                     catalyst.put("priority", Integer.valueOf(priority));
                     catalyst.put("sourceClass", metatileEntity.getClass().getName());
+                    catalyst.put("multiblock", Boolean.valueOf(metatileEntity instanceof
+                        gregtech.api.metatileentity.implementations.MTEMultiBlockBase));
 
                     List<Map<String, Object>> entries = byRecipeMap.get(recipeMap.unlocalizedName);
                     if (entries == null) {

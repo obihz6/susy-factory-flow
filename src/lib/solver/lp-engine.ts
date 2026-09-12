@@ -88,13 +88,32 @@ export function solveLpAuto(lp: LinearProgram): LpSolution {
 
 function solveWithHighs(instance: HighsInstance, lp: LinearProgram): LpSolution {
   const n = lp.maximize.length;
+  // Port rows divide by throughput, so late-game flows can have coefficients
+  // below HiGHS' small-matrix cutoff. Change variable units before handing
+  // those rows to it: x = columnScale * y. This preserves the same equations
+  // and objective instead of letting the engine discard a real flow term.
+  const columnScale = new Array<number>(n).fill(1);
+  for (const row of [...lp.equalities, ...lp.upperBounds]) {
+    for (const [c, value] of row.coefficients) {
+      if (value !== 0 && Math.abs(value) < 1e-8) {
+        columnScale[c] = Math.max(columnScale[c]!, 1 / Math.abs(value));
+      }
+    }
+  }
+  const scaledObjective = lp.maximize.map((value, c) => value * columnScale[c]!);
+  const objectiveScale = Math.max(1, ...scaledObjective.map(Math.abs));
+  const scaledRow = (row: LinearProgram["equalities"][number]) => {
+    const coefficients = new Map([...row.coefficients].map(([c, value]) => [c, value * columnScale[c]!]));
+    const scale = Math.max(1, ...[...coefficients.values()].map(Math.abs));
+    return { coefficients: new Map([...coefficients].map(([c, value]) => [c, value / scale])), rhs: row.rhs / scale };
+  };
 
   const term = (value: number, index: number) =>
     `${value < 0 ? "- " : "+ "}${format(Math.abs(value))} x${index}`;
   const lines: string[] = ["Maximize", ""];
   const objTerms: string[] = [];
   for (let c = 0; c < n; c += 1) {
-    const v = lp.maximize[c]!;
+    const v = scaledObjective[c]! / objectiveScale;
     if (v !== 0) {
       objTerms.push(term(v, c));
     }
@@ -102,7 +121,8 @@ function solveWithHighs(instance: HighsInstance, lp: LinearProgram): LpSolution 
   lines[1] = ` obj: ${objTerms.length > 0 ? objTerms.join(" ") : "0 x0"}`;
   lines.push("Subject To");
   let rowIndex = 0;
-  for (const row of lp.equalities) {
+  for (const originalRow of lp.equalities) {
+    const row = scaledRow(originalRow);
     const terms: string[] = [];
     for (const [c, v] of row.coefficients) {
       if (v !== 0) {
@@ -115,7 +135,8 @@ function solveWithHighs(instance: HighsInstance, lp: LinearProgram): LpSolution 
     lines.push(` e${rowIndex}: ${terms.join(" ")} = ${format(row.rhs)}`);
     rowIndex += 1;
   }
-  for (const row of lp.upperBounds) {
+  for (const originalRow of lp.upperBounds) {
+    const row = scaledRow(originalRow);
     const terms: string[] = [];
     for (const [c, v] of row.coefficients) {
       if (v !== 0) {
@@ -137,7 +158,7 @@ function solveWithHighs(instance: HighsInstance, lp: LinearProgram): LpSolution 
   }
   const x = new Array<number>(n).fill(0);
   for (let c = 0; c < n; c += 1) {
-    x[c] = solved.Columns[`x${c}`]?.Primal ?? 0;
+    x[c] = (solved.Columns[`x${c}`]?.Primal ?? 0) * columnScale[c]!;
   }
   let objective = 0;
   for (let c = 0; c < n; c += 1) {
@@ -146,11 +167,7 @@ function solveWithHighs(instance: HighsInstance, lp: LinearProgram): LpSolution 
   return { status: "optimal", x, objective };
 }
 
-/** LP-format numbers: plain decimal, no exponent, enough digits to be exact
- * at board scale. */
+/** HiGHS accepts scientific notation; retain small nonzero coefficients. */
 function format(value: number): string {
-  if (Number.isInteger(value) && Math.abs(value) < 1e15) {
-    return String(value);
-  }
-  return value.toFixed(12).replace(/0+$/, "").replace(/\.$/, "");
+  return String(value);
 }

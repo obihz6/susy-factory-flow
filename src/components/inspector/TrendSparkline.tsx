@@ -49,7 +49,7 @@ export function TrendSparkline({
   const { valueMotion } = useBoardMotion();
 
   const latest = series[series.length - 1] ?? 0;
-  const stroke = latest >= 0 ? "#34d399" : "#f87171";
+  const stroke = latest >= 0 ? "var(--flow-output)" : "var(--flow-input)";
   const hasLine = series.length >= 2;
 
   const rawMax = Math.max(...series, 0);

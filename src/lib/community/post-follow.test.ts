@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const patchCommunityPlan = vi.fn();
 const uploadPlanPreview = vi.fn();
+const capturePlanPreviewPng = vi.fn(async () => new Blob(["png"]));
 const readDesign = vi.fn();
 const writeDesign = vi.fn();
 const refreshLibrary = vi.fn(async () => undefined);
@@ -15,7 +16,7 @@ vi.mock("./client", () => ({
   uploadPlanPreview: (...args: unknown[]) => uploadPlanPreview(...args),
 }));
 vi.mock("./plan-preview-capture", () => ({
-  capturePlanPreviewPng: async () => new Blob(["png"]),
+  capturePlanPreviewPng: () => capturePlanPreviewPng(),
 }));
 vi.mock("@/lib/designs/design-storage", () => ({
   readDesign: (id: string) => readDesign(id),
@@ -59,6 +60,7 @@ describe("post-follow", () => {
     vi.useFakeTimers();
     patchCommunityPlan.mockReset().mockResolvedValue({ id: "post-1" });
     uploadPlanPreview.mockReset().mockResolvedValue(undefined);
+    capturePlanPreviewPng.mockClear();
     readDesign.mockReset().mockResolvedValue(design(true));
     writeDesign.mockReset().mockResolvedValue(undefined);
     refreshLibrary.mockClear();
@@ -94,22 +96,18 @@ describe("post-follow", () => {
     expect(patchCommunityPlan).not.toHaveBeenCalled();
   });
 
-  it("retakes the picture on a slower clock, only while the design is on the board", async () => {
-    schedulePostFollow("d1", true);
-    await vi.advanceTimersByTimeAsync(6_000);
-    await settle();
-    expect(uploadPlanPreview).not.toHaveBeenCalled();
-
-    activeDesignId = "other";
-    await vi.advanceTimersByTimeAsync(30_000);
-    await settle();
-    expect(uploadPlanPreview).not.toHaveBeenCalled();
-
-    activeDesignId = "d1";
-    schedulePostFollow("d1", true);
-    await vi.advanceTimersByTimeAsync(36_000);
-    await settle();
-    expect(uploadPlanPreview).toHaveBeenCalledWith("post-1", expect.any(Blob));
+  it("syncs repeated saves without taking over the live board to capture previews", async () => {
+    // The old preview timer fired 30s after each push. Reproduce several
+    // minute-spaced saves of the active shared design, with time to idle.
+    for (let minute = 0; minute < 3; minute += 1) {
+      schedulePostFollow("d1", true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await settle();
+      expect(patchCommunityPlan).toHaveBeenCalledTimes(minute + 1);
+      expect(capturePlanPreviewPng).not.toHaveBeenCalled();
+      expect(uploadPlanPreview).not.toHaveBeenCalled();
+    }
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("drops the link when the server says the post is not yours or is gone", async () => {

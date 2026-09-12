@@ -50,7 +50,7 @@ import {
 } from "./runtime-calculation";
 import { closeBoundaries } from "./close-boundaries";
 import { expandSharedMachines } from "../model/shared-machine";
-import { expandPool } from "./pool-mode";
+import { expandPool, getPoolProject } from "./pool-mode";
 import { getSetupRules } from "../model/setup-rules";
 import { solveEquationsCore } from "./equations-core";
 import { solveSolveMode } from "./solve-mode";
@@ -100,6 +100,7 @@ export function calculateThroughput(
       outputs: rules.freeOutputs ? "all" : "none",
     });
   }
+  project = getPoolProject(project);
   // With the rule OFF the conversion does not exist: a cross-form wire left
   // on the board carries nothing (its far end reads NO SUPPLY), and the
   // board raises a notice naming it. Anything else would let a disabled

@@ -21,13 +21,22 @@ Working notes for future agents on GTNH Factory Flow.
     work into the top changelog entry and leave the number alone. Equal to
     `version.ts` means everything is live, so this is a new release: bump, and
     open one new entry.
-- THE PLAYER-FACING CHANGELOG IS GONE (Jack, 2026-09-08). No dialog, no
-  unread dot, no "new in vX" on the Welcome tab; the header chip is just the
-  number, and a plain click on it does nothing (shift-click still opens the
-  dev menu). `ChangelogDialog.tsx` was deleted. `src/lib/changelog.ts` stays
-  as a record IN THE CODE - keep adding an entry per release, same rules as
-  before - but nothing a player can reach reads it.
-- What announces a release now is the NOTICE, `src/lib/release-spotlight.ts`
+- THE CHANGELOG IS BACK ON THE CHIP (Jack, 2026-09-09: players went looking
+  for what's new and found nothing to press). It was deleted on 2026-09-08
+  and `ChangelogDialog.tsx` is restored from that commit. A plain click on
+  the header's version chip opens it, shift-click still opens the dev menu,
+  and the chip wears a DOT for a shipped release whose notes this browser
+  has not opened. The sheet opens on the releases this reader missed and
+  keeps the rest behind "Full history"; `src/lib/changelog.ts` is what it
+  reads, so every release still needs its entry, same rules as before.
+  There is no What's new button on the right of the bar - the chip is the
+  one door, and two labelled buttons made the bar too wide.
+  - THE DOT HAS ITS OWN STAMP, `changelog-read.v1`, written ONLY by opening
+    the notes. It cannot read `last-seen-version.v1`: the release notice
+    writes that on every load, so the very load that should have raised the
+    dot would have put it out first. A first visit stamps silently and shows
+    no dot - somebody who has never seen the app does not want a history.
+- What ANNOUNCES a release is the NOTICE, `src/lib/release-spotlight.ts`
   plus `ReleaseSpotlight.tsx`: a window that arrives ONCE, on the first visit
   after a release, carrying a line per change (icon plus a spec-sheet TITLE,
   no sentences) and a close key. A release with no entry in
@@ -285,11 +294,23 @@ Working notes for future agents on GTNH Factory Flow.
     behind a count knob (laser amperage, parallels). The reference states some
     choices as raw counts with a minimum, and its formulas read the count, so
     those must use `value`.
-  - Still on scraped data, deliberately: the 11 fusion reactors (need
-    `fixedVoltageTier` and their own overclock), and the machines whose
+  - Fusion reactors use `src/lib/machines/fusion.ts`, independently of the
+    generic voltage overclocker: fixed reactor tier, 2/2 OCs on I-III,
+    4/4 on IV-V, capped by reactor mark minus recipe fusion tier. Compact
+    reactors have 64 base parallels and startup-dependent extraPara bonuses.
+    Startup charging is excluded from steady-state EU/t but its threshold
+    remains essential for eligibility AND compact parallels (strict < bonus
+    boundaries, inclusive <= tier boundaries). `metadata.fusionStartupEu`
+    is exported from FUSION_THRESHOLD, not mSpecialValue; exact runtime
+    recipe fingerprints in `machines/data/fusion-startups.json` repair old
+    exports/plans. Regenerate with `tools/audits/extract-fusion-startups.mjs`.
+    NEVER strip Roman numerals from fusion controller names: I/II/III and
+    IV/V are separate machines. Fusion hatch controls are fixed; EU/t draw
+    remains visible. Draconic Evolution Fusion Crafter is unrelated.
+  - Still on scraped data, deliberately: the machines whose
     coefficients read recipe metadata or the recipe type (Nano Forge, PCB
-    Factory, Component Assembly Line, Dangote Distillus, Precise
-    Auto-Assembler, QFT, Eye of Harmony). The Naquadah Fuel Refinery
+    Factory, Component Assembly Line, QFT, Eye of Harmony).
+    PrAss is now curated in both modes; see below. The Naquadah Fuel Refinery
     graduated off that list: its recipe metadata is the special value (the
     minimum field restriction coil tier), which `ctx.recipeSpecialValue`
     now carries into the table, and a control may declare
@@ -320,6 +341,13 @@ Working notes for future agents on GTNH Factory Flow.
     tier lists). It should no longer be trusted for effect VALUES: it once
     stamped a heat capacity on every coil, which handed four machines
     overclocks they do not get.
+- Dangote Distillus is curated in both modes (`dangote-distillus.test.ts`),
+  selected by the original `source.recipeMap` carried into `MachineContext`.
+  MTEAdvDistillationTower gives Tower mode 12 parallels and 3x speed, while
+  Distillery mode gets 2x speed, 15% EU and 8 parallels per summed-voltage
+  ordinal assuming the maximum 12-layer height. Ordinary hatches may stack;
+  multi-amp/laser hatches are unsupported. Old baked handler stats and fixed
+  parallel controls must not override this, nor may runtime ladders hide amps.
 - Parallels are paid for with power BEFORE overclocks, and only the leftover
   voltage buys overclock steps. See `src/lib/solver/overclock.ts`. Heat
   overclocks belong to the Electric Blast Furnace, Volcanus, the Exothermic
@@ -344,6 +372,43 @@ Working notes for future agents on GTNH Factory Flow.
   discount plus perfect overclocks, and that is what we implement. Machines
   that diverge on purpose are listed in `machine-table.test.ts`.
 - Machine config controls are structured data, not frontend hardcoding. Use `machineConfigControls`.
+- HILE's `laserSource` is one real voltage/amperage hatch choice (`hile.ts`),
+  replacing the duplicate `laserAmperage` knob. Source amps give floored
+  cube-root parallels; source tier + 1 independently gates recipes and caps
+  overclocks. It supplies no operating power. Glass is assumed to match the
+  source tier. Legacy amperage-only choices resolve to the lowest registered
+  source tier carrying those amps; do not infer its voltage from energy hatches.
+- PrAss is curated in two modes: `Precise Auto-Assembler MT-3662` is the normal
+  Assembler handler (2x speed; Imprecise/Mk-I..IV unit casings give 16..256
+  parallels), while `Precise Assembler` is the dedicated precise recipe map
+  (base speed, one parallel, unit casing minimum from recipe special value).
+  Both support ordinary volts/amps controls and zero input tier skips.
+  `prassMachineCasing` caps working voltage before amps; UHV removes the cap
+  and is the legacy default. The normal handler's UHV controller unlock is not
+  a minimum hatch voltage. EV+ glass is assumed. See precise-assembler.test.ts.
+  - The legacy `Coke Oven` alias also matches the unpowered brick oven.
+    Its missing `cokeOvenSlices` control means NO overclocks and one parallel;
+    leftover voltage settings on old nodes must not accelerate it. The
+    Industrial Coke Oven keeps ordinary overclocks with the slices control.
+    Issue #58's supplied plan stores an explicit 4096 EU/t budget (2A EV),
+    not a lone 1A EV hatch; do not globally halve saved power budgets to fix
+    that report. See `docs/machine-feedback-audit.md`.
+  - Utupu-Tanuri is BOTH `Multiblock Dehydrator` and `Vacuum Furnace` in
+    the dataset. Keep both aliases on the same table entry: the latter's
+    17 recipes previously bypassed the coils and used runtime-only math.
+    `minimumHeatFromSpecialValue` floors its coil picker at recipe heat
+    (zero for dehydration, e.g. 7200 K for sulfur froth). The vacuum-furnace
+    structure render was incorrect and removed; use the real controller icon
+    until an accurate render is available. See `utupu-tanuri.test.ts`.
+- Neutron Activator pipe height is an integer count, minimum 4 with NO machine
+  height cap. `speedingPipeCasing` keeps its existing saved key; its control's
+  `numeric` metadata enables typing and stepping rather than a finite ladder.
+  `neutron-activator.ts` follows MTENeutronActivator / ParallelHelper: Java's
+  0.9f per extra layer, CEIL duration above one tick, FLOOR reciprocal parallels
+  below one tick (custom supplier path), bounded by Java's max parallel integer.
+  Do not substitute the generic floor-ticks / ceil-parallels rule. Accelerator
+  hatch power and neutron-energy regulation remain unmodelled; valid products
+  assume the neutron kinetic energy is in the recipe's allowed range.
 - Existing supported tier effects include:
   - `parallelMultiplier`
   - `durationMultiplier`
@@ -400,6 +465,18 @@ Working notes for future agents on GTNH Factory Flow.
   card, never a section id. The machine list's usage is the sections'
   shares added up, PEAK the hungriest section's draw, AVERAGE each
   section's draw weighted by its share.
+- The inspector's MACHINES list is ONE ROW PER CARD (Jack, 2026-09-11),
+  including identical recipes and power configurations. Keep the existing
+  machine-name headers and indented count/power rows; each card gets its own
+  child row, with no recipe/item subtitle. Never combine cards' figures.
+  `buildMachineList` in `src/lib/model/machine-list.ts` supplies its figures:
+  Build uses the card's machineCount; Solve/Pool use the sum of that card's
+  sections' theoreticalMachinesRequired, keeping fractions and zero-demand
+  cards. Parallel processing scales power, not the physical machine count.
+  Shared cards remain one row, with peak draw from the hungriest section and
+  average draw weighted by each section's required count/time share. Crop
+  cards still count their harvesters, not seeds. Row clicks focus that one
+  card; checklist clicks affect that card alone.
 - CARD: every section gets a `SectionLabelRow` (name, share, verdict word,
   remove key) over rails of its own; the picture stays with the first, the
   rest get the bare arrow. The machine menu lists the INTERSECTION of the
@@ -874,14 +951,44 @@ Working notes for future agents on GTNH Factory Flow.
   so Ctrl+G and the button agree. Boards inside boards is a real feature
   and a separate decision; it must not happen by accident from a marquee.
 
-## Interface Size (130 Is The New 100%)
+## Interface Size (100% Is The Baseline)
 
-- The planner renders a third larger than it used to (Jack, 2026-09-07:
-  "130 is the new 100%"). `src/lib/ui-scale.ts` owns it: a Settings
+- In Solve/Pool, Outputs lists each actual product drawer as an always-open
+  branch with the same `TargetLine` rate/pencil editor used on the canvas.
+  Rates align right; branches have no invented drawer names. Locate identifies
+  the matching canvas drawer. Byproducts/exports have no target controls.
+  Build/read-only views show a subtle product marker instead. Target editing
+  retains the existing shared-target behavior for matching product drawers.
+  Product rows participate in virtual-list height calculations.
+
+- The right inspector is 280 shell pixels wide on desktop and as a drawer.
+  Resources and Machines share the dark styling in `inspector/panel.css`.
+  Resources use 28px ledger rows with simultaneous Raw and Net columns;
+  Net is surplus minus deficit, while Raw keeps each boundary side intact.
+  Keep virtual list measurements in sync with CSS. Machines use the same
+  compact rows with Peak/Average columns. Each machine has a full-width name
+  above its build rows; multiblocks show amperage and tier (typed EU/t budgets
+  display equivalent amps at that tier). Peak/Average share the Machines
+  heading. Resource section headers run edge to edge with no top divider.
+  Resource tools live in the header.
+  Resource height follows visible rows (capped when Machines is present), so
+  a short resource list gives spare height to the machine list.
+
+- The left items panel is 256 shell pixels wide (desktop and mobile drawer
+  cap), fitting four 58px-minimum item columns. Keep drawer measurement and
+  desktop grid widths in sync.
+
+- Build/Solve/Pool use icons only on snug or compact windows; wider windows
+  keep the words. When Build tools folds, the mode switch and Pool product
+  key move inside it, freeing the centre. The key width and drag hit-testing
+  must use the same pitch.
+
+- The default is 10% smaller than the previous baseline (Jack, 2026-09-10),
+  still labelled 100%. `src/lib/ui-scale.ts` owns it: a Settings
   stepper (Size, minus/plus, 60-200% in tens, Reset) stores a PERCENT of
   the default (`gtnh-factory-flow.ui-scale.v1`), and the factor is
-  percent x `UI_SCALE_BASE` (1.3) - or x1 on a viewport that is compact
-  at 1:1, so phones keep their size. The boot script in layout.tsx
+  percent x `UI_SCALE_BASE` (1.17) - or x `UI_SCALE_PHONE_BASE` (0.9)
+  on a viewport that is compact at 1:1. The boot script in layout.tsx
   (`uiScaleBootScript`, ui-scale-boot.ts, hook-free so the server layout
   may import it) stamps `--ui-scale` / `--ui-scale-inverse` and the
   `data-compact` / `data-snug` attributes before first paint;
@@ -948,7 +1055,8 @@ Working notes for future agents on GTNH Factory Flow.
 
 ## Board Gestures
 
-- Checklist mode (`ChecklistMode.tsx`) has its own tray on the right, beside markup/view. Its active
+- Checklist mode (`ChecklistMode.tsx`) lives in View options, with a labelled
+  on/off control and inline progress/reset. Its active
   tool is session state; `project.checklist` saves checked card and edge ids.
   It only changes presentation, never machine settings or production, and
   supports undo/reset. The Machines list checks the cards in each build row.
@@ -995,11 +1103,37 @@ Working notes for future agents on GTNH Factory Flow.
 ## The Board Grid
 
 - `src/lib/board-grid.ts` owns `BOARD_GRID = 20` and every card size derived
-  from it. A recipe card is 22 cells (440px) wide since 2026-09-06: the
+  from it. A recipe card is 19 cells (380px) wide: since 2026-09-06 the
   machine PICTURE sits between the two rails, where the arrow was (inputs
-  left, outputs right, no arrow), on a window that stretches to the rails
-  and never under 6 cells tall; calm mode keeps the bare arrow. Read the "board grid" section of `ARCHITECTURE.md` before changing
-  any size, offset, or padding on the flow board.
+  left, outputs right, no arrow), on a window that is 2 port rows tall at
+  the least (`PICTURE_MIN_HEIGHT`) and never sets the card's height itself;
+  calm mode keeps the bare arrow. THREE cells came off the card on
+  2026-09-09 (22 to 21 to 20 to 19) and the picture was never touched: it
+  is the flex-1 middle at 96px throughout, and every cell came out of the
+  two item chips (140 to 112) and the output coupling (34 to 30). Re-check
+  that 96 first if the width moves again.
+  - A name too long for the chip WRAPS to two 10px lines
+    (`.flow-port-name`, a CSS clamp - no text measurement on a board of a
+    hundred cards) instead of ending in three dots. The clamp is ALL that
+    class does: the size, the weight and the leading are utilities ON the
+    element, because a name that depends on a stylesheet rule for its size
+    renders at the inherited 16px and bursts out of the chip whenever that
+    rule is late (it did, 2026-09-09).
+  - THE NAME COLUMN IS THE PRICE, and it is down to 70px. Measured over
+    three real boards (platline, farm-power, oil-community; 219 distinct
+    names) at the 10px type: 5 clipped at 21 cells, 12 at 20, 17 at 19.
+    The chip's whole stack then went down a point - name and rate 10px to
+    9px, the bar 4px to 3px - which put 19 cells back to 12 clipped, the
+    same as 20 cells was, and gave the row 8px of air instead of 4 (the
+    text was crowding the top and the bar the bottom). SMALLER TYPE BUYS
+    WIDTH: it is worth a whole cell, so reach for it before the picture.
+    Re-measure with `name-clip-probe.local.mjs` if any of these move.
+  - The stack is name (2 lines x 9) + rate (9) + 2 + bar (3) = 32 in the
+    40px row. `chip-fit-probe.local.mjs` reports the tightest row's air
+    and the SERVED bar height, so a stale stylesheet cannot be mistaken
+    for a layout result.
+  Read the "board grid" section of `ARCHITECTURE.md` before changing any
+  size, offset, or padding on the flow board.
 - The grid is always on. There is no snap toggle and no grid button; do not
   reintroduce one.
 - Node positions, node sizes, and port row centres must all be multiples of
@@ -1063,7 +1197,12 @@ Working notes for future agents on GTNH Factory Flow.
 - EXITS AND LANDINGS (rewritten 2026-09-08 with Jack): a wire may leave
   a dock along the port's normal OR 45° to either side of it (three
   `EndVertex` variants per dock, each with its own apron); a diagonal
-  exit or landing costs `turn45`, the bend it is, priced at the dock. THE
+  exit or landing costs `turn45`, the bend it is, priced at the dock.
+  Since 2026-09-09, diagonal runs need at least TWO grid cells: diagonal
+  exits/landings must reach their clean point, and the search enters an
+  interior diagonal with two checked steps before extending it one at a
+  time. Tight connections use square elbows; one-cell diagonal shots are
+  forbidden. THE
   CLEAN RUN is the apron and the cells after it up to the clean point
   (`cleanCells` out from the card edge): a TURN made on it, by a wire
   that left from that start (`cleanZone`, keyed by start variant through
@@ -1078,8 +1217,20 @@ Working notes for future agents on GTNH Factory Flow.
   TOUCHING DOCKS (`directDock`): two cards one grid space apart have no
   vertex between them, so a source dock whose apron IS a facing target
   dock connects there without a search - the only special case.
-  Preference order Jack asked for falls out of the prices: straight shot,
-  then a 45° shot, then pathing round.
+  That one-cell shortcut is straight only; longer diagonals compete with
+  square routes through the ordinary search.
+  Jack's follow-up (2026-09-09): diagonals are reserved for trips whose
+  CARD RIMS are at least six grid spaces apart (`diagonalDistanceCells`),
+  measured before dock selection, never by the detour's length. Long trips
+  may still leave at 45 degrees immediately. Nearby cards route square.
+  Freely selected docks on BENT routes now prefer six grid spaces of total
+  horizontal + vertical separation (`dockTravelCells`, `crampedDockCost`), so the exit
+  and entrance move along the rims to leave visible wire and arrow room.
+  Straight shots are EXEMPT (Jack's next correction, 2026-09-09): aligned
+  facing docks one or two cells apart connect directly. Exempt the actual
+  straight path, not merely aligned docks when an obstacle forces a detour.
+  It is a soft cost, not a forced loop or a reason to disconnect a wire;
+  fixed endpoints, pinned trips and self loops retain their own rules.
 - SELF LOOPS dock freely like everything else, but route with 90° TURNS
   ONLY (`straightOnly` in routeWithinWindow: no diagonal exits, landings or
   runs - a loop that left at 45° and turned back on itself read as a
@@ -1171,6 +1322,17 @@ Working notes for future agents on GTNH Factory Flow.
   every 8 cells along a long run, each kept wholly on one straight run.
   They stay at a GLANCE (`EDGE_DETAIL_ARROWS` is in the glance level) and
   draw double size there.
+- CALM MODE IS SESSION ONLY, and that is a SAFETY rule, not a preference
+  (Jack, 2026-09-09: "they're stuck, they can't undo it. This is an
+  emergency"). `calmMode` on the board view is never read from storage and
+  never written to it (`board-view.ts`); only the image export turns it on,
+  for the length of a capture. The board's own switch for it went on
+  2026-09-08, so a stored `true` was a room with no door - and the export
+  persisted `true` and put it back in a `finally`, which never runs if the
+  tab closes mid-capture. Players were stranded in softened status colours
+  for good. A reload is now always the way out.
+  `board-view.test.ts` pins both halves; do not make it a stored setting
+  again unless the board carries a visible switch that turns it off.
 - LINE LABELS ARE GONE (Jack, 2026-09-08: "dropping support for line
   labels ... permanently for everyone"): no rate pills on wires, no tag
   button, no `lineLabelsMode` on the board view, no `labelOffset` on an
@@ -1198,11 +1360,35 @@ Working notes for future agents on GTNH Factory Flow.
 
 ## Import/Export Plans
 
+- Public setups open through `openCommunityPost`: owned posts resume their
+  linked personal design; other authors' posts open a VIEW-ONLY session.
+  `design-store.publicView` is transient, with no active design id or library
+  record. Never autosave or flush its canvas into a personal design.
+- `PublicViewBar` offers "Open a copy", which creates an unlinked, private
+  personal design. Only that explicit action adds the viewed setup to the
+  library. Closing the viewer returns to the previous personal design.
+- `factory-store` guards project edits while `isReadOnly`; loading a personal
+  design releases it. System dataset hydration and opening/folding board
+  windows may update the transient view, without edit history. The UI lock
+  (`use-viewer-lock.ts`) leaves marked board navigation available. Resource
+  clicks and shortcuts must not open recipe search in view mode;
+  `data-viewer-inspect` must never wrap resource ports or editing controls.
+- A viewer keeps its public URL across reloads; making a copy removes it.
+  An owner's posted design still follows autosaves through `post-follow.ts`.
+
 - Plan import/export must preserve item/fluid identity. `fluid.*` showing in UI usually means fluid IDs were imported without resolving display resource metadata.
 - When importing image-embedded or JSON plans, preserve node recipe overrides, selected machine handler, tier/config selections, and concrete oredict alternatives.
 - Creating a storage/drawer by dragging from a recipe slot must create both the storage node and the edge.
 
 ## Performance
+
+- Shared-design autosave (`post-follow.ts`) syncs the plan and metadata,
+  NEVER a live-board photograph. The old 30-second preview timer forced
+  glance/presentation mode and paused motion during capture, making the
+  board visibly shrink and stall every minute while editing a shared plan
+  (Jack, 2026-09-09). Hidden tabs could prolong it while capture waited for
+  paint. Photos are taken on explicit sharing/export only; automatic saves
+  keep the last shared photograph. Do not restore timed live-board capture.
 
 - Performance is a first-class requirement, especially on the flow board. Read
   `ARCHITECTURE.md` (root) before touching board, routing, or rendering code —
@@ -1292,6 +1478,20 @@ Working notes for future agents on GTNH Factory Flow.
   LP flows carry solver-precision dust proportional to board scale.
 
 ## The Three Modes (Build, Solve, Pool) And The Rules That Went
+
+- The board-wide POWER DISPLAY selector is restored (Jack, 2026-09-11):
+  beside the rate key, EU/t or amps of a chosen voltage tier, with click
+  selection and wheel stepping. It is separate from each machine's hatch
+  voltage and amperage controls. `powerDisplayUnit` and `useRateDisplayUnits`
+  repaint the numbers without changing the project or solving again.
+  Browser preference: `gtnh-factory-flow.power-display-unit.v1`.
+  Nonzero power readings below 0.01 display `<0.01`; zero stays zero.
+  Memoized inspector rows subscribe to both display dials themselves.
+  Do not remove this display setting when changing machine power controls.
+  Toolbar folding now has an intermediate `modeIconsOnly` stage based on
+  BOARD width. Its size budget separates rem-sized controls (Firefox text
+  zoom/default fonts) from fixed-pixel mode/power keys; trays and mode keys
+  cannot flex-shrink. Test expanded checklist and manual recalculate too.
 
 - TOOLBAR LAYOUT since the rework (Jack, 2026-09-06): LEFT row = undo
   pair, rate keys, pool mode's product tray (`PoolSpawnKeys`, the whole

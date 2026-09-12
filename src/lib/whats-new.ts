@@ -1,5 +1,6 @@
 "use client";
 
+import { CHANGELOG, type ChangelogEntry } from "@/lib/changelog";
 import { APP_VERSION } from "@/lib/version";
 
 /**
@@ -16,12 +17,11 @@ import { APP_VERSION } from "@/lib/version";
  *   cannot become the new one on its own, so the honest thing is to say a new
  *   version exists and offer a reload. `useDeployedVersion` asks the server.
  *
- * THE PLAYER-FACING CHANGELOG IS GONE (Jack, 2026-09-08): no dialog, no
- * unread dot, and the header's version chip opens nothing. `CHANGELOG` in
- * changelog.ts survives as a record in the code, read by nothing the player
- * can reach. So the only reader of the stamp is the release notice, and the
- * only writer is the header, which stamps on every load after asking whether
- * a notice is due.
+ * THE NOTES ARE BACK (Jack, 2026-09-09): the header's version chip opens
+ * the full changelog again and wears a dot when a release has shipped that
+ * this browser has not read. That dot keeps its OWN stamp, below - the one
+ * above is written on every load by the release notice and could never let a
+ * dot light.
  */
 const LAST_SEEN_KEY = "susy-factory-flow.last-seen-version.v1";
 
@@ -71,4 +71,81 @@ export function compareVersions(left: string, right: string): number {
     }
   }
   return 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* The notes, and whether this reader has opened them.                     */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * The newest release whose NOTES this browser has actually opened.
+ *
+ * A separate stamp from `LAST_SEEN_KEY` on purpose. That one answers "has
+ * this browser run this version", and the release notice writes it on every
+ * load - so if the dot read it, the dot could never light: the load that
+ * would have raised it has already stamped it away. This one is written by
+ * one gesture only, opening the notes, which is the only thing that means
+ * they were read.
+ */
+const NOTES_READ_KEY = "gtnh-factory-flow.changelog-read.v1";
+
+function readNotesRead(): string | undefined {
+  try {
+    return window.localStorage.getItem(NOTES_READ_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeNotesRead(version: string): void {
+  try {
+    window.localStorage.setItem(NOTES_READ_KEY, version);
+  } catch {
+    // A blocked or full quota must never break the app. The cost is a dot
+    // that comes back, which is the harmless direction to fail in.
+  }
+}
+
+/**
+ * What has shipped since this browser last opened the notes, newest first.
+ *
+ * Empty on a FIRST visit, deliberately. Somebody arriving for the first time
+ * has no idea what any of it used to do, so a list of changes is noise in
+ * front of the thing they came to see: the stamp is written silently instead
+ * and they hear about the next release like everyone else.
+ */
+export function unseenEntries(): ChangelogEntry[] {
+  const read = readNotesRead();
+  if (!read) {
+    writeNotesRead(APP_VERSION);
+    return [];
+  }
+  if (compareVersions(read, APP_VERSION) >= 0) {
+    return [];
+  }
+  return CHANGELOG.filter(
+    (entry) =>
+      compareVersions(entry.version, read) > 0 &&
+      compareVersions(entry.version, APP_VERSION) <= 0,
+  );
+}
+
+/**
+ * The stamp is browser-wide, so the chip and anything else reading it have to
+ * agree within the same page. Nothing here is worth a store; it is one string
+ * and two readers.
+ */
+const listeners = new Set<() => void>();
+
+export function subscribeToNotesRead(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** Opening the notes IS reading them. */
+export function markNotesReadAndNotify(version = APP_VERSION): void {
+  writeNotesRead(version);
+  for (const listener of [...listeners]) {
+    listener();
+  }
 }

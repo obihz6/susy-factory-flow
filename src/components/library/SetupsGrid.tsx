@@ -13,7 +13,7 @@ import {
   voteCommunityPlan,
 } from "@/lib/community/client";
 import { withAuthor } from "@/lib/community/search-query";
-import { openCommunityPost } from "@/lib/community/open-post";
+import { copyCommunityPost, openCommunityPost } from "@/lib/community/open-post";
 import { sharedPlanLink } from "@/lib/community/shared-link";
 import type { CommunityPlanSort, CommunityPlanSummary, EntryIcon } from "@/lib/community/types";
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value";
@@ -130,6 +130,7 @@ export function SetupsGrid({
     (state) =>
       state.designs.find((design) => design.id === state.activeDesignId)?.name ?? "this board",
   );
+  const hasEditableDesign = useDesignStore((state) => state.activeDesignId !== undefined);
 
   useEffect(() => {
     const refresh = () => setRefreshTick((tick) => tick + 1);
@@ -307,21 +308,31 @@ export function SetupsGrid({
     }
   };
 
-  // Your own post opens your design; anyone else's opens as a copy of yours.
-  const open = async (plan: CommunityPlanSummary) => {
+  // Viewing and copying are separate choices; owners can still resume their design.
+  const open = async (plan: CommunityPlanSummary, asCopy = false) => {
+    if (busyId) return;
     setBusyId(plan.id);
     try {
-      const outcome = await openCommunityPost({
-        id: plan.id,
-        name: plan.name,
-        isMine: plan.isMine === true,
-      });
-      if (outcome === "copied") {
+      let outcome: "opened" | "viewed" | "copied";
+      if (asCopy) {
+        await copyCommunityPost(plan);
+        outcome = "copied";
+      } else {
+        outcome = await openCommunityPost({
+          id: plan.id,
+          name: plan.name,
+          isMine: plan.isMine === true,
+          authorName: plan.authorName,
+        });
+      }
+      if (outcome === "viewed" || outcome === "copied") {
         patchPlan(plan.id, (entry) => ({ ...entry, downloads: entry.downloads + 1 }));
       }
       setError(undefined);
+      setDetailId(undefined);
     } catch (thrown) {
       fail(thrown, "Opening the setup failed.");
+      setDetailId(undefined);
     } finally {
       setBusyId(undefined);
     }
@@ -361,6 +372,7 @@ export function SetupsGrid({
 
   // The OPEN TAB becomes this post's new content.
   const overwriteWithBoard = async (plan: CommunityPlanSummary) => {
+    if (useFactoryStore.getState().isReadOnly) return;
     try {
       const state = useFactoryStore.getState();
       await patchCommunityPlan(plan.id, {
@@ -453,12 +465,16 @@ export function SetupsGrid({
             editTags: true,
             onPickIcon: detailPlan.isMine ? () => setIconEditId(detailPlan.id) : undefined,
             primary: {
-              label: detailPlan.isMine ? "Open" : "Open a copy",
+              label: detailPlan.isMine ? "Open" : "View",
               onClick: () => {
-                setDetailId(undefined);
                 void open(detailPlan);
               },
             },
+            secondary: {
+              label: "Open a copy",
+              onClick: () => void open(detailPlan, true),
+            },
+            actionBusy: busyId === detailPlan.id,
             keys: [
               {
                 label: detailPlan.myVote === 1 ? "Take back your vote" : "Vote this up",
@@ -614,7 +630,7 @@ export function SetupsGrid({
           onClose={closeMenu}
         >
           <MenuItem
-            label={menuPlan.isMine ? "Open" : "Open a copy as a tab"}
+            label={menuPlan.isMine ? "Open" : "View setup"}
             onClick={() => {
               closeMenu();
               void open(menuPlan);
@@ -651,7 +667,7 @@ export function SetupsGrid({
                   setIconEditId(menuPlan.id);
                 }}
               />
-              <ArmedMenuItem
+              {hasEditableDesign ? <ArmedMenuItem
                 label={`Replace with "${activeTabName}"`}
                 armedLabel="Confirm: replace the post"
                 armed={armed?.id === menuPlan.id && armed.what === "overwrite"}
@@ -660,7 +676,7 @@ export function SetupsGrid({
                   closeMenu();
                   void overwriteWithBoard(menuPlan);
                 }}
-              />
+              /> : null}
               <ArmedMenuItem
                 label="Take down"
                 armedLabel="Confirm: take it down for everyone"

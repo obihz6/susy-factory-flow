@@ -181,6 +181,11 @@ export function useIsCompactViewport(): boolean {
   return useSyncExternalStore(subscribe, isCompactViewport, getServerSnapshot);
 }
 
+/** Re-renders when labels need to give way to icons on narrower windows. */
+export function useIsSnugViewport(): boolean {
+  return useSyncExternalStore(subscribe, isSnugViewport, getServerSnapshot);
+}
+
 /** Keeps the <html> viewport attributes live for as long as it is mounted. */
 export function subscribeViewportAttributes(): () => void {
   stampViewportAttributes();

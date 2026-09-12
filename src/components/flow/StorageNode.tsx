@@ -8,7 +8,7 @@ import type {
   StorageDrainMode,
   StorageThroughputResult,
 } from "@/lib/model/types";
-import { formatCompact, makeResourceKey, trimTrailingDecimalZeros } from "@/lib/model";
+import { formatCompact, formatPowerValue, makeResourceKey, trimTrailingDecimalZeros } from "@/lib/model";
 import { isDrainRole, storageRoleFor, type StorageRole } from "@/lib/model/storage-role";
 import {
   rateMultiplierForKind,
@@ -109,9 +109,9 @@ function storageTint(storage: Pick<FactoryStorage, "kind" | "colorTag">, role: S
 }
 
 const ROLE_TINTS: Record<StorageRole, string> = {
-  source: "#ef4444",
-  product: "#10b981",
-  byproduct: "#10b981",
+  source: "var(--flow-input)",
+  product: "var(--flow-output)",
+  byproduct: "var(--flow-output)",
   // A bin is neither an import nor a shipment: dull steel, like the plumbing.
   trash: "#8a93a6",
   buffer: "#8a93a6",
@@ -280,8 +280,8 @@ function StorageNodeComponent({ data, selected }: NodeProps<StorageFlowNode>) {
   const isTank = storage.kind === "fluid";
   const isPlainFluid = isTank && !storage.iconPath && !storage.iconAtlas;
   // The card wears its JOB's colour, the same dialect the side panel already
-  // speaks: red is what the plan imports (NEED), blue is what it is for
-  // (PRODUCTS), green is what it also makes (BYPRODUCTS), steel is internal
+  // speaks: red is what the plan imports, mint green is what it exports
+  // (products and byproducts), and steel is internal
   // plumbing. The item's own colour lives in its icon; painting the frame
   // with it too said the same thing twice and left the four jobs looking
   // alike. Paint (colorTag) still wins when the player chose one.
@@ -699,7 +699,7 @@ function NetLine({ net, kind, role }: { net: number; kind: string; role: Storage
         // the number is the thing worth reading.
         "storage-net-line relative z-10 h-4 whitespace-nowrap text-center font-bold leading-4 tabular-nums",
         rateFitClass(label, role),
-        net > 0.005 ? "text-[#7ede96]" : net < -0.005 ? "text-[#ff9191]" : "text-[#a8afbb]",
+        net > 0.005 ? "text-[var(--flow-output)]" : net < -0.005 ? "text-[var(--flow-input)]" : "text-[#a8afbb]",
       ].join(" ")}
     >
       <MotionNumberText
@@ -753,7 +753,7 @@ function parseAmountWithSuffix(text: string): number | undefined {
  * byproduct until a number lands). Red when no chain can reach the number at
  * any machine scale.
  */
-function TargetLine({
+export function TargetLine({
   storage,
   result,
 }: {
@@ -817,8 +817,8 @@ function TargetLine({
         onMouseDown={(event) => event.stopPropagation()}
         aria-label="Required amount"
         className={[
-          "nodrag group/target relative z-40 flex cursor-pointer justify-center hover:brightness-125",
-          unreachable ? "[&_div]:!text-[#ff9191]" : "",
+          "nodrag group/target relative z-40 flex cursor-pointer justify-center text-[var(--flow-output)] hover:brightness-125",
+          unreachable ? "[&_div]:!text-[var(--flow-input)]" : "",
         ].join(" ")}
       >
         {/* Two marks say "this line takes typing", both attached to the
@@ -834,7 +834,7 @@ function TargetLine({
             <div
               className={[
                 "storage-net-line relative h-4 whitespace-nowrap text-center text-[12px] font-bold leading-4 tabular-nums",
-                askBlink ? "animate-pulse text-[#a8afbb]" : "text-[#6b7280]",
+                askBlink ? "animate-pulse text-[var(--flow-output)]" : "text-[var(--flow-output)] opacity-60",
               ].join(" ")}
             >
               rate?
@@ -844,7 +844,7 @@ function TargetLine({
             aria-hidden
             // Centred on the ink-and-underline block, not the line's box:
             // the glyphs sit low in it, so dead-centre floated the pencil.
-            className="absolute left-full top-[calc(50%+2px)] ml-[2px] h-[11px] w-[11px] -translate-y-1/2 fill-current text-[#a8afbb] group-hover/target:text-white"
+            className="absolute left-full top-[calc(50%+2px)] ml-[2px] h-[11px] w-[11px] -translate-y-1/2 fill-current opacity-70 group-hover/target:opacity-100"
           />
         </div>
       </div>
@@ -880,8 +880,8 @@ function TargetLine({
           "nodrag h-4 w-[60px] border px-[3px] text-center text-[9px] font-bold tabular-nums outline-none",
           "bg-[#14171d] shadow-[inset_1px_1px_0_rgba(255,255,255,0.08),inset_-1px_-1px_0_rgba(0,0,0,0.5)]",
           "placeholder:font-normal placeholder:text-[#6b7280]",
-          "focus:bg-[#1a1e26] focus:ring-1 focus:ring-cyan-400",
-          "border-[#3a4150] text-[#e8e9ee] focus:border-cyan-700",
+          "focus:bg-[#1a1e26] focus:ring-1 focus:ring-[var(--flow-output)]",
+          "border-[var(--flow-output)]/40 text-[var(--flow-output)] focus:border-[var(--flow-output)]",
         ].join(" ")}
       />
     </div>
@@ -1067,6 +1067,7 @@ function storageMatchesSearch(storage: FactoryStorage, query: string) {
 function formatCompactRate(value: number, kind: string): string {
   const scaled = value * rateMultiplierForKind(kind);
   const unit = rateSuffixForKind(kind).trimStart();
+  if (kind === "power") return `${formatPowerValue(scaled)} ${unit}`;
   const abs = Math.abs(scaled);
 
   // The floor is written per second and scaled with the unit, so "balanced"

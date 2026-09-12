@@ -12,8 +12,8 @@
  * entry already at the top and leave the number alone. If it MATCHES,
  * everything here is live and the next change starts a new release.
  *
- * The chip opens the changelog, so every bump needs an entry in
+ * The header chip opens the changelog, so every bump needs an entry in
  * `src/lib/changelog.ts` written for players, not for developers, and kept to
  * a headline plus a few one-line notes.
  */
-export const APP_VERSION = "3.0.0";
+export const APP_VERSION = "3.1.7";

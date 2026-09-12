@@ -3,9 +3,8 @@
 import {
   ArrowBigUp,
   Check,
-  ChevronDown,
-  ChevronUp,
   Link2,
+  Pencil,
   LoaderCircle,
   Share2,
   Unlink,
@@ -23,7 +22,7 @@ import { EntryIconSlot, IconPicker, iconSuggestionsFromStats } from "@/component
 import { formatRelativeDate } from "@/components/shelf-cards";
 
 /**
- * The plan bar: one permanent slim row under the board carrying the plan's
+ * The plan bar: one permanent slim row above the board carrying the plan's
  * face - icon, name, blurb - and, when the plan is linked to a community
  * post, that post's life: author, dates, votes, and the way back to the
  * posted version.
@@ -41,7 +40,7 @@ const OPEN_STORAGE_KEY = "susy-factory-flow.plan-card-open.v1";
 
 /** The header-family square button the bar is made of. */
 const BAR_BUTTON =
-  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-sunken disabled:text-fg-muted";
+  "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-sunken disabled:text-fg-muted";
 
 export function PlanIdentityDrawer() {
   const project = useFactoryStore((state) => state.project);
@@ -112,25 +111,48 @@ export function PlanIdentityDrawer() {
     // board gets, never the other way round.
     <section
       data-help-anchor="plan-card"
-      className="min-w-0 shrink-0 border-t border-line bg-surface"
+      className="plan-summary min-w-0 shrink-0 border-b border-line bg-surface"
     >
-      <div className="flex h-9 min-w-0 items-center gap-1.5 px-1.5">
-        <button
-          type="button"
-          onClick={toggleOpen}
-          aria-expanded={isOpen}
-          title={isOpen ? "Fold the description away" : "This plan's description"}
-          aria-label={isOpen ? "Fold the plan description away" : "Open the plan description"}
-          className={BAR_BUTTON}
-        >
-          {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
-        </button>
+      <div className="flex h-[29px] min-w-0 items-center gap-2 px-2">
         <EntryIconSlot
           icon={project.icon}
           editable
           onEdit={() => setPickingIcon(true)}
-          className="!h-7 !w-7 shrink-0 border border-line-strong bg-surface-sunken"
+          className="!h-6 !w-6 shrink-0 border border-line-strong bg-surface-sunken"
         />
+        <button type="button" onClick={toggleOpen} aria-expanded={isOpen}
+          aria-label="Edit plan details" className="plan-summary-name group flex h-6 min-w-0 max-w-[35%] shrink items-center gap-1.5 rounded px-1 text-left font-semibold text-fg hover:bg-surface-raised">
+          <span className="truncate">{nameDraft ?? project.name}</span>
+          <Pencil aria-hidden className="h-3 w-3 shrink-0 text-fg-muted opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
+        </button>
+        <button type="button" onClick={toggleOpen} aria-expanded={isOpen}
+          aria-label={isOpen ? "Fold the plan description away" : "Open the plan description"}
+          className="plan-summary-description flex h-6 min-w-0 flex-1 items-center rounded px-2 text-left text-xs text-fg-muted hover:bg-surface-raised hover:text-fg">
+          <span className="block w-full overflow-hidden whitespace-nowrap text-xs" style={{ maskImage: "linear-gradient(to right, black calc(100% - 12px), transparent)" }}>
+            {(descriptionDraft ?? project.description)?.trim() || "Add description…"}
+          </span>
+        </button>
+        {linkedPlanId ? (
+          <LinkedPostStrip key={linkedPlanId} planId={linkedPlanId} />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setSharing(true)}
+            disabled={project.nodes.length === 0}
+            title={project.nodes.length === 0 ? "Share: build something first" : "Share"}
+            aria-label="Share this setup"
+            className="plan-summary-action inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded border border-line-strong px-2 text-fg hover:bg-surface-raised disabled:opacity-40"
+          >
+            <Share2 className="h-3 w-3" />
+            <span>Share</span>
+          </button>
+        )}
+      </div>
+      {isSharing ? <SharePlanDialog onClose={() => setSharing(false)} /> : null}
+
+      {isOpen ? (
+        <div className="plan-summary-details grid gap-2 border-t border-line p-3">
+          <label className="grid gap-1 text-xs text-fg-muted">Name
         <input
           value={nameDraft ?? project.name}
           onChange={(event) => setNameDraft(event.target.value)}
@@ -143,27 +165,11 @@ export function PlanIdentityDrawer() {
           maxLength={80}
           aria-label="Plan name"
           title="Plan name"
-          className="h-7 min-w-16 flex-1 rounded border border-transparent bg-transparent px-1.5 text-sm font-medium text-fg outline-none hover:border-line focus:border-line-strong focus:bg-surface-sunken"
-        />
-        {linkedPlanId ? (
-          <LinkedPostStrip key={linkedPlanId} planId={linkedPlanId} />
-        ) : (
-          <button
-            type="button"
-            onClick={() => setSharing(true)}
-            disabled={project.nodes.length === 0}
-            title={project.nodes.length === 0 ? "Share: build something first" : "Share"}
-            aria-label="Share this setup"
-            className={BAR_BUTTON}
-          >
-            <Share2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {isSharing ? <SharePlanDialog onClose={() => setSharing(false)} /> : null}
 
-      {isOpen ? (
-        <div className="border-t border-line p-1.5">
+          className="h-8 w-full min-w-0 rounded border border-line bg-surface-sunken px-1.5 text-sm font-medium text-fg outline-none hover:border-line focus:border-line-strong focus:bg-surface-sunken"
+        />
+          </label>
+          <label className="grid gap-1 text-xs text-fg-muted">Description
           <textarea
             value={descriptionDraft ?? project.description ?? ""}
             onChange={(event) => {
@@ -179,6 +185,7 @@ export function PlanIdentityDrawer() {
             aria-label="Plan description"
             className="w-full resize-y rounded border border-line-strong bg-surface-sunken px-2 py-1.5 text-xs"
           />
+          </label>
         </div>
       ) : null}
 
@@ -379,7 +386,7 @@ function LinkedPostStrip({ planId }: { planId: string }) {
         disabled={busy === "vote"}
         title={post.myVote === 1 ? "You voted this setup up" : "Vote this setup up"}
         className={[
-          "inline-flex h-7 shrink-0 items-center gap-0.5 rounded border px-1.5 text-xs tabular-nums",
+          "inline-flex h-6 shrink-0 items-center gap-0.5 rounded border px-1.5 text-xs tabular-nums",
           post.myVote === 1
             ? "border-emerald-600 text-emerald-500"
             : "border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised",

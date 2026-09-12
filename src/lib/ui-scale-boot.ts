@@ -8,7 +8,10 @@
 export const UI_SCALE_STORAGE_KEY = "gtnh-factory-flow.ui-scale.v1";
 
 /** What the setting's 100% renders at, on a desktop-sized window. */
-export const UI_SCALE_BASE = 1.3;
+export const UI_SCALE_BASE = 1.17;
+
+/** Phone baseline, also reduced by 10% while the setting stays at 100%. */
+export const UI_SCALE_PHONE_BASE = 0.9;
 
 export const UI_SCALE_MIN_PERCENT = 60;
 export const UI_SCALE_MAX_PERCENT = 200;
@@ -42,7 +45,7 @@ export function uiScaleBootScript(viewport: {
       UI_SCALE_STORAGE_KEY,
     )});` +
     `if(!(p>=${UI_SCALE_MIN_PERCENT}&&p<=${UI_SCALE_MAX_PERCENT}))p=${DEFAULT_UI_SCALE_PERCENT};` +
-    `var b=m(${JSON.stringify(PHONE_MEDIA_QUERY)}).matches?1:${UI_SCALE_BASE};` +
+    `var b=m(${JSON.stringify(PHONE_MEDIA_QUERY)}).matches?${UI_SCALE_PHONE_BASE}:${UI_SCALE_BASE};` +
     `var s=Math.round(p/100*b*1000)/1000;` +
     `d.style.setProperty("${UI_SCALE_VAR}",s);d.style.setProperty("${UI_SCALE_INVERSE_VAR}","calc(1 / "+s+")");` +
     `if(m("(max-width: "+(${compactMaxWidth}*s-0.02)+"px), (max-height: "+(${compactMaxHeight}*s-0.02)+"px)").matches)d.setAttribute("data-compact","");` +

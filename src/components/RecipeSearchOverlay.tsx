@@ -736,6 +736,7 @@ export function RecipeSearchOverlay({
   // Generators are not recipes, but they answer the same questions: a
   // takes/makes condition matches a source's flows under ANY setting, and
   // placing the hit dials those settings in. Purely client-side.
+  const isReadOnly = useFactoryStore((state) => state.isReadOnly);
   const addPowerSourceNode = useFactoryStore((state) => state.addPowerSourceNode);
   const refactorNodeToPowerSource = useFactoryStore((state) => state.refactorNodeToPowerSource);
   const allPowerHits = useMemo(
@@ -761,6 +762,7 @@ export function RecipeSearchOverlay({
   );
   const placePowerHit = useCallback(
     (hit: PowerStencilHit) => {
+      if (useFactoryStore.getState().isReadOnly) return;
       // Refactor mode: the pick REPLACES the card the search came from,
       // exactly as a recipe pick does - not a second card beside it.
       const refactorNodeId = useFactoryStore.getState().recipeBrowserRefactorNodeId;
@@ -1436,7 +1438,7 @@ export function RecipeSearchOverlay({
                 {cardMenu.label}
               </div>
               {[
-                { label: "Add to board", act: cardMenu.add },
+                ...(!isReadOnly ? [{ label: "Add to board", act: cardMenu.add }] : []),
                 { label: `Hide ${cardMenu.machineLabel}`, act: cardMenu.hide },
                 ...(cardMenu.only
                   ? [{ label: `Only ${cardMenu.machineLabel}`, act: cardMenu.only }]
@@ -1908,6 +1910,7 @@ const CompactRecipeCard = memo(function CompactRecipeCard({
     () => contextualizePreviewRecipe(summaryToPreviewRecipe(recipe), contextResource),
     [contextResource, recipe],
   );
+  const isReadOnly = useFactoryStore((state) => state.isReadOnly);
   const handlers = useMemo(() => getRecipeMachineHandlers(preview), [preview]);
   const primary = handlers[0];
   const machineLabel = primary?.label ?? recipe.machineType;
@@ -2025,7 +2028,7 @@ const CompactRecipeCard = memo(function CompactRecipeCard({
         }
         onSelectRecipe(recipe.id);
       }}
-      onDoubleClick={() => void onAdd(recipe, undefined, inputPicks)}
+      onDoubleClick={() => { if (!isReadOnly) void onAdd(recipe, undefined, inputPicks); }}
       onContextMenu={openMenu}
       onPointerEnter={armPrefetch}
       onPointerLeave={cancelPrefetch}
@@ -2066,6 +2069,8 @@ const CompactRecipeCard = memo(function CompactRecipeCard({
         <button
           type="button"
           aria-label="Add recipe node"
+          disabled={isReadOnly}
+          title={isReadOnly ? "Open a copy to add recipes" : undefined}
           onClick={(event) => {
             event.stopPropagation();
             void onAdd(recipe, undefined, inputPicks);

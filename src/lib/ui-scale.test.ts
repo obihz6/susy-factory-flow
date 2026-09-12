@@ -33,17 +33,17 @@ describe("interface size", () => {
     Reflect.deleteProperty(window, "matchMedia");
   });
 
-  it("renders 100% at 1.3 on a desktop window", async () => {
+  it("renders 100% at 1.17 on a desktop window", async () => {
     stubMatchMedia(() => false);
     const { getUiScale, getUiScalePercent } = await import("./ui-scale");
     expect(getUiScalePercent()).toBe(100);
-    expect(getUiScale()).toBe(1.3);
+    expect(getUiScale()).toBe(1.17);
   });
 
-  it("keeps a phone at 1:1", async () => {
+  it("renders 100% at 0.9 on a phone", async () => {
     stubMatchMedia((media) => media.includes("899.98px"));
     const { getUiScale } = await import("./ui-scale");
-    expect(getUiScale()).toBe(1);
+    expect(getUiScale()).toBe(0.9);
   });
 
   it("is 1 where there is no matchMedia to ask", async () => {
@@ -63,14 +63,14 @@ describe("interface size", () => {
 
     setUiScalePercent(120);
     expect(getUiScalePercent()).toBe(120);
-    expect(getUiScale()).toBe(1.56);
+    expect(getUiScale()).toBe(1.404);
     expect(window.localStorage.getItem("gtnh-factory-flow.ui-scale.v1")).toBe("120");
-    expect(document.documentElement.style.getPropertyValue("--ui-scale")).toBe("1.56");
+    expect(document.documentElement.style.getPropertyValue("--ui-scale")).toBe("1.404");
     // The exact reciprocal as a calc(), so the board's inverse zoom cancels
     // the shell's to exactly 1 (a rounded decimal left sub-pixel geometry
     // that doubled the compositor's per-frame work).
     expect(document.documentElement.style.getPropertyValue("--ui-scale-inverse")).toBe(
-      "calc(1 / 1.56)",
+      "calc(1 / 1.404)",
     );
   });
 
@@ -78,7 +78,7 @@ describe("interface size", () => {
     stubMatchMedia(() => false);
     window.localStorage.setItem("gtnh-factory-flow.ui-scale.v1", "80");
     const { getUiScale } = await import("./ui-scale");
-    expect(getUiScale()).toBe(1.04);
+    expect(getUiScale()).toBe(0.936);
   });
 
   it("builds the breakpoint queries from the factor and stamps the attributes", async () => {

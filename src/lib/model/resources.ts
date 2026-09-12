@@ -162,6 +162,15 @@ export function formatCompactStable(value: number): string {
   return `${sign}${abs.toFixed(abs >= 100 ? 1 : 2)}${COMPACT_SUFFIXES[tier]}`;
 }
 
+/** Power in the selected display unit: keep a real trickle distinct from zero. */
+export function formatPowerValue(value: number, stable = false): string {
+  if (value !== 0 && Math.abs(value) < 0.01) {
+    return value < 0 ? ">-0.01" : "<0.01";
+  }
+  // Fractional amps must not round to zero during a number animation either.
+  return stable && Math.abs(value) >= 1 ? formatCompactStable(value) : formatCompact(value);
+}
+
 export function formatNumberWithThousands(value: number | string): string {
   // American separators: comma thousands, dot decimal ("1,234.56").
   const text = String(value);

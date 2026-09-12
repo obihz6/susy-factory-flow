@@ -5,6 +5,7 @@ import { ChecklistKeys, useChecklistBoard, checklistCursorStyle } from "./Checkl
 import { emitBoardCameraMove } from "@/lib/board-camera-signal";
 
 import { useDropdownDismiss } from "@/lib/hooks/use-dropdown-dismiss";
+import { useViewerLock } from "./use-viewer-lock";
 
 import {
   BaseEdge,
@@ -51,6 +52,7 @@ import {
   ImagePlus,
   LoaderCircle,
   Magnet,
+  Minus,
   MoveUpRight,
   Network,
   Paintbrush,
@@ -198,6 +200,7 @@ import {
   BOARD_WINDOW_MIN_HEIGHT,
   BOARD_WINDOW_MIN_WIDTH,
   BOARD_WINDOW_TITLE_HEIGHT,
+  PICTURE_MIN_HEIGHT,
   RECIPE_NODE_WIDTH,
   STORAGE_NODE_HEIGHT,
   STORAGE_NODE_WIDTH,
@@ -301,10 +304,10 @@ import {
   isCustomRateRecipe,
 } from "@/lib/model/custom-rate";
 import { isTrashRecipe, TRASH_ANY_RESOURCE_ID } from "@/lib/model/trash";
-import { rateSuffixForKind, rateUnitSuffix, type RateUnit } from "@/lib/model/rate-unit";
 import { GT_VOLTAGE_TIERS } from "@/lib/model/tiers";
 import { GT_TIER_COLORS } from "./tier-colors";
-import { useIsCompactViewport } from "@/lib/compact-view";
+import { isPowerDisplayUnit, rateSuffixForKind, rateUnitSuffix, type RateUnit } from "@/lib/model/rate-unit";
+import { useIsCompactViewport, useIsSnugViewport } from "@/lib/compact-view";
 import { getUiScale, useUiScale } from "@/lib/ui-scale";
 import { useToolbarFold } from "./toolbar-fold";
 import { browseHoveredPort } from "./port-browse";
@@ -1980,6 +1983,7 @@ interface ResolvedResourceHandle {
 }
 
 export function FactoryFlow() {
+  const isReadOnly = useFactoryStore((state) => state.isReadOnly);
   const project = useFactoryStore((state) => state.project);
   const result = useFactoryStore((state) => state.lastResult);
   const selectNode = useFactoryStore((state) => state.selectNode);
@@ -3208,7 +3212,7 @@ export function FactoryFlow() {
       // together or visibly do not.
       publishedEdgeStrokeWidths.set(
         edge.id,
-        laneWidthForHeat(heat),
+        boardView.fixedEdgeWidth ? FLOW_MODE_MIN_WIDTH : laneWidthForHeat(heat),
       );
     }
 
@@ -3504,7 +3508,7 @@ export function FactoryFlow() {
           stroke: edgeColor,
           // Volume is the whole message, so no starved dashes chop up a pipe.
           strokeOpacity: 0.95,
-          strokeWidth: laneWidthForHeat(flowHeat),
+          strokeWidth: boardView.fixedEdgeWidth ? FLOW_MODE_MIN_WIDTH : laneWidthForHeat(flowHeat),
         },
       })];
     });
@@ -3540,6 +3544,7 @@ export function FactoryFlow() {
     );
   }, [
     activeFlowResourceKey,
+    boardView.fixedEdgeWidth,
     anyLineMode,
     speedColorMode,
     layoutVersion,
@@ -6413,12 +6418,14 @@ export function FactoryFlow() {
 
 
   const checklistCapture = useChecklistBoard(visibleFlowEdges);
+  const viewerCapture = useViewerLock(boardRef, isReadOnly);
   const checklistNodes = useMemo(() => {
+    if (isReadOnly && !checklistMode) return visibleFlowNodes.map((node) => ({ ...node, draggable: false, connectable: false }));
     if (!checklistMode) return visibleFlowNodes;
     const checked = new Set(project.checklist?.cards);
     return visibleFlowNodes.map((node) => ({ ...node, draggable: false,
       className: [node.className, checked.has(node.id) ? "checklist-done" : ""].filter(Boolean).join(" ") }));
-  }, [visibleFlowNodes, checklistMode, project.checklist]);
+  }, [visibleFlowNodes, checklistMode, project.checklist, isReadOnly]);
   const checklistEdges = useMemo(() => {
     if (!checklistMode) return visibleFlowEdges;
     const checked = new Set(project.checklist?.edges);
@@ -6441,6 +6448,7 @@ export function FactoryFlow() {
       // React subscription.
       data-glance-mode={boardView.glanceMode}
       data-help-anchor="board"
+      data-view-only={isReadOnly || undefined}
       className={[
         // The 480px floor keeps a desktop board usable, and clears the shortest
         // window that is not compact (560px) with the two bars above it. A phone
@@ -6505,13 +6513,13 @@ export function FactoryFlow() {
             : undefined),
         } as CSSProperties
       }
-      onPointerDownCapture={(event) => { if (!checklistCapture(event)) handleAnnotationPointerDown(event); }}
-      onMouseDownCapture={checklistCapture}
-      onTouchStartCapture={checklistCapture}
-      onClickCapture={checklistCapture}
-      onDoubleClickCapture={checklistCapture}
-      onContextMenuCapture={checklistCapture}
-      onKeyDownCapture={checklistCapture}
+      onPointerDownCapture={(event) => { if (!checklistCapture(event) && !viewerCapture(event) && !isReadOnly) handleAnnotationPointerDown(event); }}
+      onMouseDownCapture={(event) => { if (!checklistCapture(event)) viewerCapture(event); }}
+      onTouchStartCapture={(event) => { if (!checklistCapture(event)) viewerCapture(event); }}
+      onClickCapture={(event) => { if (!checklistCapture(event)) viewerCapture(event); }}
+      onDoubleClickCapture={(event) => { if (!checklistCapture(event)) viewerCapture(event); }}
+      onContextMenuCapture={(event) => { if (!checklistCapture(event)) viewerCapture(event); }}
+      onKeyDownCapture={(event) => { if (!checklistCapture(event)) viewerCapture(event); }}
       onWheelCapture={checklistCapture}
       // Dragging a picture file straight onto the board drops it where it
       // lands, as an image annotation.
@@ -6522,6 +6530,7 @@ export function FactoryFlow() {
         }
       }}
       onDrop={(event) => {
+        if (isReadOnly) { event.preventDefault(); return; }
         const file = Array.from(event.dataTransfer.files).find((candidate) =>
           candidate.type.startsWith("image/"),
         );
@@ -6536,7 +6545,7 @@ export function FactoryFlow() {
         void placeImageFile(file, point);
       }}
     >
-      {boardMenu ? <BoardContextMenu target={boardMenu} onClose={closeBoardMenu} /> : null}
+      {boardMenu && !isReadOnly ? <BoardContextMenu target={boardMenu} onClose={closeBoardMenu} /> : null}
       <ReactFlow
         nodes={checklistNodes}
         edges={checklistEdges}
@@ -6547,9 +6556,10 @@ export function FactoryFlow() {
         // background does (Jack, 2026-09-07); only text inputs and the wire
         // handles keep nodrag, so a jittery click must still count as one.
         nodeClickDistance={4}
-        onConnect={handleConnect}
-        onConnectStart={handleConnectStart}
-        onConnectEnd={handleConnectEndWithSound}
+        onConnect={isReadOnly ? undefined : handleConnect}
+        nodesConnectable={!isReadOnly}
+        onConnectStart={isReadOnly ? undefined : handleConnectStart}
+        onConnectEnd={isReadOnly ? undefined : handleConnectEndWithSound}
         onInit={handleInit}
         onMoveStart={handleMoveStart}
         onMoveEnd={handleMoveEnd}
@@ -6632,7 +6642,7 @@ export function FactoryFlow() {
         snapToGrid
         snapGrid={BOARD_GRID_SNAP}
         // A finger drags a card only after selecting it; see withTouchDragRule.
-        nodesDraggable={!isCompact}
+        nodesDraggable={!isCompact && !isReadOnly}
       >
         <NodeDetailController boardRef={boardRef} />
         <HopMapController boardRef={boardRef} />
@@ -6681,7 +6691,7 @@ export function FactoryFlow() {
         className="pointer-events-none absolute inset-0 z-10 shadow-[inset_0_0_60px_10px_rgba(0,0,0,0.35)]"
       />
       <SolvingBooksOverlay />
-      <PaintToolbar
+      {!isReadOnly ? <PaintToolbar
         paintMode={nodeColorPaintMode}
         onPaintModeChange={handlePaintModeChange}
         activeColorTag={activeColorTag}
@@ -6696,12 +6706,15 @@ export function FactoryFlow() {
         onAutoArrange={handleAutoArrange}
         folded={toolbarFold.paint}
         foldAll={toolbarFold.paintFoldsAll}
+        modesInBuild={toolbarFold.build}
+        modeIconsOnly={toolbarFold.modeIconsOnly}
         openGroup={openToolGroup}
         onToggleGroup={handleToolGroupToggle}
         shiftedDown={false}
-      />
+      /> : null}
       <SourceToolbar
-        folded={toolbarFold.build}
+        readOnly={isReadOnly}
+        folded={!isReadOnly && toolbarFold.build}
         openGroup={openToolGroup}
         onToggleGroup={handleToolGroupToggle}
         shiftedDown={false}
@@ -7216,15 +7229,19 @@ interface ToolGroupProps {
 function ToolTray({
   children,
   helpAnchor,
+  raised = false,
 }: {
   children: React.ReactNode;
   /** Names the tray to the board's help sheet, which rings it. */
   helpAnchor?: string;
+  /** A dropdown must sit above trays that wrap onto the next line. */
+  raised?: boolean;
 }) {
   return (
     <div
+      data-toolbar-tray
       data-help-anchor={helpAnchor}
-      className="pointer-events-auto flex items-start gap-1 border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1 shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-33)] [filter:drop-shadow(6px_8px_7px_rgba(0,0,0,0.45))]"
+      className={`${raised ? "relative z-30 " : ""}pointer-events-auto flex shrink-0 items-start gap-1 border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1 shadow-[inset_2px_2px_0_var(--mc-100),inset_-2px_-2px_0_var(--mc-33)] [filter:drop-shadow(6px_8px_7px_rgba(0,0,0,0.45))]`}
     >
       {children}
     </div>
@@ -7619,10 +7636,11 @@ const MODE_KEYS: Array<{
   },
 ];
 
-/** One segment of the mode switch, in px: icon, word, and room to breathe. */
-const MODE_STEP = 96;
-
-const ModeKeys = memo(function ModeKeys() {
+const ModeKeys = memo(function ModeKeys({ forceIcons = false }: { forceIcons?: boolean }) {
+  const compact = useIsCompactViewport();
+  const snug = useIsSnugViewport();
+  const iconsOnly = forceIcons || compact || snug;
+  const modeStep = iconsOnly ? 44 : 96;
   const mode = useFactoryStore((state): BoardMode =>
     state.project.poolMode === true ? "pool" : state.project.solveMode === true ? "solve" : "build",
   );
@@ -7665,8 +7683,8 @@ const ModeKeys = memo(function ModeKeys() {
   const pressRef = useRef<{ x: number; dragging: boolean } | undefined>(undefined);
   const DRAG_START_PX = 4;
   const xToIndex = (x: number) =>
-    Math.max(0, Math.min(MODE_KEYS.length - 1, Math.floor(x / MODE_STEP)));
-  // Real px -> shell px: MODE_STEP is the keys' layout pitch.
+    Math.max(0, Math.min(MODE_KEYS.length - 1, Math.floor(x / modeStep)));
+  // Real px -> shell px: modeStep is the keys' layout pitch.
   const localX = (event: ReactPointerEvent<HTMLDivElement>) =>
     (event.clientX - (rowRef.current?.getBoundingClientRect().left ?? 0)) / getUiScale() - 2;
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -7725,11 +7743,11 @@ const ModeKeys = memo(function ModeKeys() {
     }
     steps = 0;
   };
-  const width = MODE_STEP * MODE_KEYS.length;
+  const width = modeStep * MODE_KEYS.length;
   const glassLeft =
     dragX === undefined
-      ? index * MODE_STEP
-      : Math.max(0, Math.min(width - MODE_STEP, dragX - MODE_STEP / 2));
+      ? index * modeStep
+      : Math.max(0, Math.min(width - modeStep, dragX - modeStep / 2));
   const shown = dragX === undefined ? index : xToIndex(dragX);
   return (
     <div
@@ -7745,7 +7763,7 @@ const ModeKeys = memo(function ModeKeys() {
       }}
       onWheel={onWheel}
       className={[
-        "pointer-events-auto relative z-10 flex h-8 touch-none select-none border-2 border-[var(--mc-15)]",
+        "pointer-events-auto relative z-10 flex h-8 shrink-0 touch-none select-none border-2 border-[var(--mc-15)]",
         dragX === undefined ? "" : "cursor-grabbing",
       ].join(" ")}
     >
@@ -7796,7 +7814,7 @@ const ModeKeys = memo(function ModeKeys() {
             aria-label={label}
             aria-description={`${setup} Calculates ${result.charAt(0).toLowerCase()}${result.slice(1)}${details ? ` ${details.join(" ")}` : ""}${note ? ` ${note}` : ""}`}
             className={[
-              "flex h-full items-center justify-center gap-2 font-mono text-[11px] font-black tracking-wide transition-colors duration-200",
+              "flex h-full shrink-0 items-center justify-center gap-2 font-mono text-[11px] font-black tracking-wide transition-colors duration-200",
               TOOL_FACE_OFF,
               at > 0 ? "border-l-2 border-[var(--mc-15)]" : "",
               // Each key in its own colour always: a deeper shade at rest, the
@@ -7804,10 +7822,10 @@ const ModeKeys = memo(function ModeKeys() {
               // read as one you could not press.
               shown === at ? ink : `${dim} hover:brightness-125`,
             ].join(" ")}
-            style={{ width: MODE_STEP }}
+            style={{ width: modeStep }}
           >
             <Icon className="h-4 w-4" />
-            {label.replace(" mode", "").toUpperCase()}
+            {!iconsOnly && label.replace(" mode", "").toUpperCase()}
           </button>
         </MinecraftTooltip>
       ))}
@@ -7826,7 +7844,7 @@ const ModeKeys = memo(function ModeKeys() {
           dragX === undefined ? "transition-[left,background-color] duration-200" : "",
         ].join(" ")}
         style={{
-          width: MODE_STEP,
+          width: modeStep,
           left: glassLeft,
           backgroundColor: MODE_KEYS[shown]!.glass,
         }}
@@ -8097,11 +8115,13 @@ const PoolSpawnKeys = memo(function PoolSpawnKeys() {
 
 
 const SourceToolbar = memo(function SourceToolbar({
+  readOnly = false,
   folded,
   openGroup,
   onToggleGroup,
   shiftedDown,
 }: {
+  readOnly?: boolean;
   folded: boolean;
   openGroup?: ToolGroupId;
   onToggleGroup: (group: ToolGroupId | undefined) => void;
@@ -8119,12 +8139,20 @@ const SourceToolbar = memo(function SourceToolbar({
   useFoldoutDismiss(isRateMenuOpen, rateRef, closeRateMenu);
   // The power unit key beside it: EU/t, or amps of a chosen tier - the
   // second board-wide dial, worked exactly like the rate unit's.
+
   const powerDisplayUnit = useFactoryStore((state) => state.powerDisplayUnit);
   const setPowerDisplayUnit = useFactoryStore((state) => state.setPowerDisplayUnit);
   const [isPowerUnitMenuOpen, setPowerUnitMenuOpen] = useState(false);
   const powerUnitRef = useRef<HTMLDivElement | null>(null);
   const closePowerUnitMenu = useCallback(() => setPowerUnitMenuOpen(false), []);
   useFoldoutDismiss(isPowerUnitMenuOpen, powerUnitRef, closePowerUnitMenu);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("gtnh-factory-flow.power-display-unit.v1");
+      if (isPowerDisplayUnit(saved)) setPowerDisplayUnit(saved);
+    } catch { /* Use EU/t when storage is unavailable. */ }
+  }, [setPowerDisplayUnit]);
+
   // Subscribe to the DEPTHS, not the history arrays: a selector returning the
   // array itself would re-render this toolbar on every project edit.
   const undo = useFactoryStore((state) => state.undo);
@@ -8142,7 +8170,7 @@ const SourceToolbar = memo(function SourceToolbar({
       data-board-toolbar
       data-help-anchor="build"
       className={[
-        "nodrag pointer-events-none absolute left-3 flex items-start gap-2",
+        "nodrag pointer-events-none absolute left-[var(--toolbar-inset,0.75rem)] flex items-start gap-2",
         // Lifted while either unit menu hangs below, so a notice card cannot
         // paint over it - the same lift the paint row gives its fold-outs.
         isRateMenuOpen || isPowerUnitMenuOpen ? "z-40" : "z-20",
@@ -8154,7 +8182,7 @@ const SourceToolbar = memo(function SourceToolbar({
     >
       {/* History first, and set apart on its own plate: it undoes everything
           the rest of the board does, so it belongs to no other group. */}
-      <ToolTray>
+      {!readOnly && <ToolTray>
         <button
           type="button"
           onClick={undo}
@@ -8175,7 +8203,7 @@ const SourceToolbar = memo(function SourceToolbar({
         >
           <Redo2 className="h-4 w-4" />
         </button>
-      </ToolTray>
+      </ToolTray>}
       {/* Undo and redo stay out in the open even on a phone: they are the two
           buttons a mistake sends you looking for, and a mistake is not the
           moment to go hunting through a fold-out. */}
@@ -8188,11 +8216,17 @@ const SourceToolbar = memo(function SourceToolbar({
         label="build tools"
         side="left"
       >
+      {folded && !readOnly && (
+        <>
+          <ToolTray helpAnchor="rules"><ModeKeys forceIcons /></ToolTray>
+          <PoolSpawnKeys />
+        </>
+      )}
       {/* How the numbers read: ONE key wearing the current unit, opening the
           four units as a named list. Four permanent keys spent three slots
           saying nothing but "not this one", and a blind cycle made you walk
           the whole ring to go back one. */}
-      <ToolTray>
+      <ToolTray raised={isRateMenuOpen || isPowerUnitMenuOpen}>
         <div ref={rateRef} className="relative flex">
           <button
             type="button"
@@ -8335,7 +8369,7 @@ const SourceToolbar = memo(function SourceToolbar({
           {isPowerUnitMenuOpen ? (
             // EU/t and the fifteen tiers, one uniform 4x4 grid of equal
             // cells - EU/t is a choice like any other, not a banner.
-            <div className="absolute left-0 top-[calc(100%+10px)] z-30 grid w-max grid-cols-4 gap-1 border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1 shadow-[4px_4px_0_rgba(0,0,0,0.45)]">
+            <div className={`absolute ${folded ? "right-0" : "left-0"} top-[calc(100%+10px)] z-30 grid w-max grid-cols-4 gap-1 border-2 border-[var(--mc-15)] bg-[var(--mc-78)] p-1 shadow-[4px_4px_0_rgba(0,0,0,0.45)]`}>
               <button
                 type="button"
                 onClick={() => {
@@ -8393,8 +8427,11 @@ const SourceToolbar = memo(function SourceToolbar({
           ) : null}
         </div>
       </ToolTray>
-      <ToolTray>
+      {!readOnly && <ToolTray>
         <AutoSolveKeys />
+      </ToolTray>}
+      <ToolTray>
+        <ChecklistKeys folded={folded} />
       </ToolTray>
       </ToolGroup>
     </div>
@@ -9026,10 +9063,17 @@ const BoardViewMenu = memo(function BoardViewMenu({
     id: string;
     on: boolean;
     label: string;
-    line: string;
+    line?: string;
     Icon: LucideIcon;
     flip: () => void;
   }> = [
+    {
+      id: "fixed-edge-width",
+      on: view.fixedEdgeWidth,
+      label: "Fixed edge width",
+      Icon: Minus,
+      flip: () => onChange({ fixedEdgeWidth: !view.fixedEdgeWidth }),
+    },
     // The two motion switches. Device taste rather than plan dressing, so
     // they write to their own store and never travel with a shared plan.
     {
@@ -9141,7 +9185,7 @@ const BoardViewMenu = memo(function BoardViewMenu({
                     {on ? "ON" : "OFF"}
                   </span>
                 </span>
-                <span className="font-mono text-[11px] leading-snug opacity-80">{line}</span>
+                {line ? <span className="font-mono text-[11px] leading-snug opacity-80">{line}</span> : null}
               </span>
             </button>
           ))}
@@ -9323,6 +9367,8 @@ const PaintToolbar = memo(function PaintToolbar({
   onAutoArrange,
   folded,
   foldAll,
+  modesInBuild,
+  modeIconsOnly,
   openGroup,
   onToggleGroup,
   shiftedDown,
@@ -9347,11 +9393,12 @@ const PaintToolbar = memo(function PaintToolbar({
    * included: a board too narrow for the folded row (toolbar-fold.ts).
    */
   foldAll: boolean;
+  modesInBuild: boolean;
+  modeIconsOnly: boolean;
   openGroup?: ToolGroupId;
   onToggleGroup: (group: ToolGroupId | undefined) => void;
   shiftedDown: boolean;
 }) {
-  const checklistMode = useFactoryStore((state) => state.checklistMode);
   const activeColor = GT_NODE_COLORS[activeColorTag];
   // Every fold-out on this row opens on CLICK and closes on outside click or
   // Escape, like the view sheet and the Setup Rules sheet. They used to open
@@ -9580,7 +9627,8 @@ const PaintToolbar = memo(function PaintToolbar({
     <>
     {/* THE MODE SWITCH, top centre of the board on a plate of its own
         (2026-09-06): it changes what the whole board means, so it stands
-        apart from both tool rows and never folds. */}
+        apart from both tool rows until Build tools folds. */}
+    {!modesInBuild && (
     <div
       data-board-toolbar-centre
       className={[
@@ -9589,8 +9637,7 @@ const PaintToolbar = memo(function PaintToolbar({
       ].join(" ")}
     >
       <ToolTray helpAnchor="rules">
-        <ModeKeys />
-        <SetupRulesButton />
+        <ModeKeys forceIcons={modeIconsOnly} />
       </ToolTray>
       {/* Pool mode's product key: its OWN plate that appears to the right of
           the switch while that mode is on (Jack, 2026-09-06). Absolutely
@@ -9602,24 +9649,22 @@ const PaintToolbar = memo(function PaintToolbar({
         <PoolSpawnKeys />
       </div>
     </div>
+    )}
     <div
       data-board-toolbar
       className={[
-        "nodrag pointer-events-none absolute right-3 flex items-start gap-2",
+        "nodrag pointer-events-none absolute right-[var(--toolbar-inset,0.75rem)] flex items-start gap-2",
         shiftedDown ? "top-14" : "top-3",
         // An open fold-out hangs below the row and can cross whatever toolbar
         // sits beneath, which at the same z and later in the DOM would paint
         // OVER it and take its clicks: the colours were once visible and
         // unpickable. The row lifts above every other toolbar for as long as
         // any of its fold-outs is out.
-        isDrawMenuOpen || isViewMenuOpen || checklistMode
+        isDrawMenuOpen || isViewMenuOpen
           ? "z-40"
           : "z-20",
       ].join(" ")}
     >
-      <ToolTray>
-        <ChecklistKeys />
-      </ToolTray>
       <ToolGroup
         id="paint"
         folded={folded}
@@ -12176,8 +12221,13 @@ function estimateNodeCardSize(
     rails += cells(2) * rows + (shared ? cells(1) : 0);
   }
   // Title row + machine strip + the port rails + footer, plus one spare row
-  // of slack for a config panel.
-  return { width: RECIPE_NODE_WIDTH, height: cells(4) + Math.max(cells(2), rails) + cells(4) };
+  // of slack for a config panel. The rails block cannot be shorter than the
+  // machine picture standing beside it, and on a one-row card the picture is
+  // what sets the height — the floor here is its floor, not one port row.
+  return {
+    width: RECIPE_NODE_WIDTH,
+    height: cells(4) + Math.max(PICTURE_MIN_HEIGHT, rails) + cells(4),
+  };
 }
 
 /**

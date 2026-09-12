@@ -210,6 +210,8 @@ export interface MachineConfigControl {
   label: string;
   minimumKey: string;
   defaultKey?: string;
+  /** Whole-number entry; an omitted maximum means there is no machine limit. */
+  numeric?: { min: number; max?: number };
   /**
    * The recipe's own special value is a 1-based minimum tier on this ladder
    * (the Naquadah Fuel Refinery's field restriction coils), so `minimumKey`
@@ -217,6 +219,8 @@ export interface MachineConfigControl {
    * curated machine-table controls only; the dataset never emits it.
    */
   minimumFromSpecialValue?: boolean;
+  /** Special value is required heat in K; offer only coils that meet it. */
+  minimumHeatFromSpecialValue?: boolean;
   tiers: MachineConfigTierOption[];
 }
 
@@ -334,6 +338,8 @@ export interface FactoryNode {
    * survives that, so a card you unwire and rewire comes back on your number.
    */
   customRate?: { perSecond: number; mode: CustomRateMode };
+  /** When set, Industrial Farm planting follows this many full seed beds. */
+  cropFullFarmCount?: number;
   machineCount: number;
   parallel: number;
   overclockTier: MachineTier | string;
@@ -351,21 +357,21 @@ export interface FactoryNode {
    * `energyHatches` is clamped to 1 while one of them is selected.
    */
   energyHatchType?: string;
-  /**
-   * A multiblock's power supply typed as a plain EU/t BUDGET, the way the
-   * game reads it: every multiblock overclocks on voltage times amps and
-   * nothing else. When set it overrides the hatch pair above - the run tier
-   * is the highest voltage at or under the budget, the amps are the rest -
-   * and the pair stays as the hatch calculator's last pick. Any number is
-   * allowed, buildable from real hatches or not. Ignored on singleblocks,
-   * whose tier is the block itself.
-   */
+  /** Derived hatchVoltageTier voltage × hatchAmps, persisted for old readers. */
   powerEuT?: number;
+  /** Average input voltage, independent of the total power pool. */
+  hatchVoltageTier?: Exclude<MachineTier, "DEMO">;
+  /** Working input amps. One regular hatch supplies one amp. */
+  hatchAmps?: number;
+  /** Raw EU/t assumes a suitable voltage; explicit amps use the selected hatch tier. */
+  powerInputMode?: "amps" | "eut";
   machineHandlerId?: string;
   coilTier?: string;
   machineConfigTiers?: Record<string, string>;
   /** Settings panel folded shut. A view choice, kept so it survives a reload. */
   settingsCollapsed?: boolean;
+  /** Fluids fully supplied by an installed hatch; shared by all recipes on this card. */
+  hatchSupplies?: Array<"water" | "air">;
   recipeInputOverrides?: Record<string, RecipeInput>;
   /**
    * More recipes the SAME machine runs (`shared-machine.ts`): a Large
@@ -664,6 +670,7 @@ export interface PlanViewState {
   lineHeatMode?: boolean;
   /** Historical: the rate pills on wires were dropped (2026-09-08); nothing reads it. */
   lineLabelsMode?: boolean;
+  fixedEdgeWidth?: boolean;
   linePulseMode?: boolean;
   calmMode?: boolean;
   /** Historical: older plans carry it, nothing applies it. The smart view is

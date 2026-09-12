@@ -253,6 +253,10 @@ found every issue so far:
   systemd unit `gtnh-flow.service`, releases under `/opt/releases/` with a
   `/opt/gtnh-flow` symlink; `/opt/deploy.sh` clones `main`, builds beside the
   live app, swaps the symlink (≈5s restart + ~60s prewarm).
+- Shutdown is bounded by `TimeoutStopSec=10s` in
+  `/etc/systemd/system/gtnh-flow.service.d/shutdown.conf`. The old 90-second
+  default let a stuck Next.js shutdown cause Cloudflare host errors during
+  the September 11 release. Dataset prewarming still runs after startup.
 - Datasets are runtime files in `/opt/shared/gtnh-datasets`, symlinked into
   each release after build; they are uploaded separately from code deploys.
 - Community hub (accounts, shared plans, votes) uses Supabase via

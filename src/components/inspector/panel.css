@@ -1,0 +1,117 @@
+/* Shared typography and spacing for both inspector tables. */
+[data-viewer-resource] .resource-row-marks,
+[data-viewer-resource] .resource-row-marks-gap { display: none; }
+.inspector-panel { color: #e5e7eb; font-size: 12px; container-type: inline-size; }
+.inspector-panel:has(.inspector-machines) { --inspector-resource-max: 62%; }
+.inspector-selection-scope::after {
+  content: ""; position: absolute; inset: 0; z-index: 20;
+  border: 1px solid var(--selection); pointer-events: none;
+}
+.inspector-section-heading {
+  display: flex; min-height: 26px; align-items: center; gap: 4px; padding: 1px 8px;
+}
+.inspector-section-heading h2,
+.inspector-flow-section > button:first-child > span:nth-child(2) {
+  font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+}
+.inspector-count {
+  border-radius: 4px; background: #353942; padding: 1px 4px;
+  color: #a3a3a3; font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.inspector-controls button, .inspector-controls input { font-size: 12px; }
+.inspector-panel .inspector-flow-section {
+  font-size: 12px; background: #2a2d33; border: 0; gap: 4px; padding: 0 8px;
+}
+.inspector-flow-section > button:first-child { font-size: 12px; }
+.inspector-rate-selector {
+  width: auto; padding-right: 0; color: #d1d5db; gap: 0;
+  border: 1px solid #ffffff20; border-radius: 5px; overflow: hidden;
+  background: #202329;
+}
+.inspector-rate-selector button { font-size: 12px; color: #9ca3af; padding: 0 5px; line-height: 18px; }
+.inspector-rate-selector button + button { border-left: 1px solid #ffffff20; }
+.inspector-rate-selector button:hover { color: #f3f4f6; background: #353b43; }
+.inspector-rate-selector button:focus-visible { outline: 1px solid #67e8f9; outline-offset: -2px; }
+.inspector-rate-selector button[aria-pressed="true"] { background: #414750; color: #f3f4f6; }
+.inspector-resource-button { grid-template-rows: 24px; font-size: 12px; }
+.inspector-resource-name { grid-column: 2; grid-row: 1; align-self: center; margin-left: 4px; }
+.inspector-resource-name > span { font-size: 13px; line-height: 18px; }
+.inspector-resource-rate {
+  grid-column: 3; grid-row: 1; align-self: center; justify-content: flex-end;
+  margin-left: 0; min-width: 0;
+}
+.inspector-resource-rate > span { font-size: 12px; line-height: 18px; }
+.inspector-resource-net {
+  grid-column: 3; grid-row: 1; text-align: right; white-space: nowrap;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.inspector-resource-rate .opacity-70,
+.inspector-resource-rate > span > span:last-child,
+.inspector-unit,
+.inspector-machine-figures .tabular-nums > span:last-child,
+.inspector-machine-summary .tabular-nums > span:last-child {
+  font-size: 8px; font-weight: 400; margin-left: 2px;
+  color: color-mix(in srgb, currentColor 35%, #9ca3af);
+}
+.inspector-machines {
+  --mc-ink: #e5e7eb; --mc-ink-muted: #a3a3a3;
+  --mc-71: #30333a; --mc-85: #353942; --mc-33: #525252;
+}
+.inspector-machine-summary { background: #25272c; padding-bottom: 4px; padding-right: 18px; }
+.inspector-machine-summary > .flex { font-size: 12px; line-height: 18px; }
+.inspector-machine-row { font-size: 12px; color: #e5e7eb; border-bottom: 1px solid #ffffff08; }
+.inspector-machine-row > span:first-child > span { font-size: 12px; }
+.inspector-machine-title { min-height: 24px; border-bottom: 0; padding-left: 4px; }
+.inspector-machine-title > span:first-child > span:first-child { width: 20px; height: 20px; }
+.inspector-machine-row > span:first-child > span { line-height: 18px; }
+.inspector-machine-build { min-height: 22px; gap: 2px; padding-top: 0; padding-bottom: 0; }
+.inspector-machine-build > span:first-child { gap: 2px; }
+.inspector-build-config { min-width: 0; flex-shrink: 0; font-size: 11px; gap: 2px; }
+.inspector-build-config > span { font-size: 11px; white-space: nowrap; }
+.inspector-machine-figures .tabular-nums,
+.inspector-machine-summary .tabular-nums { width: 80px; font-size: 12px; }
+.inspector-machine-summary .inspector-section-heading { padding-right: 2px; }
+/* Small power and steam marks leave the numeric reading dominant. */
+.inspector-machine-figures .tabular-nums > svg,
+.inspector-machine-summary .tabular-nums > svg {
+  display: inline; width: 8px; height: 8px; margin-right: 1px;
+}
+.inspector-product-target { font-size: 12px; background: color-mix(in srgb, var(--flow-output) 2.5%, transparent); }
+.inspector-product-target button, .inspector-product-target input { font-size: 12px; }
+
+/* Keep each reading together and align its unit's end to the right edge. */
+.inspector-resource-rate > span > span:last-child,
+.inspector-resource-net > .inspector-unit {
+  margin-left: 2px;
+}
+.inspector-machine-title > span:first-child > span:last-child { font-size: 13px; }
+
+.inspector-product-marker {
+  position: absolute; right: -2px; bottom: -2px; z-index: 1;
+  font-size: 13px; line-height: 14px; color: var(--flow-output);
+  text-shadow: -1px 0 #12372b, 1px 0 #12372b, 0 -1px #12372b, 0 1px #12372b;
+  filter: drop-shadow(1px 2px 1px #000b);
+}
+
+
+/* One shared power column, matching the resource table's selector. */
+.inspector-machines[data-power-column="peak"] .inspector-machine-figures > span:nth-child(2),
+.inspector-machines[data-power-column="average"] .inspector-machine-figures > span:first-child,
+.inspector-machines[data-power-column="peak"] .inspector-machine-summary > .flex:not(.inspector-section-heading) > span:nth-child(3),
+.inspector-machines[data-power-column="average"] .inspector-machine-summary > .flex:not(.inspector-section-heading) > span:nth-child(2) { display: none; }
+.inspector-machine-figures .tabular-nums,
+.inspector-machine-summary .tabular-nums { width: 88px; }
+.inspector-machine-summary .inspector-rate-selector { width: auto; }
+.inspector-machine-build { padding-left: 4px; padding-right: 4px; }
+.inspector-machine-build > span:first-child > span:first-child { left: 4px; width: 16px; }
+.inspector-machine-build > span:first-child > span:nth-child(2) { width: 20px; }
+
+/* Quiet scrollbars keep the content prominent, with a stronger hover target. */
+.inspector-panel * { scrollbar-width: thin; scrollbar-color: #ffffff26 transparent; }
+@supports selector(::-webkit-scrollbar) {
+  .inspector-panel * { scrollbar-width: auto; scrollbar-color: auto; }
+  .inspector-panel *::-webkit-scrollbar { width: 4px; height: 4px; }
+  .inspector-panel *::-webkit-scrollbar-track { background: transparent; }
+  .inspector-panel *::-webkit-scrollbar-thumb { background: #ffffff26; border-radius: 4px; }
+  .inspector-panel *::-webkit-scrollbar-thumb:hover { background: #ffffff50; }
+}

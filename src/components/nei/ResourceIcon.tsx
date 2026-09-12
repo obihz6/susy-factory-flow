@@ -12,6 +12,7 @@ import {
 } from "@/lib/model/resources";
 import { isProgrammedCircuitResource } from "@/lib/model/programmed-circuit";
 import { MinecraftTooltip } from "./MinecraftTooltip";
+import { getSpriteFitScale, spriteFitStyle } from "./sprite-fit";
 
 type DisplayResourceAmount = Pick<
   ResourceAmount,
@@ -38,6 +39,8 @@ interface ResourceIconProps {
   className?: string;
   tooltip?: boolean;
   iconPixelSize?: number;
+  /** Preferred item magnification; opaque bounds still cap it inside the slot. */
+  itemZoom?: number;
   showConsumedState?: boolean;
   /**
    * Set on slots that rotate through an oredict's members. `locked` means a
@@ -53,6 +56,11 @@ const sizeClasses = {
   xl: "h-20 w-20",
 };
 
+const RESOURCE_ART_SHADOW = "drop-shadow-[0_2px_3px_rgba(0,0,0,0.5)]";
+// Exported fluid textures occupy the middle half of their padded canvas.
+// Clip the texture first, then cast its shadow from the outer art frame.
+const FLUID_SPRITE_CLIP = "inset(25% round 1px)";
+
 function ResourceIconComponent({
   resource,
   size = "md",
@@ -62,11 +70,17 @@ function ResourceIconComponent({
   className = "",
   tooltip = true,
   iconPixelSize,
+  itemZoom = 1,
   showConsumedState = true,
   alternativeState,
 }: ResourceIconProps) {
+  // Artwork deliberately exceeds its clipped slot. Every art renderer below
+  // must opt out of flex shrinking: Firefox shrinks percentage-sized <img>
+  // widths where Chromium keeps their aspect-ratio minimum; atlas spans shrink
+  // in both engines. That made the same sprite smaller or stretched by format.
   const icon = (
     <div
+      style={{ "--resource-item-zoom": itemZoom } as CSSProperties}
       className={[
         "relative flex shrink-0 items-center justify-center overflow-hidden",
         bare
@@ -200,6 +214,7 @@ export const ResourceIcon = memo(
     prev.className === next.className &&
     prev.tooltip === next.tooltip &&
     prev.iconPixelSize === next.iconPixelSize &&
+    prev.itemZoom === next.itemZoom &&
     prev.showConsumedState === next.showConsumedState &&
     prev.alternativeState === next.alternativeState &&
     displayResourceEquals(prev.resource, next.resource),
@@ -372,7 +387,7 @@ function PowerIconGlyph({ iconPixelSize }: { iconPixelSize?: number }) {
   return (
     <span
       aria-hidden
-      className="flex items-center justify-center"
+      className="flex shrink-0 items-center justify-center"
       style={{ width: size, height: size }}
     >
       <Zap width={bolt} height={bolt} className="fill-current text-amber-400" strokeWidth={1.5} />
@@ -418,6 +433,7 @@ function SpriteImage({
   iconPixelSize?: number;
 }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "failed">("loading");
+  const [fitScale, setFitScale] = useState<number>();
   const imageRef = useRef<HTMLImageElement | null>(null);
 
   // A cached sprite can finish before React has attached onLoad, and a src that
@@ -425,23 +441,22 @@ function SpriteImage({
   useEffect(() => {
     const image = imageRef.current;
     setStatus(image?.complete ? (image.naturalWidth > 0 ? "loaded" : "failed") : "loading");
-  }, [iconPath]);
+    setFitScale(
+      resource.kind === "item" && image?.complete && image.naturalWidth
+        ? getSpriteFitScale(image)
+        : undefined,
+    );
+  }, [iconPath, resource.kind]);
 
   return (
     <>
       {status === "loaded" ? null : <SpritePlaceholder settled={status === "failed"} />}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        ref={imageRef}
-        src={iconPath}
-        alt={resourceLabel(resource)}
-        draggable={false}
-        onLoad={() => setStatus("loaded")}
-        onError={() => setStatus("failed")}
+      <span
         className={[
           iconPixelSize
-            ? "minecraft-pixel-art max-w-none object-contain"
-            : "minecraft-pixel-art h-[calc(200%-8px)] w-[calc(200%-8px)] max-w-none object-contain",
+            ? "minecraft-pixel-art block shrink-0 max-w-none"
+            : "minecraft-pixel-art block h-[calc(200%-8px)] w-[calc(200%-8px)] shrink-0 max-w-none",
+          RESOURCE_ART_SHADOW,
           // Hidden, not transparent: alt text is what we are keeping off screen,
           // and only `visibility` takes it with the picture.
           status === "loaded" ? "" : "invisible",
@@ -497,8 +512,8 @@ function AspectIconImage({
       aria-label={resourceLabel(resource)}
       className={
         iconPixelSize
-          ? "minecraft-pixel-art relative block max-w-none"
-          : "minecraft-pixel-art relative block h-[72%] w-[72%] max-w-none"
+          ? "minecraft-pixel-art relative block shrink-0 max-w-none"
+          : "minecraft-pixel-art relative block h-[72%] w-[72%] shrink-0 max-w-none"
       }
       style={sizeStyle}
     >
@@ -554,7 +569,7 @@ function FluidIconImage({
     <span
       role="img"
       aria-label={resourceLabel(resource)}
-      className="minecraft-pixel-art relative block overflow-hidden"
+      className={`minecraft-pixel-art relative block shrink-0 overflow-hidden rounded-[1px] ${RESOURCE_ART_SHADOW}`}
       style={
         sized
           ? { width: sized * FLUID_ICON_SCALE, height: sized * FLUID_ICON_SCALE }
@@ -702,12 +717,9 @@ export function isSwatchFluid(
  * The iconPixelSize that makes a rendered sprite's ART fill a box of the
  * given size, minus a small breathing margin.
  *
- * Rendered captures are 256px canvases whose art occupies the middle 128px -
- * exactly 128 for the fluid square, up to 128 for items - so the image draws
- * at (box - margins) x 2 and the baked padding crops away. Same convention
- * as machineArtPixels for machine renders, which have their own art bounds.
- * Unlike the rows' 1.5x zoom-crop trick for items, nothing is clipped: a
- * fluid square lands exactly inside the margin, an item a shade under.
+ * Most rendered art occupies the middle half of its canvas. Keep that generous
+ * size; the renderer measures each item's opaque bounds and caps only artwork
+ * that would cross the slot's margin. Fluids have their own sizing helper.
  */
 export function spriteArtPixels(box: number): number {
   const margin = Math.max(2, Math.round(box * 0.055));
@@ -739,22 +751,39 @@ function AtlasIconImage({
   atlas,
   iconPixelSize,
 }: {
-  resource: Pick<ResourceAmount, "id" | "displayName">;
+  resource: Pick<ResourceAmount, "kind" | "id" | "displayName">;
   atlas: ResourceIconAtlasRef;
   iconPixelSize?: number;
 }) {
   const positionX = getAtlasBackgroundPosition(atlas.x, atlas.atlasWidth, atlas.width);
   const positionY = getAtlasBackgroundPosition(atlas.y, atlas.atlasHeight, atlas.height);
+  const [fitScale, setFitScale] = useState<number>();
+  useEffect(() => {
+    setFitScale(undefined);
+    if (resource.kind !== "item") return;
+    let active = true;
+    const image = new Image();
+    image.onload = () => {
+      if (active) setFitScale(getSpriteFitScale(image, {
+        x: atlas.x, y: atlas.y, width: atlas.width, height: atlas.height,
+      }));
+    };
+    image.src = atlas.imagePath;
+    return () => {
+      active = false;
+    };
+  }, [resource.kind, atlas.imagePath, atlas.x, atlas.y, atlas.width, atlas.height]);
 
   return (
     <span
       role="img"
       aria-label={resourceLabel(resource)}
-      className={
+      className={[
         iconPixelSize
-          ? "minecraft-pixel-art block max-w-none bg-no-repeat"
-          : "minecraft-pixel-art block h-[calc(200%-8px)] w-[calc(200%-8px)] max-w-none bg-no-repeat"
-      }
+          ? "minecraft-pixel-art block shrink-0 max-w-none"
+          : "minecraft-pixel-art block h-[calc(200%-8px)] w-[calc(200%-8px)] shrink-0 max-w-none",
+        RESOURCE_ART_SHADOW,
+      ].join(" ")}
       style={{
         ...(textureSize(iconPixelSize)
           ? { width: textureSize(iconPixelSize), height: textureSize(iconPixelSize) }
@@ -765,7 +794,17 @@ function AtlasIconImage({
         }%`,
         backgroundPosition: `${positionX} ${positionY}`,
       }}
-    />
+    >
+      <span
+        className="block h-full w-full bg-no-repeat"
+        style={{
+          backgroundImage: `url('${atlas.imagePath}')`,
+          backgroundSize: `${(atlas.atlasWidth / atlas.width) * 100}% ${(atlas.atlasHeight / atlas.height) * 100}%`,
+          backgroundPosition: `${positionX} ${positionY}`,
+          clipPath: resource.kind === "fluid" ? FLUID_SPRITE_CLIP : undefined,
+        }}
+      />
+    </span>
   );
 }
 

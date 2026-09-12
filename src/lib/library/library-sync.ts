@@ -17,7 +17,6 @@ import { parseFactoryProjectJson } from "@/lib/import-export";
 import { useCommunityAuthStore } from "@/store/community-auth-store";
 import { useDesignStore } from "@/store/design-store";
 import {
-  LibrarySyncUnavailable,
   deleteRemoteDesign,
   deleteRemoteFolder,
   fetchRemoteDesignPlan,
@@ -54,12 +53,12 @@ import type { RemoteDesignMeta, RemoteFolder } from "./sync-types";
  * how autosave reaches the account). One run at a time; a request during a
  * run queues one more.
  *
- * WHEN NOT: signed out, or the account's tables are not there yet. Then the
- * status says so and the library is this browser's, exactly as before.
+ * WHEN NOT: signed out. Database and network failures stay visible and retry
+ * on the next poll, focus or connection recovery.
  */
 
 export interface LibrarySyncStatus {
-  state: "off" | "idle" | "syncing" | "error";
+  state: "off" | "pending" | "idle" | "syncing" | "error";
   /** Why it is off, or what failed. */
   message?: string;
   lastSyncedAt?: string;
@@ -69,7 +68,7 @@ export interface LibrarySyncStatus {
 
 export const useLibrarySyncStore = create<LibrarySyncStatus>(() => ({ state: "off" }));
 
-const PUSH_DEBOUNCE_MS = 4000;
+const PUSH_DEBOUNCE_MS = 500;
 const POLL_MS = 30000;
 
 /* ------------------------------------------------------------------ */
@@ -86,17 +85,11 @@ export type FolderAction =
   | { kind: "delete-local"; id: string }
   | { kind: "push"; id: string };
 
-type LocalDesign = Pick<
-  DesignSummary,
-  "id" | "updatedAt" | "metaUpdatedAt" | "remoteUpdatedAt"
->;
+type LocalDesign = Pick<DesignSummary, "id" | "updatedAt" | "metaUpdatedAt" | "remoteUpdatedAt">;
 
 const ts = (value: string | undefined): number => (value ? Date.parse(value) : 0);
 
-export function reconcileDesigns(
-  local: LocalDesign[],
-  remote: RemoteDesignMeta[],
-): DesignAction[] {
+export function reconcileDesigns(local: LocalDesign[], remote: RemoteDesignMeta[]): DesignAction[] {
   const actions: DesignAction[] = [];
   const localById = new Map(local.map((design) => [design.id, design]));
   const seen = new Set<string>();
@@ -230,8 +223,9 @@ function scheduleSync(delayMs = PUSH_DEBOUNCE_MS) {
     return;
   }
   if (pushTimer !== undefined) {
-    window.clearTimeout(pushTimer);
+    return;
   }
+  if (useLibrarySyncStore.getState().state !== "error") setStatus({ state: "pending" });
   pushTimer = window.setTimeout(() => {
     pushTimer = undefined;
     void syncLibraryNow();
@@ -239,11 +233,6 @@ function scheduleSync(delayMs = PUSH_DEBOUNCE_MS) {
 }
 
 async function runOnce(): Promise<void> {
-  if (useLibrarySyncStore.getState().state === "off" && useLibrarySyncStore.getState().message) {
-    // Off with a reason (tables missing): a sign-in or reload retries, a
-    // timer does not.
-    return;
-  }
   setStatus({ state: "syncing" });
   try {
     await drainDeletions();
@@ -265,14 +254,12 @@ async function runOnce(): Promise<void> {
     }
     setStatus({ state: "idle", message: undefined, lastSyncedAt: new Date().toISOString() });
   } catch (error) {
-    if (error instanceof LibrarySyncUnavailable) {
-      setStatus({ state: "off", message: error.message });
-    } else {
-      setStatus({
-        state: "error",
-        message: error instanceof Error ? error.message : "Sync failed.",
-      });
-    }
+    // A repaired schema, restored connection or renewed session must recover
+    // without requiring the player to reload a page holding unsaved work.
+    setStatus({
+      state: "error",
+      message: error instanceof Error ? error.message : "Sync failed.",
+    });
   }
 }
 
@@ -476,10 +463,10 @@ export function startLibrarySync(): () => void {
       pollTimer = undefined;
     }
     if (!user) {
-      setStatus({ state: "off", message: undefined });
+      setStatus({ state: "off", message: undefined, lastSyncedAt: undefined });
       return;
     }
-    setStatus({ state: "idle", message: undefined });
+    setStatus({ state: "pending", message: undefined, lastSyncedAt: undefined });
     void syncLibraryNow();
     pollTimer = window.setInterval(() => void syncLibraryNow(), POLL_MS);
   };
@@ -505,6 +492,10 @@ export function startLibrarySync(): () => void {
   };
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onVisible);
+  const onOnline = () => {
+    void syncLibraryNow();
+  };
+  window.addEventListener("online", onOnline);
 
   return () => {
     unsubscribeAuth();
@@ -512,6 +503,7 @@ export function startLibrarySync(): () => void {
     unsubscribeDeletes();
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("focus", onVisible);
+    window.removeEventListener("online", onOnline);
     if (pollTimer !== undefined) {
       window.clearInterval(pollTimer);
     }

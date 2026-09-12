@@ -55,9 +55,9 @@ export type GlanceDrawerShape = "source" | "product" | "byproduct" | "trash" | "
 /** The drawer tints from StorageNode's ROLE_TINTS, so the legend and the
  * board agree on what red, green and steel mean. */
 const DRAWER_SHAPE_TINTS: Record<GlanceDrawerShape, string> = {
-  source: "#ef4444",
-  product: "#10b981",
-  byproduct: "#10b981",
+  source: "var(--flow-input)",
+  product: "var(--flow-output)",
+  byproduct: "var(--flow-output)",
   trash: "#8a93a6",
   buffer: "#8a93a6",
 };
@@ -70,7 +70,7 @@ const DRAWER_SHAPE_TINTS: Record<GlanceDrawerShape, string> = {
  */
 export function DrawerShapeGlyph({ shape }: { shape: GlanceDrawerShape }) {
   const tint = DRAWER_SHAPE_TINTS[shape];
-  const common = { fill: `${tint}3d`, stroke: tint, strokeWidth: 1.5, strokeLinejoin: "round" as const };
+  const common = { fill: `color-mix(in srgb, ${tint} 24%, transparent)`, stroke: tint, strokeWidth: 1.5, strokeLinejoin: "round" as const };
   return (
     <svg viewBox="0 0 24 18" className="h-4 w-[21px] shrink-0" aria-hidden>
       {shape === "source" ? (

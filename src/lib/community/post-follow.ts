@@ -1,7 +1,6 @@
 "use client";
 
-import { patchCommunityPlan, uploadPlanPreview } from "@/lib/community/client";
-import { capturePlanPreviewPng } from "@/lib/community/plan-preview-capture";
+import { patchCommunityPlan } from "@/lib/community/client";
 import { readDesign, writeDesign } from "@/lib/designs/design-storage";
 import { serializeFactoryProject } from "@/lib/import-export/factory-json";
 import { notifySetupsChanged } from "@/lib/setups-tab";
@@ -11,9 +10,11 @@ import { useCommunityAuthStore } from "@/store/community-auth-store";
  * THE POST FOLLOWS THE DESIGN. A design linked to a post you own has one
  * version: the one in your library. Every save of such a design is pushed to
  * the post a few seconds later (plan, name, description, icon; tags are the
- * post's own and are edited on the focus page), and the board photograph is
- * retaken on a slower clock so a long editing session does not render the
- * board every few seconds.
+ * post's own and are edited on the focus page). The photograph stays the
+ * one taken when sharing: autosave must never invoke the live-board image
+ * exporter, which temporarily changes detail, presentation and motion.
+ * A timed recapture made the board flash into glance view and stall while
+ * the image rendered (longer still in a hidden tab waiting for paint).
  *
  * There is no "update post" anywhere else any more, and no second version
  * to compare against. Google Docs, not WordPress.
@@ -27,11 +28,9 @@ import { useCommunityAuthStore } from "@/store/community-auth-store";
  */
 
 const PUSH_DELAY_MS = 6_000;
-const PREVIEW_DELAY_MS = 30_000;
 const PENDING_KEY = "gtnh-factory-flow.post-follow-pending.v1";
 
 const pushTimers = new Map<string, number>();
-const previewTimers = new Map<string, number>();
 const inFlight = new Set<string>();
 /** A push that landed while one was already running: run once more after. */
 const again = new Set<string>();
@@ -101,7 +100,6 @@ async function pushDesign(designId: string): Promise<void> {
       });
       forgetPending(designId);
       notifySetupsChanged();
-      schedulePreview(designId, planId);
     } catch (error) {
       const status = statusOf(error);
       if (status === 403 || status === 404) {
@@ -118,34 +116,6 @@ async function pushDesign(designId: string): Promise<void> {
       schedulePostFollow(designId, true);
     }
   }
-}
-
-/**
- * The photograph is taken from the live board, so only the active design can
- * sit for one. A design that has moved off the canvas by the time the clock
- * fires keeps the picture it has; the next edit on it starts the clock again.
- */
-function schedulePreview(designId: string, planId: string): void {
-  const existing = previewTimers.get(designId);
-  if (existing !== undefined) {
-    window.clearTimeout(existing);
-  }
-  previewTimers.set(
-    designId,
-    window.setTimeout(() => {
-      previewTimers.delete(designId);
-      void (async () => {
-        const { useDesignStore } = await import("@/store/design-store");
-        if (useDesignStore.getState().activeDesignId !== designId) {
-          return;
-        }
-        const preview = await capturePlanPreviewPng();
-        if (preview) {
-          await uploadPlanPreview(planId, preview).catch(() => undefined);
-        }
-      })();
-    }, PREVIEW_DELAY_MS),
-  );
 }
 
 async function unlinkDesign(designId: string): Promise<void> {

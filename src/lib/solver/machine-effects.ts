@@ -1,3 +1,4 @@
+import { getFusionStats } from "@/lib/machines/fusion";
 import {
   getRecipeCoilTierControl,
   getRecipeMachineConfigTierControls,
@@ -24,11 +25,7 @@ import {
   isBeeFrameSlotControlId,
   isBeeProductionRecipe,
 } from "@/lib/model/passive-production";
-import {
-  getVoltageTierForEuT,
-  getVoltageTierIndex,
-  getVoltageTierMaxEuT,
-} from "@/lib/model/tiers";
+import { getVoltageTierForEuT, getVoltageTierIndex, getVoltageTierMaxEuT } from "@/lib/model/tiers";
 import { getHeatDiscountMultiplier } from "./heat";
 import { getEffectiveVoltageOrdinal, getNodeRunTier, getPowerPoolEuT } from "./power";
 import {
@@ -51,7 +48,18 @@ type MachineEffectRecipe = Pick<
 
 /** What it needs off the node the user configured. */
 type MachineEffectNode = Pick<FactoryNode, "machineConfigTiers" | "coilTier"> &
-  Partial<Pick<FactoryNode, "overclockTier" | "machineHandlerId" | "energyHatches" | "energyHatchType">>;
+  Partial<
+    Pick<
+      FactoryNode,
+      | "overclockTier"
+      | "machineHandlerId"
+      | "energyHatches"
+      | "energyHatchType"
+      | "powerEuT"
+      | "hatchVoltageTier"
+      | "hatchAmps"
+    >
+  >;
 
 /**
  * Reads the machine config tiers a node has selected as the zero-based indices
@@ -110,13 +118,10 @@ export function buildMachineContext(
     // What GTUtility.getTier(getMaxInputVoltage()) reports: the tier of the
     // SUMMED hatch voltage, so stacked hatches raise the ordinal the
     // "parallels per voltage tier" formulas scale on.
-    voltageTier: getEffectiveVoltageOrdinal(
-      recipe,
-      node,
-      getNodeRunTier(recipe as Recipe, node),
-    ),
+    voltageTier: getEffectiveVoltageOrdinal(recipe, node, getNodeRunTier(recipe as Recipe, node)),
     recipeVoltageTier: getVoltageTierIndex(getVoltageTierForEuT(Math.abs(recipe.eut ?? 0))),
     recipeSpecialValue: getRecipeSpecialValue(recipe),
+    recipeMap: recipe.source?.recipeMap ?? recipe.machineType,
   };
 }
 
@@ -320,6 +325,18 @@ export function getMachineParallelMultiplier(
   recipe: MachineEffectRecipe,
   node: MachineEffectNode,
 ): number {
+  return Math.min(
+    getMachineStructuralParallels(recipe, node),
+    getPoweredParallelLimit(recipe, node),
+  );
+}
+
+export function getMachineStructuralParallels(
+  recipe: MachineEffectRecipe,
+  node: MachineEffectNode,
+): number {
+  const fusion = getFusionStats(recipe);
+  if (fusion) return fusion.parallels;
   // GT++ "Voltage Tier * n Parallels" scales with the tier the machine runs
   // at; the GT tier ordinal counts ULV as 0, LV as 1, and so on. Stacked
   // hatches raise it, because the game reads the tier of the SUMMED voltage.
@@ -343,7 +360,7 @@ export function getMachineParallelMultiplier(
         return multiplier * fixed * scaled;
       }, 1);
 
-  return Math.min(structural, getPoweredParallelLimit(recipe, node));
+  return structural;
 }
 
 /**

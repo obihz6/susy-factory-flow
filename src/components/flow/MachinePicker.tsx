@@ -6,6 +6,8 @@ import { useDropdownDismiss } from "@/lib/hooks/use-dropdown-dismiss";
 import { getUiScale } from "@/lib/ui-scale";
 import type { FactoryNode, MachineHandler, Recipe } from "@/lib/model/types";
 import { getNodeSteamReport } from "@/lib/solver/power-report";
+import { getFusionMachine, getFusionStats } from "@/lib/machines/fusion";
+import { getOverclockedRecipeStats } from "@/lib/solver/overclock";
 import { applyMachineHandlerToRecipe, formatRate, isSteamMachineHandler } from "@/lib/model";
 import { ResourceIcon } from "@/components/nei/ResourceIcon";
 import type { MachineHandlerIcon } from "./machine-icons";
@@ -47,6 +49,8 @@ export interface HandlerRecipeStats {
 
 export function getHandlerRecipeStats(recipe: Recipe, handler: MachineHandler): HandlerRecipeStats {
   const applied = applyMachineHandlerToRecipe(recipe, { machineHandlerId: handler.id });
+  const fusion = getFusionStats(applied);
+  const fusionStats = fusion ? getOverclockedRecipeStats(recipe, { machineHandlerId: handler.id, overclockTier: fusion.tier }) : undefined;
   const scalingParallels: { label: string; max: number }[] = [];
   let fixedParallels: number | undefined;
   const controlSummaries: { label: string; detail: string }[] = [];
@@ -96,16 +100,16 @@ export function getHandlerRecipeStats(recipe: Recipe, handler: MachineHandler): 
     });
   }
   return {
-    seconds: applied.durationTicks / 20,
-    eut: applied.eut,
-    totalEu: applied.eut * applied.durationTicks,
+    seconds: (fusionStats?.durationTicks ?? applied.durationTicks) / 20,
+    eut: fusionStats ? fusionStats.eut * fusion!.parallels : applied.eut,
+    totalEu: fusionStats ? fusionStats.eut * fusionStats.durationTicks : applied.eut * applied.durationTicks,
     minimumTier: applied.minimumTier,
     steam: isSteamMachineHandler(handler),
     perfectOverclock: applied.machineProfile?.perfectOverclock === true,
     fixedParallels,
     scalingParallels,
     controlSummaries,
-    exactOverclocks:
+    exactOverclocks: !!fusion ||
       handler.id === recipe.machineHandlers?.[0]?.id &&
       recipe.runtimeCalculation?.status === "computed" &&
       (recipe.runtimeCalculation?.variants.length ?? 0) > 0,
@@ -366,8 +370,8 @@ export function MachineMenu({
                 />
               ) : null}
             </span>
-            <span className="min-w-0 truncate">{handler.label}</span>
-            {figures ? <Figure value={formatSeconds(stats.seconds)} unit="s" /> : <span />}
+            <span title={handler.label} className={getFusionMachine(handler.machineType) ? "min-w-0 whitespace-normal" : "min-w-0 truncate"}>{handler.label}</span>
+            {figures ? <DurationFigure seconds={stats.seconds} /> : <span />}
             {figures ? <Figure value={power.value} unit={power.unit} dim={power.unit === ""} /> : <span />}
           </button>
         );
@@ -418,7 +422,7 @@ export function MachineMenu({
                       <span className="ml-2 text-[13px] text-[var(--mc-ink-muted)]">{twin.recipe.recipeMap}</span>
                     ) : null}
                   </span>
-                  <Figure value={formatSeconds(stats.seconds)} unit="s" />
+                  <DurationFigure seconds={stats.seconds} />
                   <Figure value={power.value} unit={power.unit} dim={power.unit === ""} />
                 </button>
               );
@@ -455,6 +459,12 @@ export function MachineMenu({
 }
 
 /** A figure with its unit the way the card writes them: small, muted, no space. */
+function DurationFigure({ seconds }: { seconds: number }) {
+  return seconds > 0 && seconds < 0.1
+    ? <Figure value={(seconds * 1000).toLocaleString("en-US", { maximumSignificantDigits: 3 })} unit="ms" />
+    : <Figure value={formatSeconds(seconds)} unit="s" />;
+}
+
 function Figure({ value, unit, dim }: { value: string; unit: string; dim?: boolean }) {
   return (
     <span className={["whitespace-nowrap text-right tabular-nums", dim ? "text-[var(--mc-ink-muted)]" : ""].join(" ")}>

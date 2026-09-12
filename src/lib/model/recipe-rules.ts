@@ -1,3 +1,4 @@
+import { getFusionMachine, getFusionRecipeMark, isFusionRecipe, normalizeFusionHandler } from "@/lib/machines/fusion";
 import type {
   FactoryNode,
   MachineConfigControl,
@@ -6,6 +7,7 @@ import type {
   Recipe,
 } from "./types";
 import {
+  getMachineBehaviour,
   getMachineHiddenControlIds,
   getMachineTableControls,
   machineTableSeedsFromBase,
@@ -14,6 +16,7 @@ import {
 export interface MachineConfigTierControl {
   id: string;
   label: string;
+  numeric?: MachineConfigControl["numeric"];
   minimum: MachineConfigTierOption;
   current: MachineConfigTierOption;
   tiers: MachineConfigTierOption[];
@@ -32,7 +35,7 @@ export function expandMachineRecipeVariants(recipes: Recipe[]): Recipe[] {
 }
 
 export function getRecipeMachineHandlers(
-  recipe: Pick<Recipe, "machineType" | "minimumTier" | "source" | "machineHandlers">,
+  recipe: Pick<Recipe, "machineType" | "minimumTier" | "source" | "machineHandlers"> & Partial<Recipe>,
 ): MachineHandler[] {
   // Dataset handler lists are authoritative and always start with the map's
   // primary machine. Synthesizing an extra entry from the recipe map name
@@ -40,8 +43,11 @@ export function getRecipeMachineHandlers(
   // real Electric Blast Furnace), so the fallback only exists for recipes
   // without exported handlers.
   const handlersByFamily = new Map<string, MachineHandler>();
+  const fusionMark = isFusionRecipe(recipe) ? getFusionRecipeMark(recipe) : undefined;
   for (const handler of recipe.machineHandlers ?? []) {
-    const normalized = normalizeMachineHandler(handler);
+    const normalized = normalizeFusionHandler(normalizeMachineHandler(handler), recipe);
+    const fusion = getFusionMachine(normalized.machineType);
+    if (fusion && fusionMark !== undefined && fusion.mark < fusionMark) continue;
     const familyId = slug(normalized.label);
     if (!handlersByFamily.has(familyId)) {
       handlersByFamily.set(familyId, normalized);
@@ -49,6 +55,11 @@ export function getRecipeMachineHandlers(
   }
   if (handlersByFamily.size > 0) {
     return [...handlersByFamily.values()];
+  }
+  // A future recipe outside every known reactor's capacity stays visibly
+  // blocked; do not turn it into a generic machine with ordinary overclocks.
+  if (isFusionRecipe(recipe) && recipe.machineHandlers?.length) {
+    return recipe.machineHandlers.map((handler) => normalizeFusionHandler(handler, recipe));
   }
 
   const baseMachineType = machineHandlerFamilyLabel(recipe.machineType);
@@ -62,7 +73,7 @@ export function getRecipeMachineHandlers(
   if (isHandCraftingRecipeMap(recipe)) {
     return [autoWorkbenchHandler(), fallback];
   }
-  return [fallback];
+  return [normalizeFusionHandler(fallback, recipe)];
 }
 
 /** Whether this recipe comes off the crafting-grid maps the oracle exports. */
@@ -146,7 +157,7 @@ function steamSingleblockDurationTicks(
 }
 
 export function getSelectedMachineHandler(
-  recipe: Pick<Recipe, "machineType" | "minimumTier" | "source" | "machineHandlers">,
+  recipe: Pick<Recipe, "machineType" | "minimumTier" | "source" | "machineHandlers"> & Partial<Recipe>,
   node: Pick<FactoryNode, "machineHandlerId">,
 ): MachineHandler {
   const handlers = getRecipeMachineHandlers(recipe);
@@ -192,6 +203,8 @@ export function applyMachineHandlerToRecipe(
   // the bonus twice, so a handler whose machine the table covers seeds from
   // the base recipe instead.
   const seedsFromBase = machineTableSeedsFromBase(handler.machineType);
+  const minimumTier = getMachineBehaviour(handler.machineType)?.recipeTierFromBase
+    ? recipe.minimumTier : handler.minimumTier;
   const handlerDurationTicks = seedsFromBase
     ? steamSingleblockDurationTicks(recipe, handler)
     : (handler.durationTicks ?? steamSingleblockDurationTicks(recipe, handler));
@@ -205,7 +218,7 @@ export function applyMachineHandlerToRecipe(
     ...recipe,
     runtimeCalculation,
     machineType: handler.machineType,
-    minimumTier: handler.minimumTier,
+    minimumTier,
     maximumTier: handler.maximumTier,
     durationTicks: handlerDurationTicks ?? recipe.durationTicks,
     eut,
@@ -213,7 +226,7 @@ export function applyMachineHandlerToRecipe(
     machineProfile: {
       ...recipe.machineProfile,
       machineType: handler.machineType,
-      minimumTier: handler.minimumTier,
+      minimumTier,
       maximumTier: handler.maximumTier,
       durationTicks: handlerDurationTicks ?? recipe.machineProfile?.durationTicks,
       eut: handlerEut ?? recipe.machineProfile?.eut,
@@ -247,13 +260,15 @@ export function getRecipeCoilTierControl(
   const control =
     getMachineTableControls(recipe.machineType).find((entry) => entry.id === "heatingCoil") ??
     findMachineConfigControl(recipe, "heatingCoil");
-  return control ? resolveMachineConfigTierControl(control, node.coilTier) : undefined;
+  return control ? resolveMachineConfigTierControl(applyControlRecipeMinimum(control, recipe), node.coilTier) : undefined;
 }
 
 export function getRecipeMachineConfigTierControls(
   recipe: Pick<Recipe, "machineType" | "source" | "nei" | "machineConfigControls">,
   node: Pick<FactoryNode, "machineConfigTiers">,
 ): MachineConfigTierControl[] {
+  const settings = getMachineBehaviour(recipe.machineType)?.normalizeConfig?.(node.machineConfigTiers ?? {})
+    ?? node.machineConfigTiers;
   const controls = dropHiddenControls(
     mergeMachineConfigControls(
       recipe.machineConfigControls ?? [],
@@ -267,7 +282,7 @@ export function getRecipeMachineConfigTierControls(
     .map((control) =>
       resolveMachineConfigTierControl(
         applyControlRecipeMinimum(control, recipe),
-        node.machineConfigTiers?.[control.id],
+        settings?.[control.id],
       ),
     )
     .filter((control): control is MachineConfigTierControl => Boolean(control));
@@ -304,6 +319,10 @@ export function getAdjacentMachineConfigTier(
   control: MachineConfigTierControl,
   direction: -1 | 1,
 ): string {
+  if (control.numeric) {
+    return String(Math.min(control.numeric.max ?? Number.MAX_SAFE_INTEGER,
+      Math.max(control.numeric.min, Number(control.current.key) + direction)));
+  }
   const currentIndex = control.tiers.findIndex((entry) => entry.key === control.current.key);
   const minimumIndex = control.tiers.findIndex((entry) => entry.key === control.minimum.key);
   const nextIndex = Math.min(
@@ -349,20 +368,23 @@ function findMachineConfigControl(
  * A control whose minimum tier is the recipe's own special value: the recipe
  * says which rung of the ladder it starts at (an NFR recipe's minimum field
  * restriction coil), so the control's static `minimumKey` is replaced with
- * that tier before resolution hides the rungs below it.
+ * that tier before resolution hides the rungs below it. Heat-based controls
+ * instead select the first coil meeting the special value in K.
  */
 function applyControlRecipeMinimum(
   control: MachineConfigControl,
   recipe: Pick<Recipe, "nei">,
 ): MachineConfigControl {
-  if (!control.minimumFromSpecialValue) {
+  if (!control.minimumFromSpecialValue && !control.minimumHeatFromSpecialValue) {
     return control;
   }
   const specialValue = getRecipeSpecialValue(recipe);
   if (specialValue === undefined || specialValue < 1) {
     return control;
   }
-  const minimum = control.tiers[Math.min(control.tiers.length, Math.floor(specialValue)) - 1];
+  const minimum = control.minimumHeatFromSpecialValue
+    ? control.tiers.find((tier) => (tier.heat ?? 0) >= specialValue)
+    : control.tiers[Math.min(control.tiers.length, Math.floor(specialValue)) - 1];
   return minimum ? { ...control, minimumKey: minimum.key } : control;
 }
 
@@ -373,6 +395,20 @@ function resolveMachineConfigTierControl(
   const minimum = control.tiers.find((tier) => tier.key === control.minimumKey) ?? control.tiers[0];
   if (!minimum) {
     return undefined;
+  }
+
+  if (control.numeric) {
+    const { min, max = Number.MAX_SAFE_INTEGER } = control.numeric;
+    const raw = Number(selectedKey?.trim() || control.defaultKey || control.minimumKey);
+    const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, Math.trunc(raw))) : min;
+    const current = {
+      ...minimum,
+      key: String(value),
+      label: String(value),
+      resource: { ...minimum.resource, displayName: `${control.label}: ${value}` },
+    };
+    return { id: control.id, label: control.label, numeric: control.numeric,
+      minimum, current, tiers: [current], minimumIndex: 0, resource: current.resource };
   }
 
   const minimumIndex = Math.max(
@@ -400,6 +436,9 @@ export function recipeMapName(recipe: Pick<Recipe, "machineType" | "source">): s
 }
 
 function normalizeMachineHandler(handler: MachineHandler): MachineHandler {
+  // Fusion's Roman numeral names a different reactor, not a singleblock
+  // voltage suffix. Stripping it merged I/II/III and IV/V into two families.
+  if (getFusionMachine(handler.machineType)) return handler;
   const familyLabel = machineHandlerFamilyLabel(handler.label);
   return {
     ...handler,
@@ -409,9 +448,8 @@ function normalizeMachineHandler(handler: MachineHandler): MachineHandler {
 }
 
 function machineHandlerFamilyLabel(label: string): string {
-  // Datasets from other exporters can carry handler entries with missing
-  // labels; degrade to an empty family label instead of crashing the board.
-  const tierlessLabel = String(label ?? "")
+  if (getFusionMachine(label)) return label;
+  const tierlessLabel = label
     .replace(/\s+\((?:ULV|LV|MV|HV|EV|IV|LuV|ZPM|UV|UHV|UEV|UIV|UMV|UXV|OpV|MAX)\)$/i, "")
     .replace(/\s+(?:I|II|III|IV|V|VI|VII|VIII|IX|X)$/i, "")
     .trim();

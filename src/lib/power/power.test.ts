@@ -365,10 +365,45 @@ describe("reactors and endgame", () => {
     expect(steam?.perSecond).toBeCloseTo((water?.perSecond ?? 0) * 160, 6);
   });
 
-  it("gives the LFTR 16 amps of its fuel's tier", () => {
-    const model = compute("lftr", { fuel: "LFTR Fuel 1" });
-    expect(model.euPerTick).toBe(2048 * 16);
+  it.each([
+    ["LFTR Fuel 1", 32_768, 655_360],
+    ["LFTR Fuel 2", 131_072, 2_621_440],
+    ["LFTR Fuel 3", 524_288, 10_485_760],
+  ])("generates the game-source output for %s", (fuel, euPerTick, euPerLiter) => {
+    // RecipeLoaderLFTR's output metadata x4 in MTENuclearReactor;
+    // 100 L fuel + 200 L carrier salt over 100 seconds, with no overclock.
+    const model = compute("lftr", { fuel });
+    expect(model.euPerTick).toBe(euPerTick);
+    expect(model.inputs).toEqual([
+      { name: fuel, perSecond: 1, unit: "L" },
+      { name: "Li2BeF4", perSecond: 2, unit: "L" },
+    ]);
+    expect((model.euPerTick * 20) / model.inputs[0].perSecond).toBe(euPerLiter);
     expect(model.outputs.some((flow) => flow.name === "Uranium-233")).toBe(true);
+    const recipe = buildPowerRecipe("lftr", { fuel }, "lftr-test");
+    expect(recipe?.power?.euPerTick).toBe(euPerTick);
+    expect(recipe?.outputs.find((slot) => slot.kind === "power")?.amount).toBe(euPerTick * 20);
+  });
+
+  it("repairs saved LFTR Fuel 3 power and its output port on load", () => {
+    const recipe = buildPowerRecipe("lftr", { fuel: "LFTR Fuel 3" }, "lftr-saved") as Recipe;
+    recipe.power!.euPerTick = 32_768;
+    recipe.outputs.find((slot) => slot.kind === "power")!.amount = 655_360;
+    const node = {
+      id: "lftr-node",
+      recipeId: recipe.id,
+      machineCount: 1,
+      parallel: 1,
+      overclockTier: "EV",
+      enabled: true,
+      position: { x: 0, y: 0 },
+      machineConfigTiers: { fuel: "LFTR Fuel 3" },
+    } as FactoryNode;
+    const loaded = resynthesizePowerRecipes({ nodes: [node], recipes: [recipe] });
+    expect(loaded.recipes[0].power?.euPerTick).toBe(524_288);
+    expect(loaded.recipes[0].outputs.find((slot) => slot.kind === "power")?.amount).toBe(10_485_760);
+    expect(loaded.recipes[0].inputs).toEqual(recipe.inputs);
+    expect(loaded.nodes[0].machineConfigTiers?.fuel).toBe("LFTR Fuel 3");
   });
 
   it("runs the Vacuum Reactor's quad uranium layout at the workbook's 43,600 EU/t", () => {

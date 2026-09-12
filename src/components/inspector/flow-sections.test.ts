@@ -219,6 +219,12 @@ describe("applyNetFlow", () => {
     ]);
   });
 
+  it("removes a zero-rate source from net inputs, including declared idle sources", () => {
+    const idle = makeBalance({ key: "item:idle", deficitPerSecond: 0, surplusPerSecond: 0 });
+    expect(applyNetFlow([idle], []).needs).toEqual([]);
+    expect(applyNetFlow([idle], [idle])).toEqual({ needs: [], outputs: [idle] });
+  });
+
   it("re-ranks each netted list by its new size", () => {
     const big = makeBalance({ key: "item:big", deficitPerSecond: 2, surplusPerSecond: 20 });
     const small = output("item:small", 9);

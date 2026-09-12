@@ -1,3 +1,5 @@
+import { normalizeFullFarms } from "./full-farms";
+import { normalizeProjectHatchInputs } from "@/lib/solver/hatch-input";
 import type { FactoryProject } from "./types";
 import { energyHatchTypeExistsAtTier } from "@/lib/machines/energy-hatches";
 import { normalizeProjectFuelProfiles } from "./fuels";
@@ -7,6 +9,7 @@ import { isTrashRecipe } from "./trash";
 import { resynthesizePowerRecipes } from "@/lib/power/power-recipe";
 import { snapPositionToGrid, snapSizeUpToGrid } from "@/lib/board-grid";
 import { sectionNodeView, splitSectionHandleId } from "./shared-machine";
+import { repairWiredInputOverrides } from "./edge-input-overrides";
 
 /**
  * Everything a project must go through on its way in, whether it arrives from
@@ -17,22 +20,25 @@ import { sectionNodeView, splitSectionHandleId } from "./shared-machine";
  * migration — every caller now gets the full set by construction.
  */
 export function normalizeLoadedProject(project: FactoryProject): FactoryProject {
-  return snapProjectToGrid(
-    repairPocketReferences(
-      unpaintCustomRateCards(
-        releaseCustomRates(
-          dropDuplicateEdges(
-            dropCrossFormConnections(
-              migrateTrashCansToDrawers(
-                dropImpossibleEnergyHatchTypes(
-                  // Power cards rebuild their synthesized recipe from the
-                  // node's settings, so stored plans pick up corrected
-                  // generator math. BEFORE the wire checks: a power recipe
-                  // saved slotless would otherwise read as a card with no
-                  // fluid slot and lose its fuel wire to the cross-form drop.
-                  resynthesizePowerRecipes(
-                    normalizeProjectFuelProfiles(
-                      renameOpvTier(adoptSetupRules(requireSolveForPool(project))),
+  project = repairWiredInputOverrides(project);
+  return normalizeProjectHatchInputs(
+    snapProjectToGrid(
+      repairPocketReferences(
+        unpaintCustomRateCards(
+          releaseCustomRates(
+            dropDuplicateEdges(
+              dropCrossFormConnections(
+                migrateTrashCansToDrawers(
+                  dropImpossibleEnergyHatchTypes(
+                    // Power cards rebuild their synthesized recipe from the
+                    // node's settings, so stored plans pick up corrected
+                    // generator math. BEFORE the wire checks: a power recipe
+                    // saved slotless would otherwise read as a card with no
+                    // fluid slot and lose its fuel wire to the cross-form drop.
+                    resynthesizePowerRecipes(
+                      normalizeProjectFuelProfiles(
+                        normalizeFullFarms(renameOpvTier(adoptSetupRules(requireSolveForPool(project)))),
+                      ),
                     ),
                   ),
                 ),
@@ -42,6 +48,7 @@ export function normalizeLoadedProject(project: FactoryProject): FactoryProject 
         ),
       ),
     ),
+    true,
   );
 }
 

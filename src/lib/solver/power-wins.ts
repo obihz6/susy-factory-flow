@@ -1,6 +1,9 @@
-import { getRecipeMinimumVoltageTier, getVoltageTierMaxEuT } from "@/lib/model/tiers";
+import { getVoltageTierMaxEuT } from "@/lib/model/tiers";
+import { isFusionRecipe } from "@/lib/machines/fusion";
 import type { FactoryNode, Recipe } from "@/lib/model/types";
 import { getNodePowerReport, type NodePowerReport } from "./power-report";
+import { applyMachineHandlerToRecipe } from "@/lib/model/recipe-rules";
+import { getMachineStructuralParallels } from "./machine-effects";
 
 /**
  * One budget worth stepping to: the smallest EU/t at which the build gains
@@ -21,16 +24,22 @@ export type PowerWinNode = Pick<
   FactoryNode,
   "overclockTier" | "coilTier" | "machineHandlerId" | "machineConfigTiers"
 > &
-  Partial<Pick<FactoryNode, "energyHatches" | "energyHatchType" | "powerEuT">>;
+  Partial<
+    Pick<
+      FactoryNode,
+      "energyHatches" | "energyHatchType" | "powerEuT" | "hatchVoltageTier" | "hatchAmps" | "powerInputMode"
+    >
+  >;
 
 /** The largest budget worth scanning: past MAX voltage there is no hatch. */
-const CEILING = getVoltageTierMaxEuT("MAX") * 64;
+const CEILING = getVoltageTierMaxEuT("MAX") * 16_777_216;
 
 function outcome(recipe: Recipe, node: PowerWinNode, euT: number): NodePowerReport {
-  return getNodePowerReport(recipe, { ...node, powerEuT: euT });
+  return getNodePowerReport(recipe, powerNodeAtBudget(node, euT));
 }
 
 function same(a: NodePowerReport, b: NodePowerReport): boolean {
+  if (a.state !== "ok" && b.state !== "ok") return true;
   return (
     (a.state === "ok") === (b.state === "ok") &&
     a.overclockSteps === b.overclockSteps &&
@@ -60,7 +69,8 @@ function describe(report: NodePowerReport): string {
  * arithmetic per sample.
  */
 export function listPowerWins(recipe: Recipe, node: PowerWinNode): PowerWin[] {
-  const floor = Math.max(1, getVoltageTierMaxEuT(getRecipeMinimumVoltageTier(recipe)) / 4);
+  if (isFusionRecipe(recipe)) return [];
+  const floor = 1;
   const wins: PowerWin[] = [];
   const stepRatio = 2 ** 0.25;
   let previousEuT = floor;
@@ -74,7 +84,7 @@ export function listPowerWins(recipe: Recipe, node: PowerWinNode): PowerWin[] {
       // The change lives somewhere in (previousEuT, euT]: bisect to it.
       let low = previousEuT;
       let high = euT;
-      for (let i = 0; i < 40 && high - low > 1e-6 * high; i += 1) {
+      for (let i = 0; i < 60 && high - low > Math.max(1e-6, Number.EPSILON * high * 2); i += 1) {
         const mid = (low + high) / 2;
         if (same(previous, outcome(recipe, node, mid))) {
           low = mid;
@@ -83,7 +93,8 @@ export function listPowerWins(recipe: Recipe, node: PowerWinNode): PowerWin[] {
         }
       }
       const exact = snapToWholeEuT(high, recipe, node, previous);
-      wins.push(toWin(exact, outcome(recipe, node, exact)));
+      const report = outcome(recipe, node, exact);
+      if (report.state === "ok") wins.push(toWin(exact, report));
     }
     previous = current;
     previousEuT = euT;
@@ -135,6 +146,8 @@ export function listPowerWinsCached(recipe: Recipe, node: PowerWinNode): PowerWi
     node.machineHandlerId ?? "",
     node.coilTier ?? "",
     node.machineConfigTiers ?? null,
+    node.hatchVoltageTier ?? "",
+    node.powerInputMode ?? "amps",
     node.energyHatchType ?? "",
     node.energyHatches ?? 1,
   ]);
@@ -158,6 +171,33 @@ export function nextPowerWin(wins: PowerWin[], euT: number): PowerWin | undefine
   return wins.find((win) => win.euT > euT * (1 + 1e-9));
 }
 
+/** Target full parallel capacity before advancing to individual overclock gains. */
+export function fullParallelPowerWin(recipe: Recipe, node: FactoryNode, wins: PowerWin[]): PowerWin | undefined {
+  const effective = applyMachineHandlerToRecipe(recipe, node);
+  const current = getNodePowerReport(recipe, node);
+  const capacity = getMachineStructuralParallels(effective, node);
+  if (capacity <= 1 || !Number.isFinite(capacity) || (current.state === "ok" && current.parallels >= capacity)) return undefined;
+  const isFull = (euT: number) => {
+    const candidate = powerNodeAtBudget(node, euT);
+    const report = getNodePowerReport(recipe, candidate);
+    return report.state === "ok" && report.parallels >= getMachineStructuralParallels(effective, candidate);
+  };
+  const upper = wins.find(win => win.euT > current.poolEuT && isFull(win.euT));
+  if (!upper) return undefined;
+  // The geometric win scan may skip individual parallel steps. Refine the
+  // saturation point itself rather than using a later sampled overclock.
+  let low = current.poolEuT;
+  let high = upper.euT;
+  for (let i = 0; i < 60 && high - low > Math.max(1e-6, Number.EPSILON * high * 2); i++) {
+    const mid = (low + high) / 2;
+    if (isFull(mid)) high = mid;
+    else low = mid;
+  }
+  const whole = Math.floor(high);
+  const euT = isFull(whole) ? whole : whole + 1;
+  return toWin(euT, outcome(recipe, node, euT));
+}
+
 /** The last win strictly below this budget, if any. */
 export function previousPowerWin(wins: PowerWin[], euT: number): PowerWin | undefined {
   let found: PowerWin | undefined;
@@ -167,4 +207,17 @@ export function previousPowerWin(wins: PowerWin[], euT: number): PowerWin | unde
     }
   }
   return found;
+}
+
+/** Change supply without changing the average hatch voltage. */
+export function powerNodeAtBudget<T extends PowerWinNode>(node: T, euT: number): T {
+  return {
+    ...node,
+    powerEuT: euT,
+    ...(node.hatchVoltageTier
+      ? {
+          hatchAmps: euT / getVoltageTierMaxEuT(node.hatchVoltageTier),
+        }
+      : {}),
+  };
 }

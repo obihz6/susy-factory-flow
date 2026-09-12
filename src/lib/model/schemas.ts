@@ -161,6 +161,8 @@ export const machineConfigControlSchema = z.object({
   label: z.string().min(1),
   minimumKey: z.string().min(1),
   defaultKey: z.string().min(1).optional(),
+  numeric: z.object({ min: z.number().int(), max: z.number().int().optional() }).optional(),
+  minimumHeatFromSpecialValue: z.boolean().optional(),
   tiers: z
     .array(
       z.object({
@@ -308,6 +310,7 @@ export const factoryNodeSchema = z.object({
       mode: z.enum(["supply", "request"]),
     })
     .optional(),
+  cropFullFarmCount: z.number().int().min(1).optional(),
   machineCount: z.number().min(0),
   parallel: z
     .number()
@@ -322,10 +325,32 @@ export const factoryNodeSchema = z.object({
     .optional(),
   energyHatchType: z.string().min(1).optional(),
   powerEuT: z.number().nonnegative().finite().optional(),
+  hatchVoltageTier: z
+    .enum([
+      "ULV",
+      "LV",
+      "MV",
+      "HV",
+      "EV",
+      "IV",
+      "LuV",
+      "ZPM",
+      "UV",
+      "UHV",
+      "UEV",
+      "UIV",
+      "UMV",
+      "UXV",
+      "MAX",
+    ])
+    .optional(),
+  hatchAmps: z.number().nonnegative().finite().optional(),
+  powerInputMode: z.enum(["amps", "eut"]).optional(),
   machineHandlerId: z.string().min(1).optional(),
   coilTier: z.string().min(1).optional(),
   machineConfigTiers: z.record(z.string().min(1), z.string().min(1)).optional(),
   settingsCollapsed: z.boolean().optional(),
+  hatchSupplies: z.array(z.enum(["water", "air"])).optional(),
   recipeInputOverrides: z.record(z.string().min(1), recipeInputSchema).optional(),
   // More recipes the same machine runs (shared-machine.ts), sections 1..n.
   extraRecipes: z
@@ -483,6 +508,7 @@ export const planViewStateSchema = z.object({
   canvasPattern: z.string().optional(),
   canvasTheme: z.string().optional(),
   lineHeatMode: z.boolean().optional(),
+  fixedEdgeWidth: z.boolean().optional(),
   linePulseMode: z.boolean().optional(),
   calmMode: z.boolean().optional(),
   glanceMode: z.string().optional(),

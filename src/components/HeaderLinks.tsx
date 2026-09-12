@@ -1,8 +1,10 @@
 "use client";
 
-import { Bug, Compass, Heart, Library } from "lucide-react";
-import { useEffect, useState } from "react";
-import { DONATIONS_ENABLED } from "@/lib/feature-toggles";
+import { useRef, useState } from "react";
+import { useDropdownDismiss } from "@/lib/hooks/use-dropdown-dismiss";
+
+import { Bug, ChevronDown, Compass, Heart, Library } from "lucide-react";
+import { leaveLibrary, openLibrary } from "@/lib/library/library-tab";
 import { openWelcomeTab } from "@/lib/welcome/welcome-tab";
 import { APP_VERSION } from "@/lib/version";
 import { leaveLibrary, openLibrary } from "@/lib/library/library-tab";
@@ -38,21 +40,19 @@ const BUG_REPORT_URL = `${GITHUB_URL}/issues/new?template=bug_report.yml&version
  * red so it is still the one thing on the bar that stands out.
  */
 export function HeaderLinks() {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useDropdownDismiss(open, { refs: [root], onClose: () => setOpen(false) });
   return (
-    <div className="flex shrink-0 items-center gap-1">
-      {/* The way back to the Welcome tab once it has been closed. */}
-      <button
-        type="button"
-        onClick={() => {
-          leaveLibrary();
-          openWelcomeTab();
-        }}
-        title="Welcome"
-        aria-label="Open the Welcome tab"
-        className="inline-flex h-7 w-7 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised hover:text-fg"
-      >
-        <Compass className="h-3.5 w-3.5" />
+    <div ref={root} className="relative shrink-0">
+      <button type="button" aria-expanded={open} aria-label="Help and links"
+        onClick={() => setOpen(!open)}
+        className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-fg-muted hover:bg-surface-raised hover:text-fg">
+        Help <ChevronDown className="h-3 w-3" />
       </button>
+      {open ? <div className="absolute right-0 top-full z-[100] mt-1 w-52 rounded border border-line-strong bg-surface p-1 text-sm shadow-xl">
+        <MenuLinks auxiliary onAction={() => setOpen(false)} />
+      </div> : null}
       <HeaderLink href={GITHUB_URL} label="Source on GitHub">
         <GithubMark />
       </HeaderLink>
@@ -76,7 +76,7 @@ export function ReportBugButton() {
       rel="noreferrer noopener"
       title="Report a bug"
       aria-label="Report a bug"
-      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-red-800 bg-red-950 text-red-300 hover:border-red-600 hover:bg-red-900 hover:text-red-200"
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-red-800 bg-red-950 text-red-300 hover:border-red-600 hover:bg-red-900 hover:text-red-200"
     >
       <Bug className="h-3.5 w-3.5" aria-hidden />
     </a>
@@ -103,10 +103,10 @@ export function SupportButton() {
       aria-label="Support SuSy Planner on Ko-fi"
       data-umami-event="support-kofi"
       data-umami-event-source="header"
-      className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded border border-pink-800 bg-pink-950 px-2 text-xs font-semibold text-pink-300 hover:border-pink-600 hover:bg-pink-900 hover:text-pink-200 snug:w-7 snug:justify-center snug:px-0"
+      className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded border border-pink-800 bg-pink-950 px-2 text-xs font-semibold text-pink-300 hover:border-pink-600 hover:bg-pink-900 hover:text-pink-200 snug:w-5 snug:justify-center snug:px-0"
     >
       <Heart className="h-3.5 w-3.5 fill-current" aria-hidden />
-      <span className="snug:hidden">Support</span>
+      <span className="sr-only">Support</span>
     </a>
   );
 }
@@ -116,7 +116,7 @@ export function SupportButton() {
  * a phone can read at a glance are still two brand marks nobody can hover for a
  * tooltip, so up here they carry their names.
  */
-export function MenuLinks({ onAction }: { onAction?: () => void }) {
+export function MenuLinks({ onAction, auxiliary = false }: { onAction?: () => void; auxiliary?: boolean }) {
   return (
     <div className="flex flex-col">
       <button
@@ -133,7 +133,7 @@ export function MenuLinks({ onAction }: { onAction?: () => void }) {
         </span>
         <span className="truncate">Welcome</span>
       </button>
-      <button
+      {!auxiliary ? <button
         type="button"
         onClick={() => {
           openLibrary();
@@ -145,7 +145,7 @@ export function MenuLinks({ onAction }: { onAction?: () => void }) {
           <Library className="h-3.5 w-3.5" aria-hidden />
         </span>
         <span className="truncate">Library</span>
-      </button>
+      </button> : null}
       <MenuLink href={GITHUB_URL} label="Source on GitHub">
         <GithubMark />
       </MenuLink>
@@ -217,7 +217,7 @@ function HeaderLink({
       rel="noreferrer noopener"
       title={label}
       aria-label={label}
-      className="inline-flex h-7 w-7 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised hover:text-fg"
+      className="inline-flex h-5 w-5 items-center justify-center rounded border border-line-strong bg-surface text-fg-subtle hover:bg-surface-raised hover:text-fg"
     >
       {children}
     </a>

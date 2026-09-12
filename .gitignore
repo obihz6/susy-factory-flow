@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/.browser-test.local/
+/.icon-sizing-results.local/
 /.pipeline
 /.tmp
 /.gh-artifacts-*/

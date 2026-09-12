@@ -79,16 +79,27 @@ const ARROW_STEM = 3;
 /** Long enough to cross the gap from the button to the cards over it. */
 const HIDE_GRACE_MS = 160;
 /**
- * The smallest window the spread-out glance layout is shown in: 1080p at
- * 100% zoom. Under it the cards cram and overlap, and the one-column panel
- * reads better (Jack, 2026-09-07). These are CSS pixels, so browser zoom
- * counts by itself: a 1080p window at 125% reports 1536x864 and gets the
- * panel. `layoutGlance` still reports `fits: false` when its stacks would
- * land on each other, which catches a wide window with both side columns
- * open. `help-fit-probe.local.mjs <WxH> <out.png>` screenshots it.
+ * The smallest window the spread-out glance layout is offered in, in SHELL
+ * pixels - the space the cards are actually laid out in, which is the window
+ * divided by the interface size (`--ui-scale`, 1.3 by default).
+ *
+ * These used to read 1920x1080, written as though they were real pixels
+ * (Jack, 2026-09-07). They are not: `show()` divides by the scale before
+ * comparing, so at the shipped 130% they demanded a 2496x1404 window and
+ * NOBODY on a 1080p screen ever saw the spread - a maximised browser there
+ * measures about 1477x731 here. The whole layout was dead code in practice
+ * (Jack, 2026-09-09: "it's just one big scrollable vertical list").
+ *
+ * So they are now sized to let a real 1080p browser through, and the honest
+ * test does the rest: `layoutGlance` reports `fits: false` when its stacks
+ * would land on each other, and that answer is READ now rather than
+ * computed and thrown away. A window that qualifies on size but still crams
+ * falls back to the one-column panel.
+ *
+ * `help-fit-probe.local.mjs <WxH> <out.png>` screenshots it.
  */
-const GLANCE_MIN_VW = 1920;
-const GLANCE_MIN_VH = 1080;
+const GLANCE_MIN_VW = 1400;
+const GLANCE_MIN_VH = 700;
 
 /**
  * The sheet's own accent: one soft blue-grey.
@@ -113,7 +124,7 @@ const BUILD: HelpCard = {
   rows: [
     { icon: Undo2, text: "*Undo / redo* changes" },
     { chip: "/s", text: "Change the *rate unit*" },
-    { chip: "EU/t", text: "Show power in *EU/t or amps*" },
+    { icon: Zap, text: "Show power as *EU/t or amps of a tier*" },
   ],
 };
 
@@ -422,6 +433,12 @@ type GlanceLayout = {
   /** False when the board is too small for the spread without cards
    * landing on each other: the caller shows the one-column panel. */
   fits: boolean;
+  /** The estimated stacks the fit was judged on, keyed by column, and the
+   * pairs that collided. Drawn by nothing; this is what
+   * `help-fit-probe.local.mjs` reads off `window.__gtnhHelpGlance` to say
+   * WHY a window fell back to the panel. */
+  boxes: (Box & { key: string })[];
+  collisions: [string, string][];
 };
 
 /** About how tall a card renders at CARD_W: title, rows, the wrapped ones
@@ -442,7 +459,7 @@ function estimateStackHeight(cards: HelpCard[]): number {
 }
 
 /** A stack's estimated box, for the overlap check. */
-type Box = { left: number; top: number; bottom: number };
+type Box = { left: number; top: number; bottom: number; key: string };
 
 function boxesOverlap(a: Box, b: Box): boolean {
   return (
@@ -569,7 +586,7 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
       style: { left: build.left, top, width: CARD_W },
       cards,
     });
-    boxes.push({ left: build.left, top, bottom: top + estimateStackHeight(cards) });
+    boxes.push({ key: "board-left", left: build.left, top, bottom: top + estimateStackHeight(cards) });
     const x = clamp((ring.left + ring.right) / 2, build.left + 24, build.left + CARD_W - 24);
     arrows.push({ points: [{ x, y: top }, { x, y: ring.bottom }] });
   }
@@ -584,6 +601,7 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
         cards: centreCards,
       });
       boxes.push({
+        key: "centre",
         left: centreLeft,
         top: centreTop,
         bottom: centreTop + estimateStackHeight(centreCards),
@@ -600,7 +618,7 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
       style: { left, bottom: vh - footBottom, width: CARD_W },
       cards,
     });
-    boxes.push({ left, top: footBottom - estimateStackHeight(cards), bottom: footBottom });
+    boxes.push({ key: `foot-${index}`, left, top: footBottom - estimateStackHeight(cards), bottom: footBottom });
   });
 
   if (toolRow) {
@@ -613,7 +631,7 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
       style: { left, top, width: CARD_W },
       cards: [TOOLS],
     });
-    boxes.push({ left, top, bottom: top + estimateStackHeight([TOOLS]) });
+    boxes.push({ key: "board-right", left, top, bottom: top + estimateStackHeight([TOOLS]) });
     const x = clamp((ring.left + ring.right) / 2, left + 24, left + CARD_W - 24);
     arrows.push({ points: [{ x, y: top }, { x, y: ring.bottom }] });
   }
@@ -628,7 +646,7 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
       style: { left, bottom: vh - bottom, width: CARD_W },
       cards: [FRAMING],
     });
-    boxes.push({ left, top: bottom - estimateStackHeight([FRAMING]), bottom });
+    boxes.push({ key: "board-right-bottom", left, top: bottom - estimateStackHeight([FRAMING]), bottom });
     const x = clamp((ring.left + ring.right) / 2, left + 24, left + CARD_W - 24);
     arrows.push({ points: [{ x, y: bottom }, { x, y: ring.top }] });
   }
@@ -640,7 +658,7 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
       style: { left: button.left, bottom: vh - bottom, width: CARD_W },
       cards: cornerCards,
     });
-    boxes.push({ left: button.left, top: bottom - estimateStackHeight(cornerCards), bottom });
+    boxes.push({ key: "corner", left: button.left, top: bottom - estimateStackHeight(cornerCards), bottom });
     if (planBar && planBar.top > bottom + ARROW_HEAD) {
       // The plan bar runs the whole width of the board's foot, so the arrow
       // drops from the stack's bottom card wherever it clears the button.
@@ -693,17 +711,16 @@ function layoutGlance({ rects, button, vw, vh }: Measured): GlanceLayout {
 
   // Stacks that land on each other mean the board is too small for the
   // spread; the one-column panel shows instead.
-  let fits = true;
-  for (let i = 0; i < boxes.length && fits; i += 1) {
+  const collisions: [string, string][] = [];
+  for (let i = 0; i < boxes.length; i += 1) {
     for (let j = i + 1; j < boxes.length; j += 1) {
       if (boxesOverlap(boxes[i], boxes[j])) {
-        fits = false;
-        break;
+        collisions.push([boxes[i].key, boxes[j].key]);
       }
     }
   }
 
-  return { rings, columns, arrows, fits };
+  return { rings, columns, arrows, fits: collisions.length === 0, boxes, collisions };
 }
 
 /** The arrow's segments as 3px bars, and its head as a border triangle. */
@@ -898,15 +915,18 @@ function HelpHoverPanel({
 
 function HelpGlanceSheet({
   measured,
+  glance,
   onEnter,
   onLeave,
 }: {
   measured: Measured;
+  /** Laid out by the caller, which had to ask whether it fits anyway. */
+  glance: GlanceLayout;
   onEnter: () => void;
   onLeave: () => void;
 }) {
   const { button } = measured;
-  const { rings, columns, arrows } = layoutGlance(measured);
+  const { rings, columns, arrows } = glance;
   return (
     <div
       className="ui-zoom pointer-events-none fixed inset-0 z-[120] font-mono"
@@ -1013,8 +1033,26 @@ export const BoardHelp = memo(function BoardHelp({ compact }: { compact: boolean
   // Between the phone layout and the full spread sits a band of small
   // desktop windows; they hover the one-column panel instead. Decided per
   // open, so resizing simply changes what the next hover shows.
+  //
+  // Two questions, both asked: is there room in principle, and does THIS
+  // board's spread actually land without cards on top of each other. The
+  // second is the one that matters - a window can be wide and still have
+  // both side columns open - and it used to be computed and dropped.
+  const glance = measured ? layoutGlance(measured) : undefined;
+  // Probe hook, the same shape as the board's other ones: what the fit was
+  // judged on and which stacks collided, so help-fit-probe.local.mjs can say
+  // WHY a window fell back to the panel instead of guessing from a picture.
+  useEffect(() => {
+    (window as unknown as { __gtnhHelpGlance?: unknown }).__gtnhHelpGlance = glance
+      ? { vw: measured?.vw, vh: measured?.vh, fits: glance.fits, boxes: glance.boxes, collisions: glance.collisions }
+      : undefined;
+  }, [glance, measured]);
   const fitsGlance =
-    measured !== undefined && measured.vw >= GLANCE_MIN_VW && measured.vh >= GLANCE_MIN_VH;
+    measured !== undefined &&
+    glance !== undefined &&
+    glance.fits &&
+    measured.vw >= GLANCE_MIN_VW &&
+    measured.vh >= GLANCE_MIN_VH;
 
   return (
     <div
@@ -1041,7 +1079,12 @@ export const BoardHelp = memo(function BoardHelp({ compact }: { compact: boolean
       {measured
         ? createPortal(
             fitsGlance ? (
-              <HelpGlanceSheet measured={measured} onEnter={show} onLeave={scheduleHide} />
+              <HelpGlanceSheet
+                measured={measured}
+                glance={glance}
+                onEnter={show}
+                onLeave={scheduleHide}
+              />
             ) : (
               <HelpHoverPanel measured={measured} onEnter={show} onLeave={scheduleHide} />
             ),

@@ -20,6 +20,15 @@ const GTPP_MULTI_CLASS =
 const SINGLE_CLASS = "gregtech.common.tileentities.machines.basic.GT_MetaTileEntity_Example";
 
 describe("buildMachineHandlerTemplates", () => {
+  it("uses runtime multiblock identity for GoodGenerator compact fusion controllers", () => {
+    const [handler] = buildMachineHandlerTemplates("Fusion Reactor", [{
+      ...catalyst("Compact Fusion Computer MK-V", { sourceClass: "goodgenerator.blocks.tileEntity.MTELargeFusionComputer5" }),
+      multiblock: true,
+    }]);
+    expect(handler.kind).toBe("multiblock");
+    expect(handler.label).toBe("Compact Fusion Computer MK-V");
+    expect(handler.maximumTier).toBeUndefined();
+  });
   it("keeps the map's own machine first and marks it primary", () => {
     const templates = buildMachineHandlerTemplates("Distillation Tower", [
       catalyst("Dangote Distillus", {
