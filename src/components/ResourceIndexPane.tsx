@@ -511,7 +511,7 @@ function powerSearchRow(query: string): IndexedResource | undefined {
 const RESOURCE_QUERY_CACHE_TTL_MS = 90_000;
 export const RESOURCE_SEARCH_DEBOUNCE_MS = 125;
 
-function useResourcePageSize(
+export function useResourcePageSize(
   containerRef: RefObject<HTMLDivElement | null>,
   onPageSizeChange: (pageSize: number) => void,
 ) {

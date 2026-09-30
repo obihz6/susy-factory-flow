@@ -1,8 +1,8 @@
 "use client";
 
-const PLAN_METADATA_KEY = "gtnh-factory-flow-project";
-export const FLOW_IMAGE_EXPORT_EVENT = "gtnh-flow-export-image";
-export const FLOW_IMAGE_EXPORT_COMPLETE_EVENT = "gtnh-flow-export-image-complete";
+const PLAN_METADATA_KEY = "susy-factory-flow-project";
+export const FLOW_IMAGE_EXPORT_EVENT = "susy-flow-export-image";
+export const FLOW_IMAGE_EXPORT_COMPLETE_EVENT = "susy-flow-export-image-complete";
 
 /**
  * What the board is asked for over FLOW_IMAGE_EXPORT_EVENT.

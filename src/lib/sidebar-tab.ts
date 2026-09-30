@@ -5,7 +5,7 @@
  * closed drawer), so the wanted tab waits in module state until either the
  * mounted panel's listener or the next mount collects it.
  */
-export const OPEN_SIDEBAR_TAB_EVENT = "gtnh:open-sidebar-tab";
+export const OPEN_SIDEBAR_TAB_EVENT = "susy:open-sidebar-tab";
 
 /** The column's only tab; boards and setups live in the library. */
 export type SidebarTab = "items";

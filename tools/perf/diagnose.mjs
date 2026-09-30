@@ -27,7 +27,7 @@ await page.waitForTimeout(6000);
 await page.evaluate(async (plan) => {
   const open = () =>
     new Promise((resolve, reject) => {
-      const request = indexedDB.open("gtnh-factory-flow-designs", 1);
+      const request = indexedDB.open("susy-factory-flow-designs", 1);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains("design-meta")) db.createObjectStore("design-meta", { keyPath: "id" });
@@ -46,7 +46,7 @@ await page.evaluate(async (plan) => {
     transaction.onerror = () => reject(transaction.error);
   });
   db.close();
-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
+  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
 }, project);
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForSelector(".react-flow__node", { timeout: 120_000 });

@@ -1,0 +1,54 @@
+buildscript {
+    repositories {
+        maven {
+            name = "forge"
+            url = "https://maven.minecraftforge.net/"
+        }
+        mavenCentral()
+    }
+    dependencies {
+        classpath "net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT"
+    }
+}
+
+apply plugin: "net.minecraftforge.gradle.forge"
+
+version = "1.0.0"
+group = "dev.susyplanner.heioracle"
+archivesBaseName = "susy-hei-oracle"
+
+sourceCompatibility = targetCompatibility = "1.8"
+
+minecraft {
+    // 2847 is the last 1.12.2 build whose userdev jar is still hosted on the
+    // official Forge maven; compiled output is binary-compatible with the
+    // 14.23.5.2860 runtime used by the SUSY pack.
+    version = "1.12.2-14.23.5.2847"
+    runDir = "run"
+    mappings = "stable_39"
+}
+
+repositories {
+    mavenCentral()
+    flatDir {
+        dirs "libs"
+    }
+}
+
+dependencies {
+    // HEI (Had Enough Items) is a JEI fork; deobfCompile remaps its SRG classes
+    // back to MCP names so the oracle can call its API directly.
+    deobfCompile "HadEnoughItems:HadEnoughItems_1.12.2-4.32.0"
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "mcversion", project.minecraft.version
+    from(sourceSets.main.resources.srcDirs) {
+        include "mcmod.info"
+        expand "version": project.version, "mcversion": project.minecraft.version
+    }
+    from(sourceSets.main.resources.srcDirs) {
+        exclude "mcmod.info"
+    }
+}

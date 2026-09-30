@@ -34,6 +34,7 @@ async function readLineDelimitedDataset(filePath) {
     "recipeMaps",
     "recipeMapIcons",
     "machineHandlerIcons",
+    "plantSourceKeys",
   ]);
   let currentArrayKey;
   let skippingArray = false;

@@ -6,7 +6,7 @@ import {
   getRecipeMachineHandlers,
   getSelectedMachineHandler,
 } from "./recipe-rules";
-import type { Recipe } from "./types";
+import type { MachineHandler, Recipe } from "./types";
 
 describe("recipe machine handlers", () => {
   it("uses machine handlers exported in the dataset", () => {
@@ -136,6 +136,25 @@ describe("recipe machine handlers", () => {
       "Centrifuge",
       "Steam Separator",
     ]);
+  });
+
+  it("falls back to the label when a handler carries no machineType", () => {
+    const recipe: Recipe = {
+      ...testRecipe("Forge Hammer"),
+      machineHandlers: [
+        {
+          id: "single:gregtech.machine.forge_hammer",
+          label: "Forge Hammer",
+          minimumTier: "LV",
+          kind: "single",
+        } as MachineHandler,
+      ],
+    };
+
+    const handlers = getRecipeMachineHandlers(recipe);
+    expect(handlers).toHaveLength(1);
+    expect(handlers[0].machineType).toBe("Forge Hammer");
+    expect(handlers[0].label).toBe("Forge Hammer");
   });
 
   it("folds renamed late-tier machines across GT machine families", () => {

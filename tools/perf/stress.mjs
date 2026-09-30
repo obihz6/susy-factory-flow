@@ -48,7 +48,7 @@ await page.waitForSelector(".react-flow", { timeout: 60_000 });
 await page.waitForTimeout(6000);
 
 await page.evaluate(async (plan) => {
-  const DB_NAME = "gtnh-factory-flow-designs";
+  const DB_NAME = "susy-factory-flow-designs";
   const open = () =>
     new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, 1);
@@ -76,15 +76,15 @@ await page.evaluate(async (plan) => {
     transaction.onerror = () => reject(transaction.error);
   });
   db.close();
-  localStorage.setItem("gtnh-factory-flow.active-design.v1", plan.id);
+  localStorage.setItem("susy-factory-flow.active-design.v1", plan.id);
 }, project);
 
 if (BOARD_VIEW) {
   await page.evaluate((view) => {
-    const raw = localStorage.getItem("gtnh-factory-flow-board-view");
+    const raw = localStorage.getItem("susy-factory-flow-board-view");
     const current = raw ? JSON.parse(raw) : {};
     localStorage.setItem(
-      "gtnh-factory-flow-board-view",
+      "susy-factory-flow-board-view",
       JSON.stringify({ ...current, ...view }),
     );
   }, BOARD_VIEW);

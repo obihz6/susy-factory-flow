@@ -3,15 +3,18 @@ export async function register() {
     return;
   }
 
-  if (process.env.GTNH_PREWARM_ON_STARTUP !== "1") {
+  if (
+    process.env.SUSY_PREWARM_ON_STARTUP !== "1" &&
+    process.env.GTNH_PREWARM_ON_STARTUP !== "1"
+  ) {
     return;
   }
 
   const { prewarmLatestDatasetVersions } = await import("@/lib/server/dataset-query");
   try {
     await prewarmLatestDatasetVersions();
-    console.info("GTNH dataset cache prewarmed.");
+    console.info("Dataset cache prewarmed.");
   } catch (error) {
-    console.error("GTNH dataset cache prewarm failed.", error);
+    console.error("Dataset cache prewarm failed.", error);
   }
 }

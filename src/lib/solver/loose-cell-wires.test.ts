@@ -191,9 +191,9 @@ describe("loose cell wires", () => {
     expect(Object.keys(result.edges).sort()).toEqual(["out", "w"]);
   });
 
-  it("the rule is always on: a stored off setting changes nothing", () => {
-    // Loose cell wires stopped being a rule on 2026-09-06 (the modes took
-    // over the board's rules): a plan saved with it off converts all the same.
+  it("a stored off setting disables the conversion", () => {
+    // Loose cell wires are configurable again so a plan can choose whether a
+    // cross-form wire behaves like an explicit tank/canner connection.
     const result = calculateThroughput(
       project({
         setupRules: { looseCellWires: false },
@@ -208,7 +208,7 @@ describe("loose cell wires", () => {
       { generatedAt: "fixed" },
     );
 
-    expect(result.nodes["taker"].utilization).toBeCloseTo(1);
+    expect(result.nodes["taker"].utilization).toBeCloseTo(0);
   });
 
   it("an edge without the ratio stays inert instead of inventing one", () => {

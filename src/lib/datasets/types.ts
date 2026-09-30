@@ -93,6 +93,8 @@ export interface RecipeDataset {
   recipeMaps: string[];
   recipeMapIcons?: RecipeMapIconEntry[];
   machineHandlerIcons?: MachineHandlerIconEntry[];
+  /** Resource keys ("kind:id") the pack grows; feeds the Plants filter. */
+  plantSourceKeys?: string[];
   generatedAt: string;
 }
 

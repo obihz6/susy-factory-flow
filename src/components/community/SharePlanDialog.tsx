@@ -14,6 +14,7 @@ import { capturePlanPreviewPng } from "@/lib/community/plan-preview-capture";
 import { sharedPlanLink } from "@/lib/community/shared-link";
 import type { CommunityPlanSummary, EntryIcon } from "@/lib/community/types";
 import { serializeFactoryProject } from "@/lib/import-export";
+import { LOGIN_ENABLED } from "@/lib/feature-toggles";
 import { capturePlanView } from "@/lib/plan-view";
 import { openLibrary } from "@/lib/library/library-tab";
 import { notifySetupsChanged } from "@/lib/setups-tab";
@@ -236,8 +237,8 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
           <div className="space-y-3">
             <p className="text-sm">
               This design is posted as{" "}
-              <span className="font-semibold text-fg">{linkedPost.name}</span>. Every save
-              updates the post: there is nothing to update by hand.
+              <span className="font-semibold text-fg">{linkedPost.name}</span>. Every save updates
+              the post: there is nothing to update by hand.
             </p>
             <p className="text-xs text-fg-subtle">
               {isPublic
@@ -286,9 +287,8 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
               annotation.id.startsWith("auto-island-box"),
             ) && project.nodes.length >= 6 ? (
               <div className="rounded border border-cyan-700/60 bg-cyan-950/30 p-2 text-xs text-fg-subtle">
-                Tip: the post shows your board exactly as it is. The auto-arrange
-                button on the board lays it out cleanly in one press, and an icon
-                gives the post a face.
+                Tip: the post shows your board exactly as it is. The auto-arrange button on the
+                board lays it out cleanly in one press, and an icon gives the post a face.
               </div>
             ) : null}
             {/* What the board carries: the headline numbers with the tier
@@ -310,9 +310,7 @@ export function SharePlanDialog({ onClose }: { onClose: () => void }) {
                 <span className="ml-auto text-fg-muted">
                   Game version:{" "}
                   <span className="text-fg-subtle">
-                    {datasetVersion?.gtnhVersion
-                      ? `GTNH ${datasetVersion.gtnhVersion}`
-                      : "unknown"}
+                    {datasetVersion?.gtnhVersion ? `SUSY ${datasetVersion.gtnhVersion}` : "unknown"}
                   </span>
                 </span>
               </div>

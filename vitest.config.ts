@@ -8,6 +8,7 @@ export default defineConfig({
     },
   },
   test: {
+    setupFiles: ["./vitest.setup.ts"],
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tools/**/*.test.mjs"],
     // .local.test files are untracked scratch harnesses (corpus sweeps,

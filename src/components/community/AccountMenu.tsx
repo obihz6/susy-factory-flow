@@ -3,7 +3,8 @@
 import { useDropdownDismiss } from "@/lib/hooks/use-dropdown-dismiss";
 
 import { ChevronDown, Factory, LogOut, ShieldCheck, User } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { LOGIN_ENABLED } from "@/lib/feature-toggles";
 import { openLibrary } from "@/lib/library/library-tab";
 import { AuthForm, useCommunityUser } from "./auth";
 
@@ -17,7 +18,29 @@ export function AccountMenu() {
   const [isAuthOpen, setAuthOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useDropdownDismiss(isMenuOpen, { refs: [menuRef], onClose: () => setMenuOpen(false), fade: true });
+  useEffect(() => {
+    if (!isMenuOpen) {
+      return;
+    }
+
+    const close = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    // Capture phase: the board's pan handler stops a press on the canvas before
+    // it reaches a bubble-phase listener, which left this menu open over it.
+    window.addEventListener("pointerdown", close, true);
+    return () => window.removeEventListener("pointerdown", close, true);
+  }, [isMenuOpen]);
+
+  // Temporarily disabled for this fork (see feature-toggles.ts): no sign-in
+  // control and no auth modal while the community backend is off. Checked
+  // AFTER the hooks so the component's hook order never depends on the flag.
+  if (!LOGIN_ENABLED) {
+    return null;
+  }
 
   if (isLoading) {
     return <div className="h-5 w-20 animate-pulse rounded bg-surface-sunken" aria-hidden />;

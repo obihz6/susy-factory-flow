@@ -1,11 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import {
-  DEFAULT_CANVAS_THEME_ID,
-  isCanvasThemeId,
-  type CanvasThemeId,
-} from "./canvas-themes";
+import { DEFAULT_CANVAS_THEME_ID, isCanvasThemeId, type CanvasThemeId } from "./canvas-themes";
 
 /**
  * Board view settings: how the canvas looks, and which of the read-only
@@ -82,7 +78,7 @@ export interface BoardView {
   glanceMode: GlanceMode;
 }
 
-const BOARD_VIEW_STORAGE_KEY = "gtnh-factory-flow-board-view";
+const BOARD_VIEW_STORAGE_KEY = "susy-factory-flow-board-view";
 
 export const DEFAULT_BOARD_VIEW: BoardView = {
   canvasPattern: "dots",

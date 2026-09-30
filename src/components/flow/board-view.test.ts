@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const STORAGE_KEY = "gtnh-factory-flow-board-view";
+const STORAGE_KEY = "susy-factory-flow-board-view";
 
 /**
  * Calm (presentation) colours must never survive a page load.

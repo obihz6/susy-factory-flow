@@ -35,7 +35,7 @@ for (
 ) {
   const end = Math.min(dataset.recipes.length, start + shardSize);
   const fileName = `shard-${String(shardIndex).padStart(4, "0")}.json.gz`;
-  const publicPath = `/datasets/gtnh/${versionId}/recipes-shards/${fileName}`;
+  const publicPath = `${process.env.DATASETS_URL_ROOT ?? "/datasets/susy"}/${versionId}/recipes-shards/${fileName}`;
   const shard = {
     schemaVersion: 1,
     datasetVersionId: versionId,
@@ -76,6 +76,7 @@ const resourceCatalog = {
   recipeMaps: dataset.recipeMaps ?? [],
   recipeMapIcons: dataset.recipeMapIcons ?? [],
   machineHandlerIcons: dataset.machineHandlerIcons ?? [],
+  plantSourceKeys: dataset.plantSourceKeys ?? [],
   generatedAt: dataset.generatedAt,
   recipeCount: dataset.recipes.length,
   shardSize,
@@ -338,6 +339,7 @@ async function readLineDelimitedDataset(filePath) {
     "recipeMapIcons",
     "machineHandlerIcons",
     "resourceIndex",
+    "plantSourceKeys",
   ]);
   let currentArrayKey;
   let skippingArray = false;

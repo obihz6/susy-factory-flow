@@ -1,0 +1,339 @@
+/**
+ * Shared detection logic for local Supersymmetry instances.
+ *
+ * The SUSY oracle export needs a game directory the client can boot from:
+ * a packwiz pack.toml (name/version/minecraft/forge), real downloaded mod
+ * jars under mods/, and ideally a Forge runtime plus a start script. This
+ * module holds the pure parts — pack.toml parsing, directory inspection,
+ * candidate scoring — so the resolver CLI and its tests share one contract.
+ */
+import fs from "node:fs";
+import path from "node:path";
+
+export const SUSY_PACK_REPO = "SymmetricDevs/Supersymmetry";
+
+/**
+ * Minimal packwiz pack.toml reader: only what the pipeline needs (top-level
+ * strings and the [versions] table). Real TOML parsing is deliberately not
+ * worth a dependency here.
+ */
+export function parsePackToml(text) {
+  const result = { name: undefined, version: undefined, minecraft: undefined, forge: undefined };
+  let table = "";
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const tableMatch = /^\[([^[\]]+)\]$/.exec(line);
+    if (tableMatch) {
+      table = tableMatch[1].trim().toLowerCase();
+      continue;
+    }
+    const pair = /^([^=]+?)\s*=\s*"((?:\\.|[^"\\])*)"\s*$/.exec(line);
+    if (!pair) continue;
+    const key = pair[1].trim().toLowerCase();
+    const value = pair[2].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    if (table === "" || table === "versions") {
+      if (table === "" && key === "name") result.name = value;
+      if (table === "" && key === "version") result.version = value;
+      if (key === "minecraft") result.minecraft = value;
+      if (key === "forge") result.forge = value;
+    }
+  }
+  return result;
+}
+
+/** Compare dotted version strings numerically where possible ("0.2.10" > "0.2.9"). */
+export function compareVersions(left, right) {
+  const leftParts = String(left ?? "").split(".");
+  const rightParts = String(right ?? "").split(".");
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = Number.parseInt(leftParts[index], 10);
+    const b = Number.parseInt(rightParts[index], 10);
+    if (Number.isFinite(a) && Number.isFinite(b) && a !== b) return a - b;
+    if (!Number.isFinite(a) && Number.isFinite(b)) return -1;
+    if (Number.isFinite(a) && !Number.isFinite(b)) return 1;
+    const ta = leftParts[index] ?? "";
+    const tb = rightParts[index] ?? "";
+    if (ta !== tb) return ta < tb ? -1 : 1;
+  }
+  return 0;
+}
+
+const SUSY_JAR_PATTERN = /(?:^|[-_.])(?:supersymmetry|susycore|susy-?core)(?:[-_.]|$)/i;
+const LAUNCH_SCRIPT_PATTERN = /^(?:start|launch)[^/]*\.(?:sh|cmd|bat)$/i;
+// The bootstrap writes both a .sh and a .cmd launcher, and readdir order is
+// not sorted, so "first match" can hand the runner a Windows batch file on a
+// Unix host (or vice versa). Rank the platform-native extension first.
+const LAUNCH_SCRIPT_EXT_RANK = (platform) =>
+  platform === "win32" ? [".cmd", ".bat", ".sh"] : [".sh", ".cmd", ".bat"];
+
+/**
+ * What the export can learn about one directory. `kind`:
+ *   "instance"    — real mod jars present; the client can run here.
+ *   "pack-source" — packwiz metadata only; needs an install pass first.
+ *   "unknown"     — nothing SUSY-shaped.
+ */
+export function inspectInstanceDir(dir, platform = process.platform) {
+  const info = {
+    dir,
+    kind: "unknown",
+    score: 0,
+    pack: undefined,
+    jarCount: 0,
+    susyJar: undefined,
+    susyCoreJar: undefined,
+    launchScript: undefined,
+    hasForgeRuntime: false,
+  };
+
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return info;
+  }
+  const names = new Set(entries.map((entry) => entry.name));
+
+  const packTomlPath = path.join(dir, "pack.toml");
+  if (names.has("pack.toml")) {
+    try {
+      const pack = parsePackToml(fs.readFileSync(packTomlPath, "utf8"));
+      if (/supersymmetry/i.test(pack.name ?? "")) {
+        info.pack = pack;
+        info.score += 10;
+      }
+    } catch {
+      // Unreadable pack.toml: keep scoring on the mods directory alone.
+    }
+  }
+
+  const modsDir = path.join(dir, "mods");
+  let modEntries;
+  try {
+    modEntries = fs.readdirSync(modsDir, { withFileTypes: true });
+  } catch {
+    modEntries = [];
+  }
+  for (const entry of modEntries) {
+    if (!entry.isFile()) continue;
+    if (entry.name.toLowerCase().endsWith(".jar")) {
+      info.jarCount += 1;
+      if (SUSY_JAR_PATTERN.test(entry.name)) {
+        if (/susycore|susy-?core/i.test(entry.name)) info.susyCoreJar = entry.name;
+        else info.susyJar ??= entry.name;
+      }
+    }
+  }
+  if (info.jarCount > 0) info.score += 5;
+  if (info.susyJar || info.susyCoreJar) info.score += 5;
+
+  if (names.has("versions")) {
+    try {
+      info.hasForgeRuntime = fs
+        .readdirSync(path.join(dir, "versions"), { withFileTypes: true })
+        .some((entry) => entry.isDirectory() && /forge/i.test(entry.name));
+    } catch {
+      info.hasForgeRuntime = false;
+    }
+    if (info.hasForgeRuntime) info.score += 3;
+  }
+
+  const launchScripts = entries
+    .filter((entry) => entry.isFile() && LAUNCH_SCRIPT_PATTERN.test(entry.name))
+    .sort((a, b) => {
+      const rank = LAUNCH_SCRIPT_EXT_RANK(platform);
+      const aRank = rank.indexOf(path.extname(a.name).toLowerCase());
+      const bRank = rank.indexOf(path.extname(b.name).toLowerCase());
+      if (aRank !== bRank) return aRank - bRank;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+  const launchScript = launchScripts[0];
+  if (launchScript) {
+    info.launchScript = path.join(dir, launchScript.name);
+    info.score += 2;
+  }
+
+  if (info.jarCount > 0 && (info.pack || info.susyJar || info.susyCoreJar)) {
+    info.kind = "instance";
+  } else if (info.pack) {
+    info.kind = "pack-source";
+  }
+  return info;
+}
+
+/**
+ * Walks up from a game directory to the launcher instance wrapper that owns
+ * it (the directory holding instance.cfg, as written by Prism/PolyMC/MultiMC).
+ * Returns what the export runner needs to work against such an instance: the
+ * instance id (wrapper folder name, what `prism -l` takes), the flatpak app id
+ * when the launcher runs as a flatpak sandbox, and the managed pack metadata
+ * those launchers keep instead of a packwiz pack.toml.
+ */
+export function findLauncherInstanceInfo(startDir) {
+  let current = path.resolve(startDir);
+  for (let depth = 0; depth < 8; depth += 1) {
+    const cfgPath = path.join(current, "instance.cfg");
+    let cfgText;
+    try {
+      cfgText = fs.readFileSync(cfgPath, "utf8");
+    } catch {
+      cfgText = undefined;
+    }
+    if (cfgText !== undefined) {
+      const meta = parseInstanceCfg(cfgText);
+      return {
+        dir: current,
+        instanceId: path.basename(current),
+        flatpakAppId: flatpakAppIdFor(current),
+        managedPackName: meta.managedPackName,
+        managedPackVersion: meta.managedPackVersion,
+      };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+  return undefined;
+}
+
+/** Minimal instance.cfg reader: only the managed-pack keys the pipeline needs. */
+function parseInstanceCfg(text) {
+  const result = { managedPackName: undefined, managedPackVersion: undefined };
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const pair = /^([^=]+?)\s*=\s*(.*)$/.exec(rawLine.trim());
+    if (!pair) continue;
+    const key = pair[1].trim();
+    if (key === "ManagedPackName") result.managedPackName = pair[2].trim() || undefined;
+    if (key === "ManagedPackVersionName") result.managedPackVersion = pair[2].trim() || undefined;
+  }
+  return result;
+}
+
+/** The flatpak app id when `dir` lives inside ~/.var/app/<app id>/, else undefined. */
+function flatpakAppIdFor(dir) {
+  const parts = path.resolve(dir).split(path.sep);
+  const varIndex = parts.lastIndexOf(".var");
+  if (varIndex < 0 || parts[varIndex + 1] !== "app") return undefined;
+  return parts[varIndex + 2] || undefined;
+}
+
+/** Trailing dotted version embedded in a jar filename ("susy-hei-oracle-2.0.0.jar" -> "2.0.0"). */
+function jarVersion(filePath) {
+  const match = /-(\d+(?:\.\d+)+)\.jar$/i.exec(path.basename(filePath));
+  return match ? match[1] : "";
+}
+
+/**
+ * Where the susy-hei-oracle mod jar can come from, best first:
+ * SUSY_HEI_ORACLE_JAR, then the best oracle build across the pipeline's own
+ * build output and a repo-local checkout — highest version wins, newest
+ * build breaks ties (mtime is coarse on some filesystems, so version leads).
+ */
+/**
+ * Patch a Prism/MultiMC instance.cfg without relying on shell quoting.
+ *
+ * instance.cfg is a QSettings INI file: JvmArgs is read from [General], and
+ * backslashes in values are escape characters. Keep paths slash-normalized and
+ * remove stale JvmArgs keys from every other section.
+ */
+export function patchPrismInstanceConfigText(text, { runId, recipedumpPath, iconDir }) {
+  const oracleArgs = [
+    "-Dsusy.oracle.autorun=true",
+    "-Dsusy.oracle.dumpRecipes=true",
+    `-Dsusy.oracle.runId=${runId}`,
+    `-Dsusy.oracle.recipedumpPath=${normalizeJvmPath(recipedumpPath)}`,
+    `-Dsusy.oracle.iconDir=${normalizeJvmPath(iconDir)}`,
+  ].join(" ");
+  const lines = String(text ?? "").split(/\r?\n/);
+  const output = [];
+  let section = "";
+  let foundGeneral = false;
+  let wroteOverride = false;
+  let wroteJvmArgs = false;
+
+  const finishGeneral = () => {
+    if (section.toLowerCase() !== "general") return;
+    if (!wroteOverride) output.push("OverrideJavaArgs=true");
+    if (!wroteJvmArgs) output.push(`JvmArgs=${oracleArgs}`);
+  };
+
+  for (const line of lines) {
+    const sectionMatch = /^\[([^\]]+)\]$/.exec(line);
+    if (sectionMatch) {
+      finishGeneral();
+      section = sectionMatch[1];
+      foundGeneral ||= section.toLowerCase() === "general";
+      wroteOverride = false;
+      wroteJvmArgs = false;
+      output.push(line);
+      continue;
+    }
+    if (section.toLowerCase() === "general" && /^OverrideJavaArgs=/.test(line)) {
+      output.push("OverrideJavaArgs=true");
+      wroteOverride = true;
+      continue;
+    }
+    if (section.toLowerCase() === "general" && /^JvmArgs=/.test(line)) {
+      output.push(`JvmArgs=${oracleArgs}`);
+      wroteJvmArgs = true;
+      continue;
+    }
+    if (section.toLowerCase() !== "general" && /^JvmArgs=/.test(line)) continue;
+    output.push(line);
+  }
+  finishGeneral();
+  if (!foundGeneral) {
+    output.push("[General]", "OverrideJavaArgs=true", `JvmArgs=${oracleArgs}`);
+  }
+
+  const hadCrlf = /\r\n/.test(String(text ?? ""));
+  return output.join(hadCrlf ? "\r\n" : "\n");
+}
+
+function normalizeJvmPath(value) {
+  return String(value ?? "").replaceAll("\\", "/");
+}
+
+export function findOracleJar(repoRoot, env = process.env) {
+  if (env.SUSY_HEI_ORACLE_JAR) {
+    if (fs.existsSync(env.SUSY_HEI_ORACLE_JAR)) return env.SUSY_HEI_ORACLE_JAR;
+  }
+  const roots = [
+    path.join(repoRoot, "tools", "dataset-pipeline", "susy-hei-oracle", "build", "libs"),
+    path.join(repoRoot, "temp", "susy-hei-oracle"),
+  ];
+  const found = [];
+  const walk = (dir, depth) => {
+    if (depth > 5) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === ".git") continue;
+        walk(full, depth + 1);
+      } else if (
+        entry.name.toLowerCase().endsWith(".jar") &&
+        !entry.name.includes("-sources") &&
+        /oracle/i.test(entry.name)
+      ) {
+        found.push(full);
+      }
+    }
+  };
+  for (const root of roots) walk(root, 0);
+  if (found.length === 0) return undefined;
+  found.sort((a, b) => {
+    const versionDiff = compareVersions(jarVersion(b), jarVersion(a));
+    if (versionDiff !== 0) return versionDiff;
+    const mtimeDiff = fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    if (mtimeDiff !== 0) return mtimeDiff;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  return found[0];
+}

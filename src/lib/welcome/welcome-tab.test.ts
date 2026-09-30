@@ -46,8 +46,8 @@ afterEach(() => {
 
 describe("welcome tab", () => {
   it("greets a first-time visitor", async () => {
-    const module = await visit(local, session);
-    expect(module.readWelcomeTabState()).toEqual({
+    const mod = await visit(local, session);
+    expect(mod.readWelcomeTabState()).toEqual({
       open: true,
       active: true,
       showOnStartup: true,
@@ -83,8 +83,8 @@ describe("welcome tab", () => {
   });
 
   it("does not greet a visitor who followed a link to a setup", async () => {
-    const module = await visit(local, session, "?plan=abc123");
-    const state = module.readWelcomeTabState();
+    const mod = await visit(local, session, "?plan=abc123");
+    const state = mod.readWelcomeTabState();
     // Straight onto the setup the link was for, with the tab still in the strip.
     expect(state.active).toBe(false);
     expect(state.open).toBe(true);
@@ -137,9 +137,9 @@ describe("welcome tab", () => {
       },
     };
 
-    const module = await visit(blocked, blocked);
-    expect(module.readWelcomeTabState().active).toBe(true);
-    expect(() => module.leaveWelcomeTab()).not.toThrow();
-    expect(module.readWelcomeTabState().active).toBe(false);
+    const mod = await visit(blocked, blocked);
+    expect(mod.readWelcomeTabState().active).toBe(true);
+    expect(() => mod.leaveWelcomeTab()).not.toThrow();
+    expect(mod.readWelcomeTabState().active).toBe(false);
   });
 });

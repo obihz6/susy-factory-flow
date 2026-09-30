@@ -9,7 +9,7 @@ timeout_seconds="${GTNH_EXPORT_TIMEOUT_SECONDS:-21600}"
 docker_memory_limit="${GTNH_DATASET_DOCKER_MEMORY_LIMIT:-10g}"
 docker_memory_swap="${GTNH_DATASET_DOCKER_MEMORY_SWAP:-12g}"
 docker_cpus="${GTNH_DATASET_DOCKER_CPUS:-8}"
-dataset_root="${GTNH_DATASETS_ROOT:-public/datasets/gtnh}"
+dataset_root="${GTNH_DATASETS_ROOT:-public/datasets/susy}"
 
 case "$dataset_root" in
   /*) dataset_root_abs="$dataset_root" ;;

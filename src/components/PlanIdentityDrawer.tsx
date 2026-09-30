@@ -35,7 +35,7 @@ import { formatRelativeDate } from "@/components/shelf-cards";
  * posted design IS its post, and every save reaches it (post-follow.ts).
  */
 
-const OPEN_STORAGE_KEY = "gtnh-factory-flow.plan-card-open.v1";
+const OPEN_STORAGE_KEY = "susy-factory-flow.plan-card-open.v1";
 
 /** The header-family square button the bar is made of. */
 const BAR_BUTTON =
