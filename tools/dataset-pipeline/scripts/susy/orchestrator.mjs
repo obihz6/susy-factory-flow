@@ -18,6 +18,7 @@ import {
   setPipelineState,
   updateConfigPaths,
 } from "./pipeline-lib.mjs";
+import { runPipelineSteps } from "./pipeline-runner.mjs";
 
 const options = parseCliArgs();
 const command = options.positionals[0] ?? "build";
@@ -78,11 +79,6 @@ if (options.from && requestedStartIndex === -1) {
 }
 const startIndex = Math.max(0, requestedStartIndex);
 
-if (options.from && startIndex === -1) {
-  logger.close();
-  throw new Error(`Unknown starting step: ${options.from}.`);
-}
-
 let halted = false;
 
 try {
@@ -98,101 +94,26 @@ try {
     logger.info(`Multiple versions are selected; running the configured version only.`);
   }
 
-  for (const step of delegatedVersions ? [] : steps.slice(startIndex)) {
-    const previous = config.state?.steps?.[step];
-    if (!force && previous?.status === "completed") {
-      if (await isStepStale(step)) {
-        logger.info(`Completed step ${step} is stale; rerunning it.`);
-      } else {
-        logger.info(`Skipping completed step ${step}. Use --force to run it again.`);
-        continue;
-      }
-    }
-
-    let completed = false;
-    let haltedAtStep = false;
-    while (!completed && !haltedAtStep) {
-      for (let attempt = 1; attempt <= retries; attempt += 1) {
-      await setPipelineState(config, "running", step, { attempt, maxAttempts: retries });
-      logger.info(`Starting step ${step} (attempt ${attempt}/${retries}).`);
-      renderOverallProgress(steps, step, "running");
-      try {
-        // For extract steps that launch a long-running client, check whether
-        // a previous attempt left a running client behind and kill it so the
-        // retry can install the oracle jar fresh.
-        if (step === "extract") {
-          const pidFile = path.join(path.resolve(config.paths.tempDir), "raw-export", "previous-client.pid");
-          try {
-            const pidText = await fs.readFile(pidFile, "utf8").catch(() => "");
-            const pid = pidText.trim();
-            if (/^\d+$/.test(pid)) {
-              try {
-                process.kill(Number(pid));
-                logger.info(`Killed previously launched client (PID ${pid}) from a failed attempt.`);
-                await new Promise((resolve) => setTimeout(resolve, 2000));
-              } catch {
-                // Process already exited or we don't have permission.
-              }
-            }
-          } catch {}
-          // The Windows export runner performs targeted cleanup using its own
-          // PID file. Do not kill every javaw.exe on the machine: that can
-          // terminate unrelated Minecraft or Java applications.
-        }
-        await runStep(step, config.configPath ?? configPath, logger);
-        config = await loadConfig({ config: configPath });
-        await setPipelineState(config, "completed", step, { attempt, maxAttempts: retries });
-        logger.info(`Step ${step} completed.`);
-        renderOverallProgress(steps, step, "completed");
-        completed = true;
-        break;
-      } catch (error) {
-        config = await loadConfig({ config: configPath }).catch(() => config);
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error(`Step ${step} attempt ${attempt} failed: ${message}`);
-        await setPipelineState(config, "failed", step, {
-          attempt,
-          maxAttempts: retries,
-          error: message,
-        });
-        if (attempt < retries) {
-          logger.warn(`Retrying step ${step}; no later step will be skipped.`);
-        }
-      }
-      }
-
-      if (!completed) {
-        const failed = config.state?.steps?.[step]?.error ?? "unknown error";
-        await setPipelineState(config, "halted", step, {
-          error: failed,
-          message: "Pipeline halted after the configured retries.",
-        });
-        logger.error(`Pipeline halted at ${step} after ${retries} failed attempt(s).`);
-        logger.error(`Check ${path.join(path.resolve(config.paths.tempDir), "logs", `${step}.log`)} and resolve the issue manually.`);
-        logger.error("Run the failed step manually, then rerun the pipeline to continue.");
-        if (await askForRecovery(step)) {
-          logger.info(`Recovery requested for ${step}; starting a new retry window.`);
-          continue;
-        }
-        process.exitCode = 1;
-        haltedAtStep = true;
-        halted = true;
-      }
-
-      // A failed step is a hard pipeline boundary. The recovery prompt may
-      // start another retry window, but once the user declines recovery we
-      // must not fall through to downstream steps with missing artifacts.
-      if (halted) {
-        break;
-      }
-    }
-
-    // Stop the outer step loop too. Without this break, a declined recovery
-    // prompt still allowed normalize/index/package to run against artifacts
-    // that the failed step never produced.
-    if (halted) {
-      break;
-    }
+  if (!delegatedVersions) {
+    const result = await runPipelineSteps({
+      steps,
+      startIndex,
+      force,
+      retries,
+      config,
+      loadConfig: () => loadConfig({ config: configPath }),
+      runStep: async (step, currentConfig) => {
+        if (step === "extract") await cleanUpPreviousExtractClient(currentConfig, logger);
+        await runStep(step, currentConfig.configPath ?? configPath, logger);
+      },
+      isStepStale,
+      logger,
+      renderProgress: renderOverallProgress,
+      askForRecovery,
+    });
+    config = result.config;
+    halted = result.halted;
+    if (halted) process.exitCode = 1;
   }
 
   if (!halted) {
@@ -203,6 +124,23 @@ try {
   }
 } finally {
   logger.close();
+}
+
+async function cleanUpPreviousExtractClient(config, logger) {
+  const pidFile = path.join(path.resolve(config.paths.tempDir), "raw-export", "previous-client.pid");
+  const pidText = await fs.readFile(pidFile, "utf8").catch(() => "");
+  const pid = pidText.trim();
+  if (!/^[0-9]+$/.test(pid)) return;
+
+  try {
+    process.kill(Number(pid));
+    logger.info(`Killed previously launched client (PID ${pid}) from a failed attempt.`);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  } catch {
+    // The process already exited or we don't have permission.
+  }
+  // The Windows export runner performs targeted cleanup using its own PID
+  // file. Never terminate every javaw.exe; that could kill unrelated apps.
 }
 
 async function isStepStale(step) {
