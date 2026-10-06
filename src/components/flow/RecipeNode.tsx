@@ -39,6 +39,7 @@ import type {
   ResourceAmount,
 } from "@/lib/model/types";
 import { getOverclockedRecipeStats } from "@/lib/solver/overclock";
+import { getMemoizedSupplyShortfalls } from "@/lib/solver/supply-shortfall";
 import {
   describePowerStall,
   getNodePowerReport,
@@ -639,6 +640,12 @@ function RecipeNodeComponent({ data, selected, controlsOnly = false, renderEdito
   // numbers can change.
   const { project: liveProject, lastResult } = useFactoryStore.getState();
   const verdict = deriveNodeVerdict(liveProject, lastResult, projectNode.id);
+  const shortfallReport = lastResult
+    ? getMemoizedSupplyShortfalls(liveProject, lastResult)
+    : undefined;
+  const inputShortfalls = new Map(
+    (shortfallReport?.byNode[projectNode.id] ?? []).map((entry) => [entry.resourceKey, entry.deficitPerSecond]),
+  );
   // The rate and power dials are the one thing that changes what the card
   // prints without changing the books, so the card subscribes to them.
   useRateDisplayUnits();
@@ -651,6 +658,7 @@ function RecipeNodeComponent({ data, selected, controlsOnly = false, renderEdito
     projectNode.id,
     overclockedRecipe,
     verdict,
+    { inputShortfalls },
   );
   // Each extra section reads its own solve node (`card#rN`) for verdict and
   // rails; its handles wear the section prefix so wires know the section.
@@ -664,11 +672,19 @@ function RecipeNodeComponent({ data, selected, controlsOnly = false, renderEdito
       result: lastResult?.nodes[id],
       rails: buildRailPorts(liveProject, lastResult, id, entry.display, sectionVerdict, {
         handleSection: entry.section,
+        inputShortfalls: new Map(
+          (shortfallReport?.byNode[id] ?? []).map((shortfall) => [shortfall.resourceKey, shortfall.deficitPerSecond]),
+        ),
       }),
+      shortfalls: shortfallReport?.byNode[id] ?? [],
     };
   });
   // The card's usage is the machine's: every section's share of its time
   // added up. The word is the first section's unless the machine is full.
+  const nodeShortfalls = [
+    ...(shortfallReport?.byNode[projectNode.id] ?? []),
+    ...sectionRails.flatMap((entry) => entry.shortfalls),
+  ];
   const sharedUsage = isSharedMachine
     ? sectionRails.reduce(
         (sum, entry) => sum + Math.min(1, entry.result?.utilization ?? 0),
@@ -1324,6 +1340,10 @@ function RecipeNodeComponent({ data, selected, controlsOnly = false, renderEdito
       // a starved node blames its binding input, an over-asked one blames its
       // couplings, and lighting both at once answers the wrong question.
       data-verdict={verdict.kind}
+      data-supply-shortfall={nodeShortfalls.length > 0 ? nodeShortfalls.length : undefined}
+      data-tip-title={nodeShortfalls.length > 0
+        ? `Input shortfalls: ${nodeShortfalls.map((entry) => `${entry.displayName} −${formatSlotRate(entry.deficitPerSecond, entry.kind)}`).join(", ")}`
+        : undefined}
       className={[
         // recipe-node-shell scopes the strip↔row hover link (globals.css):
         // hovering the verdict lights the input it blames, in pure CSS, so a
@@ -1405,6 +1425,7 @@ function RecipeNodeComponent({ data, selected, controlsOnly = false, renderEdito
       {verdict.kind === "unwired" ? (
         <div aria-hidden className="unwired-ring" />
       ) : null}
+      {nodeShortfalls.length > 0 ? <div aria-hidden className="supply-shortfall-ring" /> : null}
       {/* Selection and a search hit, on the card's own box like the rings
           above. One box-shadow list: shadows paint first-on-top and each
           spread is cumulative, so the list reads outwards from the card edge
@@ -3821,6 +3842,11 @@ export function PortChip({
             ].join(" ")}
           >
             {rateText}
+            {port.shortfallPerSecond !== undefined && port.shortfallPerSecond > 0 ? (
+              <span className="ml-1 text-[9px] font-black text-amber-300">
+                SHORT {formatSlotRate(port.shortfallPerSecond, port.kind)}
+              </span>
+            ) : null}
           </span>
         ) : (
           <>
@@ -3834,6 +3860,10 @@ export function PortChip({
             </span>
             {port.supplyHatch ? (
               <HatchSupplyButton nodeId={nodeId} port={port} />
+            ) : port.shortfallPerSecond !== undefined && port.shortfallPerSecond > 0 ? (
+              <span className="block truncate text-[8px] font-black leading-[9px] tabular-nums text-[var(--verdict-blocked-ink)]">
+                SHORT {formatSlotRate(port.shortfallPerSecond, port.kind)}
+              </span>
             ) : port.unsupplied ? (
               <span className="block text-[7px] font-black leading-[8px] tracking-[0.5px] text-[var(--verdict-blocked-ink)]">
                 NO SUPPLY

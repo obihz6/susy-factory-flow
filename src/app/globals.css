@@ -2318,6 +2318,25 @@ html:not([data-app-font="minecraft"]) [class*="[text-shadow:"] {
   animation: dead-loop-breathe var(--board-pulse) ease-in-out infinite;
 }
 
+/* Actual input shortfalls use the blocked/amber state family. This ring stays
+   visible over the card's contents and at the glance zoom level. */
+.supply-shortfall-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: 0 0 0 3px rgba(224, 166, 58, 0.92), 0 0 12px 2px rgba(224, 166, 58, 0.22);
+}
+
+.factory-flow-board[data-detail-level="glance"] .supply-shortfall-ring {
+  box-shadow: 0 0 0 7px rgba(224, 166, 58, 0.96), 0 0 30px 5px rgba(224, 166, 58, 0.3);
+}
+
+.factory-flow-board[data-detail-level="glance"] [data-node-glance-root] > .supply-shortfall-ring {
+  visibility: visible;
+  opacity: 1;
+}
+
 /* The clog lock: the dead loop's mirror, in the clog family's blue. Same
    constant-width bargain for the same zoom reason, same shared clock. */
 @keyframes clog-lock-breathe {

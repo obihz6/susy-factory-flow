@@ -486,6 +486,47 @@ describe("InspectorPanel", () => {
       });
     }
 
+    it("shows per-resource actual shortfalls for a selected machine", () => {
+      const base: FactoryProject = {
+        schemaVersion: PROJECT_SCHEMA_VERSION,
+        id: "selected-shortfall",
+        name: "Selected shortfall",
+        fuelProfiles: gtnhFuelProfiles,
+        recipes: [{
+          id: "sink",
+          name: "Short machine",
+          machineType: "Sink",
+          minimumTier: "LV",
+          durationTicks: 20,
+          eut: 0,
+          inputs: [{ kind: "item", id: "ore", amount: 10, displayName: "Ore" }],
+          outputs: [{ kind: "item", id: "plate", amount: 1 }],
+        }],
+        nodes: [{
+          id: "sink",
+          recipeId: "sink",
+          machineCount: 1,
+          parallel: 1,
+          overclockTier: "LV",
+          enabled: true,
+          position: { x: 0, y: 0 },
+        }],
+        edges: [],
+      };
+      const solved = calculateThroughput(base, { generatedAt: "fixed" });
+      useFactoryStore.setState({
+        project: base,
+        lastResult: solved,
+        selectedBoardIds: ["sink"],
+      });
+      render(<InspectorPanel />);
+      expect(screen.getByRole("region", { name: "Selected node shortfalls" })).toBeDefined();
+      expect(screen.getByText("Short machine input shortfalls")).toBeDefined();
+      const shortfallPanel = screen.getByRole("region", { name: "Selected node shortfalls" });
+      expect(within(shortfallPanel).getByText("Ore")).toBeDefined();
+      expect(within(shortfallPanel).getByText(/10.*required/)).toBeDefined();
+    });
+
     it("shows the whole plan until cards are selected", () => {
       seedChain();
       render(<InspectorPanel />);

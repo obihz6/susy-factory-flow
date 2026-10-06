@@ -878,6 +878,35 @@ describe("buildRailPorts", () => {
     expect(rails.outputs[0]!.tone).toBe("ok");
   });
 
+  it("marks an input row with the calculated shortfall amount", () => {
+    const proj = project({ nodes: [machineNode("N")], edges: [] });
+    const solved = throughput(
+      {
+        N: nodeResult({
+          utilization: 0.5,
+          inputs: { "item:eth": flow("item", "eth", 144) },
+        }),
+      },
+      {},
+    );
+    const ports = buildRailPorts(
+      proj,
+      solved,
+      "N",
+      recipeResources,
+      deriveNodeVerdict(proj, solved, "N"),
+      { inputShortfalls: new Map([["item:eth", 72]]) },
+    );
+
+    expect(ports.inputs[0]).toMatchObject({
+      resourceId: "eth",
+      shortfallPerSecond: 72,
+      tone: "bind",
+      badge: { kind: "short", perSecond: 144 },
+      showNameplate: true,
+    });
+  });
+
   it("marks the binding input and the hungry output", () => {
     const proj = project({
       recipes: [

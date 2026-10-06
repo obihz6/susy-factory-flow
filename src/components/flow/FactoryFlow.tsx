@@ -109,6 +109,8 @@ import {
   resourceMatchesInput,
 } from "@/lib/model";
 import { getCrossFormCellMatch } from "@/lib/model/resources";
+import { formatSlotRate } from "./flow-explainers";
+import { getMemoizedSupplyShortfalls } from "@/lib/solver/supply-shortfall";
 import { fetchLitresPerCell } from "@/lib/datasets/cell-ratio";
 import { BoardContextMenu, type BoardMenuTarget } from "./BoardContextMenu";
 import { listPoolCellPairs } from "@/lib/solver/pool-mode";
@@ -705,6 +707,8 @@ type ResourceEdgeData = {
   isLimited: boolean;
   /** Producer is maxed out and the consumer is going hungry. */
   isSupplyCapped: boolean;
+  /** Actual input shortfall allocated to this drawn edge. */
+  shortfallPerSecond?: number;
   /** The line ends in a barrel or tank rather than a machine. */
   isStorageTarget?: boolean;
   isStorageEdge: boolean;
@@ -734,6 +738,7 @@ type ResourceEdgeData = {
     sourceCapacity?: number;
     isLimited: boolean;
     isSupplyCapped: boolean;
+    shortfallPerSecond?: number;
   };
   isFlowHighlighted?: boolean;
   /** This wire is part of a ring that has wound down and cannot restart. */
@@ -2910,6 +2915,7 @@ export function FactoryFlow() {
   );
 
   const edges = useMemo<ResourceFlowEdge[]>(() => {
+    const supplyShortfalls = getMemoizedSupplyShortfalls(project, result);
     // A producer starved of its own inputs cannot offer its nameplate, so
     // every capacity the labels see is scaled by the producer's real ceiling.
     // A machine merely idle for lack of demand keeps a ceiling of 1 - hooking
@@ -3164,6 +3170,15 @@ export function FactoryFlow() {
       // Storage soaks up whatever arrives, so a line into a barrel is never
       // supply-capped.
       const isSupplyCapped = edgeResult?.constraint === "supply" && !targetStorage;
+      const edgeBundle = edgeBundles.get(edge.id);
+      const shortfallEdgeIds =
+        edgeBundle?.mode === "single-target"
+          ? edgeBundle.edgeIds
+          : channelEdgeIdsByRepresentative.get(edge.id) ?? [edge.id];
+      const shortfallPerSecond = [...new Set(shortfallEdgeIds)].reduce(
+        (sum, shortfallEdgeId) => sum + (supplyShortfalls.byEdge[shortfallEdgeId] ?? 0),
+        0,
+      );
       const isStorageEdge = Boolean(sourceStorage || targetStorage);
       const resource = getEdgeResource(project, edge);
       const edgeColor = getInitialResourceColor(resource);
@@ -3273,6 +3288,7 @@ export function FactoryFlow() {
           resourceKind: edge.resourceKind,
           isLimited: edgeResult?.isLimited === true && !targetStorage,
           isSupplyCapped,
+          shortfallPerSecond: shortfallPerSecond > 0 ? shortfallPerSecond : undefined,
           isStorageTarget: Boolean(targetStorage),
           isStorageEdge,
           waypoints: edge.waypoints,
@@ -9218,6 +9234,23 @@ function ResourceEdgeComponent({
           <RatioWireLabelControl edgeId={id} label={label} shares={data?.ratio ?? {}} arrowFill={arrowFill} />
         </EdgeLabelRenderer>
       ))}
+      {data?.shortfallPerSecond && data.shortfallPerSecond > 0 && !routedEdge.labelHidden &&
+      hasEdgeDetail(detailLevel, EDGE_DETAIL_LABELS) ? (
+        <EdgeLabelRenderer>
+          <div
+            data-supply-shortfall-edge={id}
+            className="pointer-events-none absolute whitespace-nowrap border border-amber-700/80 bg-[#302719]/95 px-1 py-0.5 text-[10px] font-bold leading-3 tabular-nums text-amber-300 shadow-sm"
+            style={{
+              left: routedEdge.labelX,
+              top: routedEdge.labelY - 12,
+              transform: "translate(-50%, -50%)",
+              color: GT_NODE_COLORS.amber.swatch,
+            }}
+          >
+            −{formatSlotRate(data.shortfallPerSecond, data.resourceKind)}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
       {checklistMode && liveRoute.path ? (
         <ViewportPortal>
           {/* Only the invisible hit target clears port hit boxes. The visible

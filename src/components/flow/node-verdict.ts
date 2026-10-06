@@ -4,6 +4,7 @@ import type {
   NodeThroughputResult,
   Recipe,
   ResourceAmount,
+  ResourceKey,
   ResourceKind,
   ThroughputResult,
 } from "@/lib/model/types";
@@ -1759,6 +1760,8 @@ export interface RailPort {
   /** Outputs only: the asker-side coupling, when anything is plugged in. */
   plug?: PortPlug;
   badge?: { kind: "short" | "asked"; perSecond: number };
+  /** Configured input rate still missing after summing the actual incoming wires. */
+  shortfallPerSecond?: number;
   /** Render "current / nameplate" instead of the bare current rate. */
   showNameplate: boolean;
   /**
@@ -1783,7 +1786,10 @@ export function buildRailPorts(
   displayRecipe: Pick<Recipe, "inputs" | "outputs">,
   verdict: NodeVerdict,
   /** A shared machine section: its ports wear this section prefix on their handles. */
-  options?: { handleSection?: number },
+  options?: {
+    handleSection?: number;
+    inputShortfalls?: ReadonlyMap<ResourceKey, number>;
+  },
 ): { inputs: RailPort[]; outputs: RailPort[] } {
   const handleFor = (side: "input" | "output", resource: { kind: ResourceKind; id: string }) =>
     sectionHandleId(options?.handleSection ?? 0, makeResourceHandleId(side, resource));
@@ -1909,9 +1915,11 @@ export function buildRailPorts(
       }
       const wantedByLines = machineAsk + storageGet;
 
+      const explicitShortfall = isInput ? (options?.inputShortfalls?.get(key as ResourceKey) ?? 0) : 0;
       const isBinding =
         isSupplyShort(verdict.kind) &&
         (verdict.binding?.resourceKey === key || verdict.binding?.tiedKeys?.includes(key) === true);
+      const isShort = isInput && explicitShortfall > RATE_EPSILON;
       const askRate = nameplate * Math.min(demand, 1);
 
       let tone: RailPort["tone"] = "ok";
@@ -1933,9 +1941,9 @@ export function buildRailPorts(
           // reason, and the card shows the whole list of wires to draw.
           tone = "bind";
           badge = { kind: "short", perSecond: nameplate };
-        } else if (isBinding) {
+        } else if (isShort || isBinding) {
           tone = "bind";
-          badge = { kind: "short", perSecond: verdict.binding?.shortfallPerSecond ?? 0 };
+          badge = { kind: "short", perSecond: explicitShortfall || verdict.binding?.shortfallPerSecond || 0 };
         } else if (verdict.kind === "demand-set") {
           tone = "calm";
         }
@@ -2041,7 +2049,8 @@ export function buildRailPorts(
         tone,
         plug,
         badge,
-        showNameplate: isInput && isBinding,
+        shortfallPerSecond: isShort ? explicitShortfall : undefined,
+        showNameplate: isInput && (isBinding || isShort),
         // A flow-less port (no books yet) has no power to divide; a power
         // port IS the EU, so it never reads as EU per EU. Inputs carry it
         // too - the EU spent per unit eaten - drawn in a much quieter gold.
