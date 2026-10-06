@@ -33,6 +33,37 @@ export function formatRelativeDate(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+/** A row's tags as chips that filter the shelf when selected. */
+export function TagChips({
+  tags,
+  onTag,
+  className,
+}: {
+  tags: string[];
+  onTag: (tag: string) => void;
+  className?: string;
+}) {
+  if (tags.length === 0) {
+    return null;
+  }
+  return (
+    <div className={["mt-0.5 flex flex-wrap gap-1", className ?? ""].join(" ")}>
+      {tags.map((tag) => (
+        <button
+          key={tag}
+          type="button"
+          data-tooltip-stop=""
+          onClick={() => onTag(tag)}
+          title={`Search #${tag}`}
+          className="rounded-[3px] border border-neutral-700 bg-[#17191d] px-1 py-px text-[9px] leading-3 text-neutral-400 hover:border-cyan-600 hover:text-cyan-300"
+        >
+          #{tag}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export type VoltageTier = Exclude<MachineTier, "DEMO">;
 
 /**

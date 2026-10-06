@@ -191,9 +191,9 @@ describe("loose cell wires", () => {
     expect(Object.keys(result.edges).sort()).toEqual(["out", "w"]);
   });
 
-  it("a stored off setting disables the conversion", () => {
-    // Loose cell wires are configurable again so a plan can choose whether a
-    // cross-form wire behaves like an explicit tank/canner connection.
+  it("legacy off settings cannot disable loose-cell conversion", () => {
+    // Loose cell wires are always enabled; a legacy stored setting cannot
+    // make an otherwise valid cell-to-fluid connection inert.
     const result = calculateThroughput(
       project({
         setupRules: { looseCellWires: false },
@@ -208,7 +208,8 @@ describe("loose cell wires", () => {
       { generatedAt: "fixed" },
     );
 
-    expect(result.nodes["taker"].utilization).toBeCloseTo(0);
+    expect(result.nodes["taker"].utilization).toBeCloseTo(1);
+    expect(result.edges["w"].transferredPerSecond).toBeCloseTo(1);
   });
 
   it("an edge without the ratio stays inert instead of inventing one", () => {

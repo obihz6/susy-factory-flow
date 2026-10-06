@@ -4,7 +4,9 @@ import {
   type GridObstacle,
   type GridPoint,
   type GridRouteRequest,
+  type GridRoutedEdge,
   type GridSide,
+  type PinnedRoute,
 } from "./grid-edge-router";
 import { DEFAULT_ROUTER_TUNING, type RouterTuning } from "./router-tuning";
 
@@ -31,12 +33,15 @@ export interface RouteSolveJob {
   requests: GridRouteRequest[];
   /** The dials the main thread is routing with; the worker uses the same. */
   tuning?: RouterTuning;
+  pinned?: PinnedRoute[];
 }
 
 export interface RouteSolveResult {
   signature: string;
   seq: number;
-  routes: Array<{ edgeId: string; order: number; points: GridPoint[] }>;
+  /** Newly solved paths only; pinned paths are already cached on the main thread. */
+  routes: Array<{ edgeId: string; order: number; points: GridPoint[]; route: GridRoutedEdge }>;
+  pinnedRoutes: Array<{ edgeId: string; order: number }>;
   solveMs: number;
 }
 
@@ -53,6 +58,7 @@ export interface EncodedRouteSolveJob {
   seq: number;
   obstacles: GridObstacle[];
   tuning?: RouterTuning;
+  pinned?: PinnedRoute[];
   edges: Array<{
     edgeId: string;
     order: number;
@@ -107,7 +113,15 @@ export function encodeRouteSolveJob(job: RouteSolveJob): EncodedRouteSolveJob {
       targetCardId: request.targetCardId,
     });
   }
-  return { signature: job.signature, seq: job.seq, obstacles: job.obstacles, tuning: job.tuning, edges, endpoints };
+  return {
+    signature: job.signature,
+    seq: job.seq,
+    obstacles: job.obstacles,
+    tuning: job.tuning,
+    pinned: job.pinned,
+    edges,
+    endpoints,
+  };
 }
 
 export function decodeRouteSolveJob(encoded: EncodedRouteSolveJob): RouteSolveJob {
@@ -158,17 +172,40 @@ export function decodeRouteSolveJob(encoded: EncodedRouteSolveJob): RouteSolveJo
     obstacles: encoded.obstacles,
     requests,
     tuning: encoded.tuning,
+    pinned: encoded.pinned,
   };
 }
 
 /** Runs the job right here; the worker and the fallback both call this. */
 export function runRouteSolveJob(job: RouteSolveJob): RouteSolveResult {
   const started = performance.now();
-  const solved = solveGridRoutes(job.obstacles, job.requests, undefined, job.tuning ?? DEFAULT_ROUTER_TUNING);
-  const orderByEdge = new Map(job.requests.map((request) => [request.edgeId, request.order]));
+  const solved = solveGridRoutes(
+    job.obstacles,
+    job.requests,
+    undefined,
+    job.tuning ?? DEFAULT_ROUTER_TUNING,
+    job.pinned,
+  );
   const routes: RouteSolveResult["routes"] = [];
-  for (const [edgeId, routed] of solved) {
-    routes.push({ edgeId, order: orderByEdge.get(edgeId) ?? 0, points: routed.points });
+  for (const request of job.requests) {
+    const routed = solved.get(request.edgeId);
+    if (!routed) continue;
+    routes.push({
+      edgeId: request.edgeId,
+      order: request.order,
+      points: routed.points,
+      route: routed,
+    });
   }
-  return { signature: job.signature, seq: job.seq, routes, solveMs: performance.now() - started };
+  const pinnedRoutes = (job.pinned ?? []).map(({ request }) => ({
+    edgeId: request.edgeId,
+    order: request.order,
+  }));
+  return {
+    signature: job.signature,
+    seq: job.seq,
+    routes,
+    pinnedRoutes,
+    solveMs: performance.now() - started,
+  };
 }

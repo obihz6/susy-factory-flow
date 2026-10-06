@@ -114,42 +114,47 @@ describe("board rules", () => {
     expect(result.nodes["presser"].utilization).toBeCloseTo(0);
   });
 
-  it("both rules on run the chain flat out, and the wire still carries it", () => {
+  it("stored free-boundary flags cannot run a half-wired chain", () => {
     const result = solve(board({ freeInputs: true, freeOutputs: true }));
-    expect(result.nodes["smelter"].utilization).toBeCloseTo(1);
-    expect(result.nodes["presser"].utilization).toBeCloseTo(1);
-    expect(result.edges["mid"].transferredPerSecond).toBeCloseTo(1);
+    expect(result.nodes["smelter"].utilization).toBeCloseTo(0);
+    expect(result.nodes["presser"].utilization).toBeCloseTo(0);
+    expect(result.edges["mid"].transferredPerSecond).toBeCloseTo(0);
   });
 
-  it("a legacy sketch-mode plan opens as both rules", () => {
+  it("a legacy sketch-mode flag cannot open a closed plan", () => {
     const legacy = { ...board(undefined), assumeBoundaries: true } as FactoryProject;
-    expect(solve(legacy).nodes["presser"].utilization).toBeCloseTo(1);
+    expect(solve(legacy).nodes["presser"].utilization).toBeCloseTo(0);
   });
 
-  it("free inputs alone still leaves the bare plate slot to pin the chain", () => {
+  it("a legacy free-input flag cannot bypass the bare plate slot", () => {
     const result = solve(board({ freeInputs: true }));
     expect(result.nodes["presser"].utilization).toBeCloseTo(0);
     expect(result.nodes["smelter"].utilization).toBeCloseTo(0);
   });
 
-  it("free outputs alone still leaves the bare ore slot to pin the chain", () => {
+  it("a legacy free-output flag cannot bypass the bare ore slot", () => {
     const result = solve(board({ freeOutputs: true }));
     expect(result.nodes["smelter"].utilization).toBeCloseTo(0);
     expect(result.nodes["presser"].utilization).toBeCloseTo(0);
   });
 
-  it("free outputs unclogs a WIRED port, which sketch mode never did", () => {
-    expect(solve(closedChain(undefined, 2, 1)).nodes["smelter"].utilization).toBeCloseTo(0.5);
-    const freed = solve(closedChain({ freeOutputs: true }, 2, 1));
-    expect(freed.nodes["smelter"].utilization).toBeCloseTo(1);
-    expect(freed.nodes["presser"].utilization).toBeCloseTo(1);
-    expect(freed.edges["mid"].transferredPerSecond).toBeCloseTo(1);
+  it("stored free-output flags do not change a wired port's capacity", () => {
+    const baseline = solve(closedChain(undefined, 2, 1));
+    const flagged = solve(closedChain({ freeOutputs: true }, 2, 1));
+    expect(baseline.nodes["smelter"].utilization).toBeCloseTo(0.5);
+    expect(flagged.nodes["smelter"].utilization).toBeCloseTo(0.5);
+    expect(flagged.nodes["presser"].utilization).toBeCloseTo(1);
+    expect(flagged.edges["mid"].transferredPerSecond).toBeCloseTo(1);
   });
 
-  it("free inputs tops up a WIRED port that cannot keep up", () => {
-    expect(solve(closedChain(undefined, 1, 2)).nodes["presser"].utilization).toBeCloseTo(0.5);
-    const fed = solve(closedChain({ freeInputs: true }, 1, 2));
-    expect(fed.nodes["presser"].utilization).toBeCloseTo(1);
-    expect(fed.edges["mid"].transferredPerSecond).toBeCloseTo(1);
+  it("stored free-input flags do not change a wired port's capacity", () => {
+    const baseline = solve(closedChain(undefined, 1, 2));
+    const flagged = solve(closedChain({ freeInputs: true }, 1, 2));
+    expect(flagged.nodes["presser"].utilization).toBeCloseTo(
+      baseline.nodes["presser"].utilization,
+    );
+    expect(flagged.edges["mid"].transferredPerSecond).toBeCloseTo(
+      baseline.edges["mid"].transferredPerSecond,
+    );
   });
 });

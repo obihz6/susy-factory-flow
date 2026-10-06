@@ -46,6 +46,23 @@ describe("board view: calm mode cannot outlive the session", () => {
     expect(readBoardViewSnapshot().calmMode).toBe(false);
   });
 
+  it("loads and persists the manual edge routing preference", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ manualEdgeRouting: true }));
+    const { readBoardViewSnapshot, writeBoardView } = await import("./board-view");
+    expect(readBoardViewSnapshot().manualEdgeRouting).toBe(true);
+    writeBoardView({ manualEdgeRouting: false });
+    expect(readBoardViewSnapshot().manualEdgeRouting).toBe(false);
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}")).toMatchObject({
+      manualEdgeRouting: false,
+    });
+  });
+
+  it("defaults manual edge routing off for existing preferences", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ fixedEdgeWidth: true }));
+    const { readBoardViewSnapshot } = await import("./board-view");
+    expect(readBoardViewSnapshot().manualEdgeRouting).toBe(false);
+  });
+
   it("keeps writing the settings that ARE preferences", async () => {
     const { writeBoardView } = await import("./board-view");
     writeBoardView({ canvasPattern: "cross", calmMode: true });

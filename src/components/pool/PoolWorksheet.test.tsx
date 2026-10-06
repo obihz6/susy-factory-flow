@@ -310,7 +310,7 @@ describe("Pool worksheet", () => {
     expect(useFactoryStore.getState().lastResult).toBe(before.lastResult);
     expect(useFactoryStore.getState().undoHistory).toBe(before.undoHistory);
     expect(
-      JSON.parse(localStorage.getItem("gtnh-factory-flow-workspace-view")!).poolWorksheetOrder[
+      JSON.parse(localStorage.getItem("susy-factory-flow-workspace-view")!).poolWorksheetOrder[
         "worksheet-ui:machines"
       ],
     ).toEqual(["second", "machine"]);
@@ -525,7 +525,7 @@ describe("Pool worksheet", () => {
     expect(after.project).toBe(project);
     expect(after.lastResult).toBe(lastResult);
     expect(after.undoHistory).toBe(undoHistory);
-    expect(JSON.parse(localStorage.getItem("gtnh-factory-flow-workspace-view")!)).toEqual(DEFAULT_WORKSPACE_VIEW);
+    expect(JSON.parse(localStorage.getItem("susy-factory-flow-workspace-view")!)).toEqual(DEFAULT_WORKSPACE_VIEW);
   });
 
   it("edits a negative input goal, keeps its sign on reopening, and supports undo", () => {

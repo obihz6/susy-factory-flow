@@ -668,6 +668,8 @@ export interface PlanViewState {
   /** Historical: older plans carry it, nothing reads it. */
   lineLabelsMode?: boolean;
   fixedEdgeWidth?: boolean;
+  /** Allow manual waypoint edits when opening this shared setup. */
+  manualEdgeRouting?: boolean;
   linePulseMode?: boolean;
   calmMode?: boolean;
   /** Historical: older plans carry it, nothing applies it. The smart view is

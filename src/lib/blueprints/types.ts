@@ -11,6 +11,19 @@ export const BLUEPRINT_RESOURCE_STAT_LIMIT = 64;
 export const BLUEPRINT_TAG_MAX_COUNT = 12;
 export const BLUEPRINT_TAG_MAX_LENGTH = 24;
 
+export const BLUEPRINT_SORTS: Record<BlueprintSort, string> = {
+  newest: "Newest",
+  oldest: "Oldest",
+  name: "Name",
+  largest: "Largest",
+};
+
+export const PUBLIC_BLUEPRINT_SORTS: Record<PublicBlueprintSort, string> = {
+  top: "Top",
+  newest: "New",
+  downloads: "Placed",
+};
+
 /**
  * One identity per tag: lowercase, single-spaced, no leading #, deduped,
  * capped. Capitalization is the only "similar spelling" folded together —
@@ -39,6 +52,29 @@ export function normalizeBlueprintTags(raw: unknown): string[] {
     }
   }
   return tags;
+}
+
+/**
+ * Tag-aware matching for a search box: plain terms match names and tags,
+ * while a leading `#` restricts matches to tags.
+ */
+export function blueprintMatchesSearch(
+  blueprint: Pick<BlueprintSummary, "name" | "tags">,
+  query: string,
+): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  const tagOnly = normalized.startsWith("#");
+  const term = tagOnly ? normalized.slice(1).trim() : normalized;
+  if (!term) {
+    return true;
+  }
+  if ((blueprint.tags ?? []).some((tag) => tag.includes(term))) {
+    return true;
+  }
+  return !tagOnly && blueprint.name.toLowerCase().includes(term);
 }
 
 export const BLUEPRINT_NAME_MAX_LENGTH = 60;
@@ -104,6 +140,29 @@ export interface BlueprintVoteResponse {
 export type BlueprintSort = "newest" | "oldest" | "name" | "largest";
 
 export type PublicBlueprintSort = "top" | "newest" | "downloads";
+
+export function sortBlueprints(
+  blueprints: BlueprintSummary[],
+  sort: BlueprintSort,
+): BlueprintSummary[] {
+  const sorted = [...blueprints];
+  switch (sort) {
+    case "newest":
+      return sorted.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    case "oldest":
+      return sorted.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    case "name":
+      return sorted.sort((left, right) =>
+        left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+      );
+    case "largest":
+      return sorted.sort(
+        (left, right) =>
+          right.nodeCount + right.storageCount - (left.nodeCount + left.storageCount) ||
+          right.machineCount - left.machineCount,
+      );
+  }
+}
 
 export interface PublicBlueprintListRequest {
   sort?: PublicBlueprintSort;

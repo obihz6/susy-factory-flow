@@ -59,6 +59,8 @@ export function isGlanceMode(value: unknown): value is GlanceMode {
 export interface BoardView {
   /** Draw every connection at the same base width, independent of rate. */
   fixedEdgeWidth: boolean;
+  /** Allow users to add, move and remove hand-pinned wire waypoints. */
+  manualEdgeRouting: boolean;
   // No `snapToGrid`: cards are sized in grid cells, so snapping is always on,
   // not a setting.
   canvasPattern: CanvasPattern;
@@ -84,6 +86,7 @@ export const DEFAULT_BOARD_VIEW: BoardView = {
   canvasPattern: "dots",
   canvasTheme: DEFAULT_CANVAS_THEME_ID,
   fixedEdgeWidth: false,
+  manualEdgeRouting: false,
   // RETIRED: a full-board canvas redrawn every frame is too expensive (in
   // Firefox a dirty canvas re-renders every board tile under it) and reads
   // the camera a frame late, sliding against the wires during pans. The field
@@ -112,6 +115,7 @@ function readBoardView(): BoardView {
       : DEFAULT_BOARD_VIEW.glanceMode;
     return {
       fixedEdgeWidth: parsed.fixedEdgeWidth === true,
+      manualEdgeRouting: parsed.manualEdgeRouting === true,
       canvasPattern: CANVAS_PATTERNS.includes(parsed.canvasPattern as CanvasPattern)
         ? (parsed.canvasPattern as CanvasPattern)
         : DEFAULT_BOARD_VIEW.canvasPattern,

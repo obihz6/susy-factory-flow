@@ -415,11 +415,11 @@ describe("a fed card held by its second output", () => {
   it("reads a heater feeding a held reactor as on demand, not bottleneck", () => {
     // Ktz's alumina line (2026-09-24), slimmed to its recipes. A fluid heater
     // feeds a shared Large Chemical Reactor whose alumina recipe sends its
-    // bauxite slag only to a centrifuge, and that centrifuge's rutile goes to
-    // a titanium loop already at 100%. The reactor asked for slurry at full
-    // speed, so the heater at 12% read BOTTLENECK, though nothing more it
-    // made could be taken. Its solver disposal reads 1: only the verdict's
-    // own held-output reading sees the jam.
+    // bauxite slag only to a centrifuge, and that centrifuge's rutile feeds a
+    // reactor recipe running at 12%. The heater also runs at 12%, so the
+    // verdict must not call it a bottleneck while its downstream recipe is
+    // held. Its solver disposal reads 1; the verdict finds the jam by tracing
+    // the other output's actual taker.
     const proj = normalizeLoadedProject(
       JSON.parse(
         readFileSync(new URL("./__fixtures__/alumina-line-shared-reactor.json", import.meta.url), "utf8"),
@@ -435,7 +435,7 @@ describe("a fed card held by its second output", () => {
     expect(heaterVerdict.deficit).toBeUndefined();
 
     // The trail still leads down the line: the alumina recipe is held by
-    // its slag, the centrifuge's rutile recipe by the titanium loop.
+    // its slag, and the centrifuge's rutile recipe by the downstream reactor.
     const alumina = deriveNodeVerdict(proj, result, reactor);
     expect(alumina.kind).toBe("clogged");
     expect(alumina.clog?.displayName).toBe("Bauxite Slag Dust");
@@ -447,11 +447,12 @@ describe("a fed card held by its second output", () => {
     );
     expect(rutile.kind).toBe("clogged");
     expect(rutile.clog?.displayName).toBe("Rutile Dust");
-    expect(rutile.clog?.heldTakerPct).toBe(100);
+    // The rutile wire is taken by the reactor's Carbon Monoxide section.
+    expect(rutile.clog?.heldTakerPct).toBe(12);
 
     // A recipe held by another recipe on the same card names that recipe,
-    // not the machine: "Large Chemical Reactor limits Carbon Dioxide
-    // output" on a reactor read as the machine clogging itself.
+    // not the machine: the Alumina recipe holds the Carbon Dioxide
+    // output, so the verdict identifies that section rather than itself.
     const quicklime = deriveNodeVerdict(proj, result, sectionNodeId(reactor, 1));
     expect(quicklime.kind).toBe("clogged");
     expect(quicklime.clog?.displayName).toBe("Carbon Dioxide");

@@ -15,6 +15,7 @@ const VIEW: PlanViewState = {
   canvasPattern: "lines",
   lineHeatMode: true,
   linePulseMode: false,
+  manualEdgeRouting: true,
   calmMode: true,
   glanceMode: "status",
   rateUnit: "hour",

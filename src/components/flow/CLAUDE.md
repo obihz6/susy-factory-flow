@@ -19,8 +19,8 @@ The board must stay smooth with 100+ cards on weak PCs.
 4. Identity is currency: node `data` through `reuseObjectIdentity`, edges through
    `reuseDeepObjectIdentity` (`layoutEpoch` is the deliberate bust), custom `memo`
    comparators on node components, stable callbacks for toolbar children.
-5. Drags never show a guessed route. Small boards rerun the real solve on a throttle;
-   past `LIVE_DRAG_ROUTE_EDGE_LIMIT` wires hold their routes until the drop.
+5. During a node drag, connected wires show a straight preview and do no pathfinding.
+   On drop, only incident edges are rerouted; cached routes for other edges stay pinned.
 6. An effect that touches every card at once (the hop map, `hop-map.ts`) paints CSS
    custom properties; it does not go through React.
 7. No `querySelectorAll` / `getBoundingClientRect` per edge, node or frame. No card
@@ -106,8 +106,10 @@ The board must stay smooth with 100+ cards on weak PCs.
   thickest then longest wires first, keep the board with the fewest points (`retainBest`,
   `routePoints`), then rip up and reroute crossing wires with escalating costs and dock
   swaps. Never add per-edge scoring or special-case paths.
-- 8-direction A* on the 20px grid; nothing within one cell of a card except the port
-  stub. Diagonals only for trips whose card rims are 6+ cells apart, at least two cells
+- Automated board routing uses four-direction orthogonal A* on the 20px grid; nothing
+  within one cell of a card except the port stub. The general solver can retain diagonals
+  for other routing clients, but board wires default to orthogonal paths.
+- Diagonals only for trips whose card rims are 6+ cells apart, at least two cells
   long. Self loops use 90-degree turns and land a cell from their exit. Turns and
   crossings are priced; reversals are all but forbidden.
 - Docking is free on the whole perimeter (corners excepted). Wire width follows flow

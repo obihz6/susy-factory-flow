@@ -32,6 +32,7 @@ export function capturePlanView(): PlanViewState {
     canvasPattern: board.canvasPattern,
     canvasTheme: board.canvasTheme,
     fixedEdgeWidth: board.fixedEdgeWidth,
+    manualEdgeRouting: board.manualEdgeRouting,
     linePulseMode: board.linePulseMode,
     // The smart view (glanceMode) is deliberately NOT captured: it is a
     // personal reading of the board, and a saved setup always opens on the
@@ -105,6 +106,9 @@ function applyViewSettings(view: PlanViewState | undefined, scope: PlanViewScope
   const boardPatch: Parameters<typeof writeBoardView>[0] = {};
 
   if (typeof view.fixedEdgeWidth === "boolean") boardPatch.fixedEdgeWidth = view.fixedEdgeWidth;
+  if (typeof view.manualEdgeRouting === "boolean") {
+    boardPatch.manualEdgeRouting = view.manualEdgeRouting;
+  }
   if (view.canvasPattern && CANVAS_PATTERNS.includes(view.canvasPattern as CanvasPattern)) {
     boardPatch.canvasPattern = view.canvasPattern as CanvasPattern;
   }

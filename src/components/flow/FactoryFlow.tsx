@@ -267,6 +267,7 @@ import {
   type GridRouteRequest,
   type GridObstacle,
   type GridRoutedEdge,
+  type PinnedRoute,
   measureRoutes,
 } from "./grid-edge-router";
 import { getRouterTuning, routerTuningKey, subscribeRouterTuning } from "./router-tuning";
@@ -507,22 +508,7 @@ const FLOW_WRAPPER_STYLE = { backgroundColor: "transparent" } as const;
  */
 const MIN_FRAMED_WIDTH = 420;
 
-/**
- * Mid-drag live rerouting. On boards under this many wires the real route
- * solve (the same one the drop runs) reruns while a card moves, throttled to
- * LIVE_DRAG_SOLVE_MS, so the wires follow it to exactly where they will rest.
- * Past the limit wires freeze until the drop: a full board solve per beat is
- * the per-frame bill CLAUDE.md forbids.
- */
-const LIVE_DRAG_ROUTE_EDGE_LIMIT = 200;
-const LIVE_DRAG_SOLVE_MS = 120;
-/**
- * Measured half of the gate above. Each mid-drag solve is timed through to
- * the frame it painted; one over this budget marks the current board size as
- * too slow to follow, and later drags freeze until the board shrinks well
- * below that size.
- */
-const LIVE_DRAG_BUDGET_MS = 36;
+/** Dragged edges keep a straight preview until a single drop-time solve. */
 /**
  * The arrival pop (globals.css), applied in the same DOM pass as the flash.
  * The class outlives the 220ms animation harmlessly and is removed by the
@@ -724,6 +710,8 @@ type ResourceEdgeData = {
   isStorageEdge: boolean;
   /** User-pinned stops the wire routes through, in order. */
   waypoints?: Array<{ x: number; y: number }>;
+  /** Whether waypoint editing and pinned routes are enabled for this view. */
+  manualEdgeRouting: boolean;
   sourceHandleId?: string | null;
   targetHandleId?: string | null;
   sourceSlotEndpoint: boolean;
@@ -832,6 +820,7 @@ const directRouteCache = new Map<
     signature: string;
     routeIndex: number;
     route: RoutedEdgePath;
+    gridRoute: GridRoutedEdge;
     segments: ReturnType<typeof getPolylineSegments>;
   }
 >();
@@ -978,6 +967,7 @@ function setDirectRoute(
     signature: string;
     routeIndex: number;
     route: RoutedEdgePath;
+    gridRoute: GridRoutedEdge;
     segments: ReturnType<typeof getPolylineSegments>;
   },
 ) {
@@ -1021,6 +1011,8 @@ type GridRouteEdgeInput = {
   routingWidth: number;
   /** User-pinned stops the wire must pass through, in order. */
   waypoints?: Array<{ x: number; y: number }>;
+  /** Whether waypoint editing and pinned routes are enabled for this view. */
+  manualEdgeRouting: boolean;
   /**
    * The open board frames this wire's endpoints live inside — the only
    * frames its route may cross. Every other frame blocks it like a card.
@@ -1034,6 +1026,7 @@ type GridRouteEdgeInput = {
 };
 
 let publishedGridRouteEdges: GridRouteEdgeInput[] = [];
+const publishedGridRouteRequests = new Map<string, GridRouteRequest>();
 let gridSolveSignature = "";
 /**
  * Fast-path gate. ensureGridSolve runs from every edge's render, and the full
@@ -1056,6 +1049,8 @@ let gridSolveRequestSeq = 0;
 let gridSolveInstalledSeq = 0;
 /** The signature most recently asked for, solved or still in the worker. */
 let gridSolveWantedSignature = "";
+/** A drop-only solve holds all routes whose two endpoint cards did not move. */
+let gridSolveMovedNodeIds: ReadonlySet<string> | undefined;
 /** How the board re-issues its edges when worker routes land. */
 let routeSolveRerender: (() => void) | undefined;
 
@@ -1114,6 +1109,7 @@ function gridRouteEdgeInputsEqual(a: GridRouteEdgeInput[], b: GridRouteEdgeInput
       left.sourceStorageEndpoint !== right.sourceStorageEndpoint ||
       left.targetStorageEndpoint !== right.targetStorageEndpoint ||
       left.routingWidth !== right.routingWidth ||
+      left.manualEdgeRouting !== right.manualEdgeRouting ||
       !pointListsEqual(left.waypoints, right.waypoints) ||
       !idListsEqual(left.throughBoardIds, right.throughBoardIds) ||
       !idListsEqual(left.homeBoardIds, right.homeBoardIds)
@@ -1132,6 +1128,10 @@ function publishGridRouteEdges(edges: GridRouteEdgeInput[]) {
     return;
   }
   publishedGridRouteEdges = edges;
+  const edgeIds = new Set(edges.map((edge) => edge.edgeId));
+  for (const edgeId of publishedGridRouteRequests.keys()) {
+    if (!edgeIds.has(edgeId)) publishedGridRouteRequests.delete(edgeId);
+  }
   gridSolveInputsStamp += 1;
 }
 
@@ -1229,9 +1229,10 @@ function ensureGridSolve() {
   // until the signature actually differs.
   const deferredInputs: GridRouteEdgeInput[] = [];
   for (const input of publishedGridRouteEdges) {
+    const waypoints = input.manualEdgeRouting ? input.waypoints : undefined;
     const waypointPart =
-      input.waypoints && input.waypoints.length > 0
-        ? `|wp:${input.waypoints
+      waypoints && waypoints.length > 0
+        ? `|wp:${waypoints
             .map((point) => `${Math.round(point.x)},${Math.round(point.y)}`)
             .join("+")}`
         : "";
@@ -1272,34 +1273,72 @@ function ensureGridSolve() {
     )
     .join(";");
 
-  const tuning = getRouterTuning();
+  // Board wires use a four-direction grid search. Restricting the search to
+  // orthogonal steps trims branching and avoids the extra diagonal lane math.
+  const tuning = { ...getRouterTuning(), diagonals: false };
   const signature = `${routerTuningKey(tuning)}::${sweep.hash}::${framesPart}::${parts.join(";")}`;
   if (signature === gridSolveSignature || signature === gridSolveWantedSignature) {
+    // A no-op drop must not leak its moved-node gate into the next solve.
+    gridSolveMovedNodeIds = undefined;
     return;
   }
+
   gridSolveWantedSignature = signature;
   gridSolveRequestSeq += 1;
   const seq = gridSolveRequestSeq;
 
-  // The signature actually moved: now pay for the perimeters.
+  // During a drop, hold every cached route whose endpoints did not move.
+  // Only incident wires enter the path search; pinned routes still occupy
+  // their lanes and crossings so the changed routes avoid them.
+  const movedNodeIds = gridSolveMovedNodeIds;
+  const pinned: PinnedRoute[] = [];
+  const routedInputs: GridRouteEdgeInput[] = [];
   for (const input of deferredInputs) {
+    orderByEdge.set(input.edgeId, input.order);
+    if (
+      movedNodeIds &&
+      !movedNodeIds.has(input.sourceNodeId) &&
+      !movedNodeIds.has(input.targetNodeId)
+    ) {
+      const cached = directRouteCache.get(input.edgeId);
+      const previousRequest = publishedGridRouteRequests.get(input.edgeId);
+      if (
+        cached?.gridRoute.vertices &&
+        cached.gridRoute.source &&
+        cached.gridRoute.target &&
+        previousRequest
+      ) {
+        pinned.push({ request: previousRequest, route: cached.gridRoute });
+        continue;
+      }
+    }
+    routedInputs.push(input);
+  }
+  gridSolveMovedNodeIds = undefined;
+
+  // The signature actually moved: now pay for the perimeters of changed wires.
+  for (const input of routedInputs) {
     const sources = resolveGridRouteEndpoints(input, "source");
     const targets = resolveGridRouteEndpoints(input, "target");
     if (sources.length === 0 || targets.length === 0) {
       continue;
     }
-    requests.push({
+    const request: GridRouteRequest = {
       edgeId: input.edgeId,
       order: input.order,
       sources,
       targets,
       strokeWidth: Math.min(input.routingWidth, LANE_CAPACITY),
-      waypoints: input.waypoints,
+      waypoints: input.manualEdgeRouting ? input.waypoints : undefined,
       exemptObstacleIds: input.throughBoardIds,
       homeObstacleIds: input.homeBoardIds,
       sourceCardId: input.sourceNodeId,
       targetCardId: input.targetNodeId,
-    });
+    };
+
+    requests.push(request);
+
+    publishedGridRouteRequests.set(input.edgeId, request);
     orderByEdge.set(input.edgeId, input.order);
   }
 
@@ -1314,6 +1353,7 @@ function ensureGridSolve() {
       signature,
       obstacles,
       requests,
+      pinned,
       tuning,
     };
     // Read the installed geometry on demand, never re-solve a benchmark's
@@ -1392,13 +1432,17 @@ function ensureGridSolve() {
   // until the answer lands) and `installSolvedRoutes` re-issues the edges
   // then. A small board solves synchronously so its wires never lag a frame
   // behind their cards.
-  if (requests.length > ASYNC_ROUTE_EDGE_LIMIT && routeWorkerAvailable()) {
-    scheduleRouteSolve({ signature, seq, obstacles, requests, tuning });
+  if (requests.length + pinned.length > ASYNC_ROUTE_EDGE_LIMIT && routeWorkerAvailable()) {
+    scheduleRouteSolve({ signature, seq, obstacles, requests, tuning, pinned });
+    gridSolveMovedNodeIds = undefined;
     return;
   }
+
   gridSolveSignature = signature;
+
   gridSolveInstalledSeq = seq;
-  const solved = solveGridRoutes(obstacles, requests, undefined, tuning);
+  const solved = solveGridRoutes(obstacles, requests, undefined, tuning, pinned);
+  gridSolveMovedNodeIds = undefined;
   for (const [edgeId, routed] of solved) {
     if (routed.points.length < 2) {
       deleteDirectRoute(edgeId);
@@ -1408,8 +1452,19 @@ function ensureGridSolve() {
       signature,
       routeIndex: orderByEdge.get(edgeId) ?? 0,
       route: buildRoutedEdgePath(routed.points),
+      gridRoute: routed,
       segments: getPolylineSegments(routed.points),
     });
+  }
+  for (const pin of pinned) {
+    const cached = directRouteCache.get(pin.request.edgeId);
+    if (cached) {
+      setDirectRoute(pin.request.edgeId, {
+        ...cached,
+        signature,
+        routeIndex: pin.request.order,
+      });
+    }
   }
   // Edges that rendered before this solve saw the previous routes; the
   // settle pass re-issues them against the fresh cache.
@@ -1437,8 +1492,19 @@ function installSolvedRoutes(result: RouteSolveResult) {
       signature: result.signature,
       routeIndex: routed.order,
       route: buildRoutedEdgePath(routed.points),
+      gridRoute: routed.route,
       segments: getPolylineSegments(routed.points),
     });
+  }
+  for (const pinned of result.pinnedRoutes) {
+    const cached = directRouteCache.get(pinned.edgeId);
+    if (cached) {
+      setDirectRoute(pinned.edgeId, {
+        ...cached,
+        signature: result.signature,
+        routeIndex: pinned.order,
+      });
+    }
   }
   routeCacheGrewThisPass = true;
   routeSolveRerender?.();
@@ -1507,6 +1573,8 @@ function clearDirectRoutes() {
   // must not short-circuit the next ensureGridSolve into doing nothing.
   gridSolveSignature = "";
   gridSolveWantedSignature = "";
+  gridSolveMovedNodeIds = undefined;
+  publishedGridRouteRequests.clear();
   gridSolveCheckedStamp = -1;
 }
 
@@ -1681,9 +1749,9 @@ let routeCacheGrewThisPass = false;
 const MAX_HOP_SETTLE_PASSES = 2;
 
 // Node ids currently being dragged. Edges touching them skip endpoint
-// measurement and draw their last solved route (see `shouldUsePreciseRouting`
-// in the edge); the drop republishes and re-solves. Module state rather than
-// React state: those edges re-render every frame anyway via their position props.
+// measurement and draw a straight preview (see `shouldUsePreciseRouting` in
+// the edge); the drop republishes and re-solves. Module state rather than React
+// state: those edges re-render every frame anyway via their position props.
 const activelyDraggedNodeIds = new Set<string>();
 /**
  * Bumped whenever the dragged set changes. The pulse canvas caches its
@@ -2709,69 +2777,15 @@ export function FactoryFlow() {
       invalidateMeasuredLayout();
     }
   }, []);
-  // Live-drag throttle state: when the last mid-drag solve ran, and the
-  // trailing timer that guarantees the LAST cell a card entered still gets
-  // its solve when the pointer stops moving inside a throttle window.
-  const lastLiveDragSolveAtRef = useRef(0);
-  const liveDragTrailingTimerRef = useRef<number | undefined>(undefined);
   // Whether the current drag moves anything wires route around; see
   // handleNodeDragStart.
   const dragMovesObstaclesRef = useRef(true);
-  // The smallest wire count a mid-drag solve has ever blown the frame budget
-  // at. Following stays off until the board shrinks well below it.
-  const liveDragSlowAtEdgeCountRef = useRef(Infinity);
-  // Times one live solve through to the frame it painted, and marks the
-  // board size as too slow to follow if it blew the budget.
-  const meterLiveDragSolve = useCallback((edgeCount: number, startedAt: number) => {
-    window.requestAnimationFrame(() => {
-      if (performance.now() - startedAt > LIVE_DRAG_BUDGET_MS) {
-        liveDragSlowAtEdgeCountRef.current = Math.min(
-          liveDragSlowAtEdgeCountRef.current,
-          edgeCount,
-        );
-      }
-    });
-  }, []);
   useLayoutEffect(() => {
-    // Drag frames rewrite positions constantly. Where the board can afford
-    // it, wires FOLLOW: a throttled real solve (the one the drop runs) reruns
-    // against the card's current cell. Wires freeze instead for an
-    // annotation-only drag (ink cannot change a route), a board past the wire
-    // cap, or a board whose measured solves blew the frame budget. Not a
-    // setting on purpose. The drop republishes explicitly (handleNodeDragStop)
-    // because React Flow streams the final position during the last drag
-    // frame, so this fingerprint does NOT change again after the drag ends.
+    // Drag frames update geometry for a straight preview only. Full pathfinding
+    // runs once on drop, against the final position (handleNodeDragStop).
     if (draggingNodeRef.current) {
-      const edgeCount = publishedGridRouteEdges.length;
-      if (
-        !dragMovesObstaclesRef.current ||
-        edgeCount > LIVE_DRAG_ROUTE_EDGE_LIMIT ||
-        // Well below, not just below: a board hovering at the size that
-        // lagged would flap between following and freezing.
-        edgeCount >= liveDragSlowAtEdgeCountRef.current * 0.8
-      ) {
-        return;
-      }
-      const now = performance.now();
-      const sinceLastSolve = now - lastLiveDragSolveAtRef.current;
-      if (sinceLastSolve < LIVE_DRAG_SOLVE_MS) {
-        // Inside the throttle window: book the trailing solve instead, so a
-        // pointer that stops moving still sees its final cell routed.
-        window.clearTimeout(liveDragTrailingTimerRef.current);
-        liveDragTrailingTimerRef.current = window.setTimeout(() => {
-          if (!draggingNodeRef.current) {
-            return; // the drop already published
-          }
-          const trailingStart = performance.now();
-          lastLiveDragSolveAtRef.current = trailingStart;
-          publishBoardGeometry();
-          setLayoutVersion((version) => version + 1);
-          meterLiveDragSolve(edgeCount, trailingStart);
-        }, LIVE_DRAG_SOLVE_MS - sinceLastSolve);
-        return;
-      }
-      lastLiveDragSolveAtRef.current = now;
-      meterLiveDragSolve(edgeCount, now);
+      // Geometry and card positions are live, but full routing waits for drop.
+      return;
     }
 
     publishBoardGeometry();
@@ -2802,8 +2816,7 @@ export function FactoryFlow() {
   // nothing.
   const hopSettlePassesRef = useRef(0);
   useEffect(() => {
-    // Off mid-drag: live-drag solves already rerender every edge a few times
-    // a second, and the drop's publish forces the full pass either way.
+    // Off mid-drag: the drop's publish rerenders the routes after pathfinding.
     if (draggingNodeRef.current) {
       return;
     }
@@ -3220,6 +3233,8 @@ export function FactoryFlow() {
         // hover/highlight bumps, so a hover can never trigger a re-solve.
         routingWidth: publishedEdgeStrokeWidths.get(edge.id) ?? DEFAULT_EDGE_STROKE_WIDTH,
         waypoints: edge.waypoints,
+
+        manualEdgeRouting: boardView.manualEdgeRouting,
       });
 
       // Structural reuse: hover and solver rebuilds leave most edges equal,
@@ -3261,6 +3276,7 @@ export function FactoryFlow() {
           isStorageTarget: Boolean(targetStorage),
           isStorageEdge,
           waypoints: edge.waypoints,
+          manualEdgeRouting: boardView.manualEdgeRouting,
           sourceHandleId: canonicalSourceHandle,
           targetHandleId: canonicalTargetHandle,
           sourceSlotEndpoint: Boolean(sourceHandle && !sourceStorage),
@@ -3324,6 +3340,7 @@ export function FactoryFlow() {
   }, [
     activeFlowResourceKey,
     boardView.fixedEdgeWidth,
+    boardView.manualEdgeRouting,
     anyLineMode,
     speedColorMode,
     layoutVersion,
@@ -5453,9 +5470,7 @@ export function FactoryFlow() {
       activelyDraggedNodeIds.add(dragged.id);
     }
     draggedNodeSetEpoch += 1;
-    // Annotations are ink, not furniture: wires pass straight through them,
-    // so a drag moving ONLY notes and boxes cannot change any route and must
-    // not spend a single mid-drag solve. Decided once at grab time.
+
     dragMovesObstaclesRef.current = [node, ...draggedNodes].some(
       (dragged) => dragged.type !== "annotationNode",
     );
@@ -5580,9 +5595,8 @@ export function FactoryFlow() {
       }
       dragPassengersRef.current = passengers;
     }
-    // A fresh drag's first cell change solves immediately; the throttle only
-    // paces the changes after it.
-    lastLiveDragSolveAtRef.current = 0;
+    // Pathfinding waits until the drag ends; this flag switches connected
+    // edges to their lightweight straight preview.
     draggingNodeRef.current = true;
     // The card-over-wires layering during the drag is pure CSS: the
     // --dragging board class and the .dragging node rule lift the held card
@@ -5738,19 +5752,20 @@ export function FactoryFlow() {
       // A board's walls never move to swallow a drop that would not fit.
       moveBoardItems(moves);
 
+      const movedObstacles = dragMovesObstaclesRef.current;
       activelyDraggedNodeIds.clear();
       draggedNodeSetEpoch += 1;
       dragConstraintsRef.current = new Map();
       dragPassengersRef.current = new Set();
       draggingNodeRef.current = false;
-      // The drop's own publish below supersedes any trailing live-drag solve.
-      window.clearTimeout(liveDragTrailingTimerRef.current);
+      // The drop is the only point that asks the router to touch moved wires.
+      gridSolveMovedNodeIds = movedObstacles ? new Set(carried) : undefined;
+
       // The geometry-publish effects can't see the drop: React Flow streamed
       // the final position into `flowNodes` during the last drag frame, so
       // their fingerprints won't change again. Republish here (the ref holds
       // the final layout). Moved OBSTACLES also invalidate measurements and
-      // reissue every route; a drag of ink only refreshes the maps.
-      const movedObstacles = dragMovesObstaclesRef.current;
+      // reissue affected routes; a drag of ink only refreshes the maps.
       publishBoardGeometry(movedObstacles);
       if (movedObstacles) {
         setLayoutVersion((version) => version + 1);
@@ -8277,6 +8292,14 @@ const BoardViewMenu = memo(function BoardViewMenu({
       Icon: Minus,
       flip: () => onChange({ fixedEdgeWidth: !view.fixedEdgeWidth }),
     },
+    {
+      id: "manual-edge-routing",
+      on: view.manualEdgeRouting,
+      label: "Manual edge routing",
+      line: "Double-click a wire to add a stop. Drag a stop to steer it.",
+      Icon: MoveUpRight,
+      flip: () => onChange({ manualEdgeRouting: !view.manualEdgeRouting }),
+    },
     // The two motion switches: device taste, so they write to their own store
     // and never travel with a shared plan.
     {
@@ -8952,12 +8975,11 @@ function ResourceEdgeComponent({
         : data?.bundle?.role === "primary"
           ? Math.max(Number(style?.strokeWidth ?? 3.1) + 0.6, 3.7)
           : Number(style?.strokeWidth ?? 3.1);
-  // Mid-drag, an edge whose endpoint node is moving draws its LAST solved
-  // route, never a pointer-chasing guess. On a small board the live-drag solve
-  // refreshes it a few times a second; on a big board it stays the pre-drag
-  // route until the drop re-signs the solve.
-  const shouldUsePreciseRouting =
-    !activelyDraggedNodeIds.has(source) && !activelyDraggedNodeIds.has(target);
+  // Mid-drag, an edge whose endpoint is moving draws a straight preview and
+  // skips endpoint measurement; the routed path updates once on drop.
+  const endpointIsDragging =
+    activelyDraggedNodeIds.has(source) || activelyDraggedNodeIds.has(target);
+  const shouldUsePreciseRouting = !endpointIsDragging;
   const visualSourceCandidates = getSlotEdgeEndpointCandidates({
     nodeId: source,
     handleId: data?.sourceHandleId ?? sourceHandleId,
@@ -8994,22 +9016,29 @@ function ResourceEdgeComponent({
   // Every wire routes individually through the board-wide grid solve; its
   // lane sharing makes a fan-out ride as one ribbon. No rate labels: the port
   // chips carry the numbers.
-  const routedEdge = getDirectEdgePath({
-    edgeId: id,
-    routeIndex: data?.routeIndex ?? 0,
-    sourceNodeId: source,
-    sourceX: visualSource.x,
-    sourceY: visualSource.y,
-    sourcePosition: visualSource.side,
-    targetNodeId: target,
-    targetX: visualTarget.x,
-    targetY: visualTarget.y,
-    targetPosition: visualTarget.side,
-    // Always the solved route (see shouldUsePreciseRouting). The simple-L
-    // fallback inside only covers a brand-new wire the solve has not seen.
-    useSmartRouting: true,
-    strokeWidth: coreStrokeWidth,
-  });
+  const routedEdge = endpointIsDragging
+    ? buildRoutedEdgePath(
+        compactPolylinePoints([
+          { x: visualSource.x, y: visualSource.y },
+          { x: visualTarget.x, y: visualTarget.y },
+        ]),
+      )
+    : getDirectEdgePath({
+        edgeId: id,
+        routeIndex: data?.routeIndex ?? 0,
+        sourceNodeId: source,
+        sourceX: visualSource.x,
+        sourceY: visualSource.y,
+        sourcePosition: visualSource.side,
+        targetNodeId: target,
+        targetX: visualTarget.x,
+        targetY: visualTarget.y,
+        targetPosition: visualTarget.side,
+        // Always the solved route (see shouldUsePreciseRouting). The simple-L
+        // fallback inside only covers a brand-new wire the solve has not seen.
+        useSmartRouting: true,
+        strokeWidth: coreStrokeWidth,
+      });
   // The route as DRAWN this frame: the router's line once settled, a morph
   // between old and new lines for a beat after a re-solve (a plain polyline;
   // hop bumps land with the final frame). Capped by wire count: a board-wide
@@ -9023,7 +9052,10 @@ function ResourceEdgeComponent({
   const liveRoute = useMotionRoute(
     routedEdge.points,
     routedEdge.path,
-    moveMotion && !routeSourceChanged && publishedGridRouteEdges.length <= 300,
+    moveMotion &&
+      !endpointIsDragging &&
+      !routeSourceChanged &&
+      publishedGridRouteEdges.length <= 300,
   );
   // LIGHTNING. A power wire draws JAGGED: the router's route, zigzagged
   // after the fact so the router, the lanes and the hit-testing all still
@@ -9049,7 +9081,7 @@ function ResourceEdgeComponent({
   })) : [];
   // The dots the user has pinned, or the draft while one is mid-drag. Only
   // the DOT follows the pointer; the wire takes its real route on release.
-  const activeWaypoints = draftWaypoints ?? data?.waypoints;
+  const activeWaypoints = data?.manualEdgeRouting ? draftWaypoints ?? data?.waypoints : undefined;
   // Lights this line (or its whole bundle) plus both endpoint ports; shared
   // by the hover-anywhere line surface below.
   const applyEdgeFlowScope = () => {
@@ -9352,6 +9384,7 @@ function ResourceEdgeComponent({
             );
           }}
           onDoubleClick={(event) => {
+            if (!data?.manualEdgeRouting) return;
             // Double-click the wire: pin a dot here. The wire must pass
             // through it from now on; drag it to steer, double-press it to
             // remove. Inserted in route order so several dots chain sanely.
@@ -9398,6 +9431,7 @@ function ResourceEdgeComponent({
               strokeWidth={2}
               style={{ pointerEvents: "all", cursor: "grab" }}
               onPointerDown={(event) => {
+                if (!data?.manualEdgeRouting) return;
                 event.stopPropagation();
                 const now = Date.now();
                 const lastPress = waypointPressRef.current;

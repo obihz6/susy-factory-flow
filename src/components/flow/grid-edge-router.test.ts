@@ -736,6 +736,50 @@ describe("exits and landings", () => {
 });
 
 describe("straight shots and self loops", () => {
+  it("keeps pinned routes unchanged while solving the other requests", () => {
+    const pinnedRequest = request({
+      edgeId: "pinned",
+      sources: [{ x: 0, y: 0, side: "right" }],
+      targets: [{ x: 240, y: 0, side: "left" }],
+    });
+    const pinnedRoute = solveGridRoutes([], [pinnedRequest]).get("pinned")!;
+    const movingRequest = request({
+      edgeId: "moving",
+      sources: [{ x: 0, y: 200, side: "right" }],
+      targets: [{ x: 240, y: 200, side: "left" }],
+    });
+
+    const solved = solveGridRoutes(
+      [],
+      [movingRequest],
+      undefined,
+      { ...DEFAULT_ROUTER_TUNING, diagonals: false },
+      [{ request: pinnedRequest, route: pinnedRoute }],
+    );
+
+    expect(solved.get("pinned")).toEqual(pinnedRoute);
+    expect(solved.get("moving")?.points).toEqual([
+      { x: 0, y: 200 },
+      { x: 240, y: 200 },
+    ]);
+  });
+
+  it("uses only horizontal and vertical runs with orthogonal board tuning", () => {
+    const route = solveGridRoutes(
+      [],
+      [request({
+        edgeId: "orthogonal",
+        sources: [{ x: 0, y: 0, side: "right" }],
+        targets: [{ x: 240, y: 120, side: "left" }],
+      })],
+      undefined,
+      { ...DEFAULT_ROUTER_TUNING, diagonals: false },
+    ).get("orthogonal")!;
+
+    expect(route.points.length).toBeGreaterThan(2);
+    expect(segments(route.points).every(({ a, b }) => a.x === b.x || a.y === b.y)).toBe(true);
+  });
+
   it("a one-cell diagonal gap uses a visible square elbow", () => {
     const route = solveGridRoutes([], [request({
       edgeId: "short",

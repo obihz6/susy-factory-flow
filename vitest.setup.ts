@@ -19,12 +19,31 @@ type StorageLike = {
 };
 
 function isUsableStorage(value: unknown): value is StorageLike {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as StorageLike).getItem === "function" &&
-    typeof (value as StorageLike).setItem === "function"
-  );
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as StorageLike).getItem !== "function" ||
+    typeof (value as StorageLike).setItem !== "function" ||
+    typeof (value as StorageLike).removeItem !== "function"
+  ) {
+    return false;
+  }
+
+  const storage = value as StorageLike;
+  const probe = `__vitest_storage_probe_${Math.random().toString(36).slice(2)}`;
+  try {
+    storage.setItem(probe, "ok");
+    const usable = storage.getItem(probe) === "ok";
+    storage.removeItem(probe);
+    return usable;
+  } catch {
+    try {
+      storage.removeItem(probe);
+    } catch {
+      // The candidate is unusable; the in-memory replacement handles tests.
+    }
+    return false;
+  }
 }
 
 /** A small Map-backed Storage, standing in for the real thing. */
