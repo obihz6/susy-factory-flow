@@ -115,6 +115,22 @@ describe("findDeathSpirals", () => {
     expect(byNode.get("A")).toBe(byNode.get("C"));
   });
 
+  it("does not call a zero-utilization loop dead when its material balance breaks even", () => {
+    const proj = ring(10);
+    proj.recipes = proj.recipes.map((entry) => ({
+      ...entry,
+      outputs: [...entry.outputs, { kind: "item", id: `byproduct:${entry.id}`, amount: 1 }],
+    }));
+    const result = calculateThroughput(proj);
+    for (const id of ["A", "B", "C", "D"]) {
+      result.nodes[id]!.utilization = 0;
+      result.nodes[id]!.capableUtilization = 0;
+    }
+
+    expect(findDeathSpirals(proj, result).spirals).toHaveLength(0);
+    expect(deriveNodeVerdict(proj, result, "A").kind).not.toBe("dead-loop");
+  });
+
   it("says nothing about a ring that sustains itself", () => {
     // Same four machines, same wiring, but each passes on everything it ate.
     // A surplus ring is a good build and must stay silent.
@@ -155,6 +171,26 @@ describe("findDeathSpirals", () => {
     expect(result.nodes.A!.utilization).toBeCloseTo(1, 4);
     expect(result.nodes.A!.capableUtilization).toBeCloseTo(1, 3);
     expect(findDeathSpirals(proj, result).spirals).toHaveLength(0);
+  });
+
+  it("does not call a break-even self-loop dead", () => {
+    const proj = project({
+      recipes: [
+        recipe(
+          "eater",
+          [{ kind: "item", id: "item:sand", amount: 10 }],
+          [{ kind: "item", id: "item:sand", amount: 10 }],
+        ),
+      ],
+      nodes: [node("M", "eater")],
+      edges: [edge("self", "M", "M", "item:sand")],
+    });
+    const result = calculateThroughput(proj);
+    result.nodes.M!.utilization = 0;
+    result.nodes.M!.capableUtilization = 0;
+
+    expect(findDeathSpirals(proj, result).spirals).toHaveLength(0);
+    expect(deriveNodeVerdict(proj, result, "M").kind).not.toBe("dead-loop");
   });
 
   it("catches a machine wired back into itself", () => {

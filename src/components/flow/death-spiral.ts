@@ -79,6 +79,46 @@ const cache = new WeakMap<
   { result: ThroughputResult | undefined; index: DeathSpiralIndex }
 >();
 
+/** A stopped ring is a dead loop only when its circulating material runs short. */
+function loopLosesMaterial(
+  members: ReadonlySet<string>,
+  project: FactoryProject,
+  result: ThroughputResult,
+): boolean {
+  const totals = new Map<string, { produced: number; consumed: number }>();
+  const add = (key: string, direction: "produced" | "consumed", rate: number) => {
+    if (rate <= RATE_EPSILON) return;
+    const entry = totals.get(key) ?? { produced: 0, consumed: 0 };
+    entry[direction] += rate;
+    totals.set(key, entry);
+  };
+
+  for (const nodeId of members) {
+    const node = result.nodes[nodeId];
+    if (!node) continue;
+    for (const flow of Object.values(node.outputs)) {
+      if (flow.kind !== "power") add(flow.key, "produced", flow.amountPerSecond);
+    }
+    for (const flow of Object.values(node.inputs)) {
+      if (flow.kind !== "power") add(flow.key, "consumed", flow.amountPerSecond);
+    }
+  }
+
+  // Material drawn off the ring by an outside consumer is a loop loss too,
+  // even when every recipe itself returns exactly what it consumes.
+  for (const edge of project.edges) {
+    if (!members.has(edge.source) || members.has(edge.target)) continue;
+    const edgeResult = result.edges[edge.id];
+    const key = makeResourceKey(edge.resourceKind, edge.resourceId);
+    add(key, "consumed", edgeResult?.nameplateDemandPerSecond ?? 0);
+  }
+
+  for (const { produced, consumed } of totals.values()) {
+    if (consumed - produced > Math.max(RATE_EPSILON, consumed * 1e-6)) return true;
+  }
+  return false;
+}
+
 /**
  * Every ring on the board that has converged to a standstill.
  *
@@ -206,7 +246,7 @@ export function findDeathSpirals(
       const capable = nodeResult.capableUtilization ?? 1;
       return nodeResult.utilization <= DEAD_EPSILON && capable <= DEAD_EPSILON;
     });
-    if (!allStarved) {
+    if (!allStarved || !loopLosesMaterial(members, project, result)) {
       continue;
     }
 
