@@ -79,6 +79,7 @@ import {
   boardWindowSize,
   computeBoardLevelView,
   computeOpenBoardRects,
+  isPocketNestingValid,
 } from "@/lib/model/board-windows";
 import {
   getResourceKey,
@@ -627,22 +628,24 @@ interface FactoryStore {
   /** The ruling on that paper; undefined returns it to the default dots. */
   setPocketPattern: (pocketId: string, pattern?: string) => void;
   /**
-   * Place a new board: an open window on the canvas. Items in `memberIds`
-   * (root items covered by the drawn frame) become members without moving
-   * on screen — their positions are re-measured from the frame's corner.
+   * Place a new board: an open window on the canvas or inside one root board.
+   * Items in `memberIds` become direct members without moving on screen.
    * Returns the new board id.
    */
   createBoard: (input: {
+    /** Flow-space frame corner; converted to the parent board's coordinates when nested. */
     position: { x: number; y: number };
     size?: { width: number; height: number };
     name?: string;
+    /** Direct members of `parentPocketId` covered by the drawn frame. */
     memberIds?: string[];
+    /** An open root board when drawing a one-level child board. */
+    parentPocketId?: string;
   }) => string | undefined;
   /**
-   * Open a collapsed board. Members of a board that has never stood open
-   * (a legacy pocket, whose coordinates are its own space) are rebased to fit
-   * inside the frame, and hand-pinned waypoints on wires touching them are
-   * dropped: they steered through a space the wires no longer travel.
+   * Open a collapsed board. A fitted board keeps its saved member positions;
+   * only a legacy board with no frame size is rebased on its first open.
+   * Hand-pinned waypoints on affected wires are dropped after that rebase.
    */
   expandPocket: (pocketId: string) => void;
   /**
@@ -3096,10 +3099,17 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
           if (!move) {
             return item;
           }
+          const requestedParent = move.owner?.pocketId;
           const nextParent =
-            move.owner && !wouldLoop(item.id, move.owner.pocketId)
-              ? move.owner.pocketId
+            move.owner && !wouldLoop(item.id, requestedParent)
+              ? requestedParent
               : item.parentPocketId;
+          if (
+            nextParent !== item.parentPocketId &&
+            !isPocketNestingValid(currentPockets, item.id, nextParent)
+          ) {
+            return item;
+          }
           const nextPosition = move.position;
           if (
             nextPosition.x === item.position.x &&
@@ -3867,10 +3877,30 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
       return withProjectHistory(state, { project });
     });
   },
-  createBoard: ({ position, size, name, memberIds }) => {
+  createBoard: ({ position, size, name, memberIds, parentPocketId }) => {
     let createdBoardId: string | undefined;
     set((state) => {
+      const currentPockets = state.project.pockets ?? [];
+      if (parentPocketId !== undefined) {
+        const parent = currentPockets.find((entry) => entry.id === parentPocketId);
+        if (!parent?.expanded || !isPocketNestingValid(currentPockets, undefined, parentPocketId)) {
+          return state;
+        }
+      }
+      const frameOrigins = new Map(
+        computeOpenBoardRects(computeBoardLevelView(state.project).openBoards).map(
+          (rect) => [rect.id, rect] as const,
+        ),
+      );
+      const parentOrigin = parentPocketId ? frameOrigins.get(parentPocketId) : undefined;
+      if (parentPocketId && !parentOrigin) {
+        return state;
+      }
       const corner = snapPositionToGrid(position);
+      const localCorner = {
+        x: corner.x - (parentOrigin?.x ?? 0),
+        y: corner.y - (parentOrigin?.y ?? 0),
+      };
       const wanted = size ?? BOARD_WINDOW_DEFAULT_SIZE;
       const frame = {
         width: Math.max(BOARD_WINDOW_MIN_WIDTH, snapSizeUpToGrid(wanted.width)),
@@ -3878,15 +3908,16 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
       };
       const board: FactoryPocket = {
         id: createId("pocket"),
-        name: name?.trim() || `Board ${(state.project.pockets ?? []).length + 1}`,
-        position: corner,
+        name: name?.trim() || `Board ${currentPockets.length + 1}`,
+        parentPocketId,
+        position: localCorner,
         expanded: true,
         // Every board wears a paper, and a new one takes a colour nobody
         // else on the plan is wearing.
         theme: pickBoardPaper(
           // What the others are WEARING, which for a board that has never
           // been papered is the colour its id gives it.
-          (state.project.pockets ?? []).map((entry) => entry.theme ?? paperForBoardId(entry.id)),
+          currentPockets.map((entry) => entry.theme ?? paperForBoardId(entry.id)),
         ),
         size: frame,
       };
@@ -3901,15 +3932,21 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
       >(
         items: T[],
       ): T[] =>
-        items.map((item) =>
-          selected.has(item.id) && item.pocketId === undefined
-            ? {
-                ...item,
-                pocketId: board.id,
-                position: { x: item.position.x - corner.x, y: item.position.y - corner.y },
-              }
-            : item,
-        );
+        items.map((item) => {
+          if (!selected.has(item.id) || item.pocketId !== parentPocketId) {
+            return item;
+          }
+          const ownerOrigin = parentPocketId ? frameOrigins.get(parentPocketId) : undefined;
+          const absolute = {
+            x: item.position.x + (ownerOrigin?.x ?? 0),
+            y: item.position.y + (ownerOrigin?.y ?? 0),
+          };
+          return {
+            ...item,
+            pocketId: board.id,
+            position: { x: absolute.x - corner.x, y: absolute.y - corner.y },
+          };
+        });
 
       const project = touchProject({
         ...state.project,
@@ -3917,18 +3954,21 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
         storages: state.project.storages ? adopt(state.project.storages) : undefined,
         annotations: state.project.annotations ? adopt(state.project.annotations) : undefined,
         pockets: [
-          ...(state.project.pockets ?? []).map((entry) =>
-            selected.has(entry.id) && entry.parentPocketId === undefined
-              ? {
-                  ...entry,
-                  parentPocketId: board.id,
-                  position: {
-                    x: entry.position.x - corner.x,
-                    y: entry.position.y - corner.y,
-                  },
-                }
-              : entry,
-          ),
+          ...currentPockets.map((entry) => {
+            if (
+              parentPocketId !== undefined ||
+              !selected.has(entry.id) ||
+              !isPocketNestingValid(currentPockets, undefined, entry.id)
+            ) {
+              return entry;
+            }
+            const absolute = entry.position;
+            return {
+              ...entry,
+              parentPocketId: board.id,
+              position: { x: absolute.x - corner.x, y: absolute.y - corner.y },
+            };
+          }),
           board,
         ],
       });
@@ -3941,6 +3981,15 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
       const pocket = (state.project.pockets ?? []).find((entry) => entry.id === pocketId);
       if (!pocket || pocket.expanded) {
         return state;
+      }
+      if (pocket.size !== undefined) {
+        const project = touchProject({
+          ...state.project,
+          pockets: (state.project.pockets ?? []).map((entry) =>
+            entry.id === pocketId ? { ...entry, expanded: true } : entry,
+          ),
+        });
+        return withProjectHistory(state, { project });
       }
 
       const memberNodes = state.project.nodes.filter((node) => node.pocketId === pocketId);
@@ -3985,7 +4034,7 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
       // frame fits itself around them; a hand-picked size survives while
       // everything still fits inside it.
       let shiftBy = { x: 0, y: 0 };
-      let frame = pocket.size;
+      let frame: { width: number; height: number } | undefined = pocket.size;
       if (footprints.length > 0) {
         const minX = Math.min(...footprints.map((rect) => rect.x));
         const minY = Math.min(...footprints.map((rect) => rect.y));
@@ -4001,8 +4050,7 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
             maxY - minY + BOARD_WINDOW_TITLE_HEIGHT + BOARD_WINDOW_FIT_PAD * 2,
           ),
         };
-        frame =
-          frame && frame.width >= fitted.width && frame.height >= fitted.height ? frame : fitted;
+        frame = fitted;
       }
       const sized = frame ?? BOARD_WINDOW_DEFAULT_SIZE;
       const clamped = {

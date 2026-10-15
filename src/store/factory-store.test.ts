@@ -4343,6 +4343,51 @@ describe("boards (pockets standing open)", () => {
     expect(project.edges).toEqual(before.edges);
   });
 
+  it("draws sibling child boards around separate machines inside their parent", () => {
+    const base = useFactoryStore.getState().project;
+    useFactoryStore.getState().setProject({
+      ...base,
+      nodes: base.nodes.map((node) =>
+        node.id === "alpha"
+          ? { ...node, position: { x: 20, y: 100 } }
+          : node.id === "beta"
+            ? { ...node, position: { x: 500, y: 100 } }
+            : node,
+      ),
+    });
+    const parentId = useFactoryStore.getState().createBoard({
+      position: { x: 0, y: 0 },
+      size: { width: 1000, height: 800 },
+      memberIds: ["alpha", "beta"],
+    }) as string;
+    const childAId = useFactoryStore.getState().createBoard({
+      position: { x: 0, y: 60 },
+      size: { width: 420, height: 360 },
+      memberIds: ["alpha"],
+      parentPocketId: parentId,
+    }) as string;
+    const childBId = useFactoryStore.getState().createBoard({
+      position: { x: 480, y: 60 },
+      size: { width: 420, height: 360 },
+      memberIds: ["beta"],
+      parentPocketId: parentId,
+    }) as string;
+    const project = useFactoryStore.getState().project;
+
+    expect(project.pockets?.find((pocket) => pocket.id === childAId)).toEqual(
+      expect.objectContaining({ parentPocketId: parentId, position: { x: 0, y: 60 } }),
+    );
+    expect(project.pockets?.find((pocket) => pocket.id === childBId)).toEqual(
+      expect.objectContaining({ parentPocketId: parentId, position: { x: 480, y: 60 } }),
+    );
+    expect(project.nodes.find((node) => node.id === "alpha")).toEqual(
+      expect.objectContaining({ pocketId: childAId, position: { x: 20, y: 40 } }),
+    );
+    expect(project.nodes.find((node) => node.id === "beta")).toEqual(
+      expect.objectContaining({ pocketId: childBId, position: { x: 20, y: 40 } }),
+    );
+  });
+
   it("opens a legacy pocket as a board, fitting the frame around its members", () => {
     const pocketId = seedLegacyPocket(["alpha", "tank"]);
     useFactoryStore.getState().expandPocket(pocketId);
@@ -4400,6 +4445,42 @@ describe("boards (pockets standing open)", () => {
     expect(reopened.pockets?.find((pocket) => pocket.id === pocketId)?.size).toEqual(openedSize);
   });
 
+  it("keeps child boards in place and preserves their individual state when a parent folds", () => {
+    const parentId = useFactoryStore.getState().createBoard({
+      position: { x: 100, y: 100 },
+      size: { width: 1000, height: 800 },
+    }) as string;
+    const openChildId = useFactoryStore.getState().createBoard({
+      position: { x: 200, y: 240 },
+      size: { width: 400, height: 280 },
+      parentPocketId: parentId,
+    }) as string;
+    const foldedChildId = useFactoryStore.getState().createBoard({
+      position: { x: 620, y: 240 },
+      size: { width: 300, height: 280 },
+      parentPocketId: parentId,
+    }) as string;
+    useFactoryStore.getState().minimizePocket(foldedChildId);
+    const beforeFold = useFactoryStore.getState().project;
+    const childPositions = beforeFold.pockets
+      ?.filter((pocket) => pocket.parentPocketId === parentId)
+      .map((pocket) => [pocket.id, pocket.position]);
+
+    useFactoryStore.getState().minimizePocket(parentId);
+    expect(useFactoryStore.getState().project.pockets?.find((pocket) => pocket.id === openChildId)?.expanded).toBe(true);
+    expect(useFactoryStore.getState().project.pockets?.find((pocket) => pocket.id === foldedChildId)?.expanded).toBe(false);
+    useFactoryStore.getState().expandPocket(parentId);
+
+    const reopened = useFactoryStore.getState().project;
+    expect(
+      reopened.pockets
+        ?.filter((pocket) => pocket.parentPocketId === parentId)
+        .map((pocket) => [pocket.id, pocket.position]),
+    ).toEqual(childPositions);
+    expect(reopened.pockets?.find((pocket) => pocket.id === openChildId)?.expanded).toBe(true);
+    expect(reopened.pockets?.find((pocket) => pocket.id === foldedChildId)?.expanded).toBe(false);
+  });
+
   it("re-homes a dropped card through moveBoardItems and never resizes the board", () => {
     const boardId = useFactoryStore.getState().createBoard({
       position: { x: 600, y: 200 },
@@ -4427,6 +4508,21 @@ describe("boards (pockets standing open)", () => {
     project = useFactoryStore.getState().project;
     expect(project.nodes.find((node) => node.id === "beta")?.pocketId).toBeUndefined();
     expect(project.nodes.find((node) => node.id === "beta")?.position).toEqual({ x: 300, y: 0 });
+  });
+
+  it("refuses board nesting deeper than one level", () => {
+    const rootId = useFactoryStore.getState().createBoard({ position: { x: 0, y: 0 } }) as string;
+    const childId = useFactoryStore.getState().createBoard({
+      position: { x: 40, y: 60 },
+      parentPocketId: rootId,
+    }) as string;
+    const grandchildId = useFactoryStore.getState().createBoard({
+      position: { x: 60, y: 80 },
+      parentPocketId: childId,
+    });
+
+    expect(grandchildId).toBeUndefined();
+    expect(useFactoryStore.getState().project.pockets).toHaveLength(2);
   });
 
   it("refuses to make a board its own descendant", () => {

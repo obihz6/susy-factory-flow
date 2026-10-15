@@ -11,6 +11,7 @@ import { resynthesizePowerRecipes } from "@/lib/power/power-recipe";
 import { snapPositionToGrid, snapSizeUpToGrid } from "@/lib/board-grid";
 import { sectionNodeView, splitSectionHandleId } from "./shared-machine";
 import { repairWiredInputOverrides } from "./edge-input-overrides";
+import { isPocketNestingValid } from "./board-windows";
 
 /**
  * Everything a project must go through on its way in, whether it arrives from
@@ -342,6 +343,9 @@ function repairPocketReferences(project: FactoryProject): FactoryProject {
       }
       seen.add(parentId);
       parentId = pockets.find((entry) => entry.id === parentId)?.parentPocketId;
+    }
+    if (!isPocketNestingValid(pockets, undefined, pocket.parentPocketId)) {
+      return { ...pocket, parentPocketId: undefined };
     }
     return pocket;
   });

@@ -4,6 +4,8 @@ import {
   collectPocketDescendantIds,
   computeBoardLevelView,
   computeOpenBoardRects,
+  isPocketNestingValid,
+  pickBoardDrawParent,
   pickBoardOwnerFor,
 } from "./board-windows";
 
@@ -62,6 +64,18 @@ describe("computeBoardLevelView", () => {
     expect(view.collapsedBoards.map((pocket) => pocket.id)).toEqual(["closed"]);
   });
 
+  it("shows sibling child boards independently when their parent is open", () => {
+    const pockets = [
+      makePocket("parent", { expanded: true }),
+      makePocket("open-child", { parentPocketId: "parent", expanded: true }),
+      makePocket("closed-child", { parentPocketId: "parent" }),
+    ];
+    const view = computeBoardLevelView({ nodes: [], pockets });
+
+    expect(view.openBoards.map((pocket) => pocket.id)).toEqual(["parent", "open-child"]);
+    expect(view.collapsedBoards.map((pocket) => pocket.id)).toEqual(["closed-child"]);
+  });
+
   it("a collapsed ancestor hides its open descendants entirely", () => {
     const pockets = [
       makePocket("shut"),
@@ -95,6 +109,38 @@ describe("computeBoardLevelView", () => {
     const view = computeBoardLevelView({ nodes: [makeNode("x", "a")], pockets });
     expect(view.representativeOf("x")).toBeUndefined();
     expect(view.openBoards).toHaveLength(0);
+  });
+});
+
+describe("pickBoardDrawParent", () => {
+  const frames = [
+    { id: "root", depth: 1, x: 0, y: 0, width: 1000, height: 800 },
+    { id: "child", depth: 2, x: 100, y: 100, width: 400, height: 300 },
+  ];
+
+  it("assigns a fully contained draw to the root parent, but rejects child-of-child draws", () => {
+    expect(pickBoardDrawParent(frames, { x: 500, y: 200, width: 300, height: 200 })).toEqual({
+      allowed: true,
+      parentPocketId: "root",
+    });
+    expect(pickBoardDrawParent(frames, { x: 140, y: 140, width: 200, height: 160 })).toEqual({
+      allowed: false,
+    });
+    expect(pickBoardDrawParent(frames, { x: 1100, y: 100, width: 200, height: 160 })).toEqual({
+      allowed: true,
+    });
+  });
+});
+
+describe("isPocketNestingValid", () => {
+  it("allows sibling boards under one root and refuses deeper or child-owning parents", () => {
+    const root = makePocket("root", { expanded: true });
+    const child = makePocket("child", { parentPocketId: "root" });
+    expect(isPocketNestingValid([root], undefined, root.id)).toBe(true);
+    expect(isPocketNestingValid([root, child], undefined, root.id)).toBe(true);
+    expect(isPocketNestingValid([root, child], undefined, child.id)).toBe(false);
+    expect(isPocketNestingValid([root, child], root.id, child.id)).toBe(false);
+    expect(isPocketNestingValid([root, child], child.id, undefined)).toBe(true);
   });
 });
 

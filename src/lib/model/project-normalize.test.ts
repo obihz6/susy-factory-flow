@@ -84,6 +84,23 @@ function createCrossFormProject(): FactoryProject {
   } as unknown as FactoryProject;
 }
 
+describe("repairing nested board references on load", () => {
+  it("keeps sibling children and promotes deeper descendants to the root", () => {
+    const project = createCrossFormProject();
+    project.pockets = [
+      { id: "parent", name: "Parent", position: { x: 0, y: 0 } },
+      { id: "child-a", name: "Child A", parentPocketId: "parent", position: { x: 40, y: 60 } },
+      { id: "child-b", name: "Child B", parentPocketId: "parent", position: { x: 500, y: 60 } },
+      { id: "grandchild", name: "Grandchild", parentPocketId: "child-a", position: { x: 20, y: 20 } },
+    ];
+
+    const normalized = normalizeLoadedProject(project);
+    expect(normalized.pockets?.find((pocket) => pocket.id === "child-a")?.parentPocketId).toBe("parent");
+    expect(normalized.pockets?.find((pocket) => pocket.id === "child-b")?.parentPocketId).toBe("parent");
+    expect(normalized.pockets?.find((pocket) => pocket.id === "grandchild")?.parentPocketId).toBeUndefined();
+  });
+});
+
 describe("dropping cross-form connections on load", () => {
   it("drops a wire that crosses a cell and its fluid, and keeps the honest one", () => {
     const normalized = normalizeLoadedProject(createCrossFormProject());

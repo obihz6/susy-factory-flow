@@ -100,6 +100,9 @@ rendered_icon_dir="$(realpath -m "$jvm_export_root/rendered-icons")"
 
 exec > >(tee -a "$runner_log") 2>&1
 
+node "$repo_root/tools/dataset-pipeline/scripts/susy/export-run-state.mjs" \
+  "$SUSY_RAW_EXPORT_DIR" "$runtime_log" "$SUSY_RAW_EXPORT_DIR/susy-runtime.err.log" \
+  "$jvm_export_root" "$SUSY_INSTANCE_DIR/recipedump.json"
 echo "SUSY export runner started at $(date -u --iso-8601=seconds)"
 echo "Instance: $SUSY_INSTANCE_DIR"
 echo "Dataset: $SUSY_DATASET_VERSION_ID ($SUSY_DATASET_VERSION_LABEL)"

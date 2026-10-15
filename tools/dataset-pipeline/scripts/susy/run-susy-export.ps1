@@ -121,12 +121,15 @@ if (Test-Path -LiteralPath $PreviousClientPidFile) {
   Remove-Item -LiteralPath $PreviousClientPidFile -Force -ErrorAction SilentlyContinue
 }
 
-# Never accept a dump or icon map from an earlier run as this run's result.
-Remove-Item -LiteralPath $RecipedumpPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $OracleGameDumpPath -Force -ErrorAction SilentlyContinue
-if (Test-Path -LiteralPath $RenderedIconDir) {
-  Remove-Item -LiteralPath $RenderedIconDir -Recurse -Force -ErrorAction SilentlyContinue
-}
+# Never accept a dump, icon map, or runtime log from an earlier run as this run's result.
+Invoke-NodeStep @(
+  (Join-Path $PSScriptRoot "export-run-state.mjs"),
+  $RawExportDir,
+  $RuntimeLog,
+  $RuntimeErrLog,
+  $RawExportDir,
+  $OracleGameDumpPath
+)
 New-Item -ItemType Directory -Force -Path $RenderedIconDir | Out-Null
 
 $startedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss+00:00")

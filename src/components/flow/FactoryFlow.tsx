@@ -384,6 +384,8 @@ import {
   collectPocketDescendantIds,
   computeBoardLevelView,
   computeOpenBoardRects,
+  isPocketNestingValid,
+  pickBoardDrawParent,
   boardBodyRect,
   pickBoardOwnerFor,
 } from "@/lib/model/board-windows";
@@ -5822,8 +5824,9 @@ export function FactoryFlow() {
       };
 
       if (tool === "board") {
-        // Drawn like a box, lands as an open board. Root cards whose centre
-        // the frame's body covers become members where they stand.
+        // Drawn like a box, lands as an open board. Its parent is the root
+        // board whose floor contains the whole drawn frame; partial overlaps
+        // stay at root rather than adopting only some of the frame.
         const isClick = width < 12 && height < 12;
         const position = snapPositionToGrid(isClick ? draft.start : corner);
         const size = isClick
@@ -5833,6 +5836,17 @@ export function FactoryFlow() {
               height: Math.max(BOARD_WINDOW_MIN_HEIGHT, snapSizeUpToGrid(height)),
             };
         const state = useFactoryStore.getState();
+        const openFrames = computeOpenBoardRects(computeBoardLevelView(state.project).openBoards);
+        const drawParent = pickBoardDrawParent(openFrames, {
+          x: position.x,
+          y: position.y,
+          width: size.width,
+          height: size.height,
+        });
+        if (!drawParent.allowed) {
+          return;
+        }
+        const parentPocketId = drawParent.parentPocketId;
         const body = {
           left: position.x,
           top: position.y + BOARD_WINDOW_TITLE_HEIGHT,
@@ -5855,19 +5869,24 @@ export function FactoryFlow() {
         };
         const memberIds = [
           ...state.project.nodes
-            .filter((node) => node.pocketId === undefined && covers(node.id))
+            .filter((node) => node.pocketId === parentPocketId && covers(node.id))
             .map((node) => node.id),
           ...(state.project.storages ?? [])
-            .filter((storage) => storage.pocketId === undefined && covers(storage.id))
+            .filter((storage) => storage.pocketId === parentPocketId && covers(storage.id))
             .map((storage) => storage.id),
           ...(state.project.annotations ?? [])
-            .filter((annotation) => annotation.pocketId === undefined && covers(annotation.id))
+            .filter((annotation) => annotation.pocketId === parentPocketId && covers(annotation.id))
             .map((annotation) => annotation.id),
-          ...(state.project.pockets ?? [])
-            .filter((pocket) => pocket.parentPocketId === undefined && covers(pocket.id))
+          ...(parentPocketId === undefined ? state.project.pockets ?? [] : [])
+            .filter(
+              (pocket) =>
+                pocket.parentPocketId === undefined &&
+                isPocketNestingValid(state.project.pockets ?? [], undefined, pocket.id) &&
+                covers(pocket.id),
+            )
             .map((pocket) => pocket.id),
         ];
-        createBoard({ position, size, memberIds });
+        createBoard({ position, size, memberIds, parentPocketId });
         return;
       }
 

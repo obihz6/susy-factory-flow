@@ -24,6 +24,8 @@ export interface BoardLevelInput {
   pockets?: FactoryPocket[];
 }
 
+export const MAX_BOARD_NESTING = 1;
+
 export interface BoardLevelView {
   /**
    * Whether a board's CONTENTS are in view: the root always is, and a board
@@ -122,6 +124,34 @@ function boardDepth(pocketById: Map<string, FactoryPocket>, pocket: FactoryPocke
   return depth;
 }
 
+/**
+ * Whether a board can have `parentPocketId` without creating deeper nesting.
+ * A parent must be a root board, and a board that already has children must
+ * stay at the root so those children remain at the one allowed nested level.
+ */
+export function isPocketNestingValid(
+  pockets: FactoryPocket[],
+  pocketId: string | undefined,
+  parentPocketId: string | undefined,
+): boolean {
+  if (parentPocketId === undefined) {
+    return true;
+  }
+  if (pocketId !== undefined && pockets.some((pocket) => pocket.parentPocketId === pocketId)) {
+    return false;
+  }
+  const parent = pockets.find((pocket) => pocket.id === parentPocketId);
+  const pocketById = new Map(pockets.map((pocket) => [pocket.id, pocket]));
+  if (
+    !parent ||
+    boardDepth(pocketById, parent) + 1 > MAX_BOARD_NESTING ||
+    parent.id === pocketId
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** An open board's frame in flow space. */
 export interface OpenBoardRect {
   id: string;
@@ -173,6 +203,35 @@ export function boardBodyRect(rect: OpenBoardRect): {
     width: rect.width,
     height: rect.height - BOARD_WINDOW_TITLE_HEIGHT,
   };
+}
+
+/**
+ * Where a drawn board belongs. A new child may sit inside a root board, but
+ * drawing inside an existing child is rejected rather than creating a level-2
+ * board that appears outside its intended parent.
+ */
+export function pickBoardDrawParent(
+  rects: OpenBoardRect[],
+  frame: { x: number; y: number; width: number; height: number },
+): { allowed: boolean; parentPocketId?: string } {
+  let winner: OpenBoardRect | undefined;
+  for (const rect of rects) {
+    const body = boardBodyRect(rect);
+    const inside =
+      frame.x >= body.x - 1e-6 &&
+      frame.y >= body.y - 1e-6 &&
+      frame.x + frame.width <= body.x + body.width + 1e-6 &&
+      frame.y + frame.height <= body.y + body.height + 1e-6;
+    if (inside && (!winner || rect.depth > winner.depth)) {
+      winner = rect;
+    }
+  }
+  if (!winner) {
+    return { allowed: true };
+  }
+  return winner.depth === 1
+    ? { allowed: true, parentPocketId: winner.id }
+    : { allowed: false };
 }
 
 /**
