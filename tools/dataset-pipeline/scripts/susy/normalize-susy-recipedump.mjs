@@ -556,7 +556,8 @@ for (const entry of Array.isArray(raw.smelting) ? raw.smelting : []) {
   recipes.push(recipe);
 }
 
-// Crafting table: instant manual recipes (the app treats 0-duration as instant).
+// Crafting table: instant manual recipes. The dataset contract requires a
+// positive tick count, so the instant step is expressed at the minimum.
 let craftingCount = 0;
 for (const entry of Array.isArray(raw.crafting) ? raw.crafting : []) {
   const output = entry.output && stackToResource(entry.output);
@@ -600,7 +601,7 @@ for (const entry of Array.isArray(raw.crafting) ? raw.crafting : []) {
     name: output.displayName || output.id,
     machineType: "Crafting Table",
     minimumTier: "ULV",
-    durationTicks: 0,
+    durationTicks: Math.max(1, Number(entry.duration) || 1),
     eut: 0,
     inputs,
     outputs: [

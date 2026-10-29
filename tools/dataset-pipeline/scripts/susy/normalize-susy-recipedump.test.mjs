@@ -119,7 +119,7 @@ describe("normalize-susy-recipedump", () => {
 
   it("exports crafting recipes as instant with alternatives", () => {
     const craft = dataset.recipes.find((r) => r.machineType === "Crafting Table");
-    expect(craft.durationTicks).toBe(0);
+    expect(craft.durationTicks).toBe(1);
     expect(craft.inputs[0].id).toBe("minecraft:iron_nugget");
     expect(craft.inputs[0].alternatives[0].id).toBe("susy:iron_nugget_hot");
   });
