@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { datasetCacheHeaders } from "@/lib/server/dataset-cache-headers";
+import { datasetErrorResponse } from "@/lib/server/dataset-errors";
 import { queryDatasetRecipes } from "@/lib/server/dataset-query";
 import {
   MAX_RECIPE_QUERY_CLAUSES,
@@ -46,10 +47,7 @@ export async function GET(
       headers: datasetCacheHeaders(request),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Recipe query failed." },
-      { status: 500 },
-    );
+    return datasetErrorResponse(error, "Recipe query failed.");
   }
 }
 

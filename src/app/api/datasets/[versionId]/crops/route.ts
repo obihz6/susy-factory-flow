@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { datasetCacheHeaders } from "@/lib/server/dataset-cache-headers";
+import { datasetErrorResponse } from "@/lib/server/dataset-errors";
 import { listDatasetCropFarmRecipes } from "@/lib/server/dataset-query";
 
 export const runtime = "nodejs";
@@ -16,9 +17,6 @@ export async function GET(
       headers: datasetCacheHeaders(request),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Crop query failed." },
-      { status: 500 },
-    );
+    return datasetErrorResponse(error, "Crop query failed.");
   }
 }

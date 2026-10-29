@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { datasetCacheHeaders } from "@/lib/server/dataset-cache-headers";
+import { datasetErrorResponse } from "@/lib/server/dataset-errors";
 import { queryDatasetResources } from "@/lib/server/dataset-query";
 import { getResourcePopularity } from "@/lib/server/resource-popularity";
 
@@ -47,10 +48,7 @@ export async function GET(
           : datasetCacheHeaders(request),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Resource query failed." },
-      { status: 500 },
-    );
+    return datasetErrorResponse(error, "Resource query failed.");
   }
 }
 

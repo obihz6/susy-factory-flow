@@ -11,6 +11,7 @@ import type {
   RecipeMapIconEntry,
   RecipeSummary,
 } from "@/lib/datasets/types";
+import { DatasetNotFoundError } from "@/lib/server/dataset-errors";
 import type {
   MachineTier,
   Recipe,
@@ -1712,8 +1713,11 @@ async function loadManifest(): Promise<DatasetManifest> {
 async function loadCatalog(versionId: string): Promise<LoadedRecipeIndex> {
   const manifest = await loadManifest();
   const version = manifest.versions.find((entry) => entry.id === versionId);
-  if (!version?.resourceIndexPath) {
-    throw new Error(`Dataset ${versionId} has no server resource index.`);
+  if (!version) {
+    throw new DatasetNotFoundError(`Dataset ${versionId} was not found in the dataset manifest.`);
+  }
+  if (!version.resourceIndexPath) {
+    throw new DatasetNotFoundError(`Dataset ${versionId} has no server resource index.`);
   }
 
   const resourceIndexPath = version.resourceIndexPath;
@@ -1759,7 +1763,7 @@ async function loadRecipeIndex(versionId: string): Promise<LoadedRecipeIndex> {
 
   const promise = (async () => {
     if (!catalog.version.recipeIndexPath) {
-      throw new Error(`Dataset ${versionId} has no recipe index.`);
+      throw new DatasetNotFoundError(`Dataset ${versionId} has no recipe index.`);
     }
     const recipeIndex = await readGzipJson<RecipeIndexFile>(
       publicPathToFile(catalog.version.recipeIndexPath),
@@ -1806,7 +1810,7 @@ async function loadRecipeLookupIndex(version: DatasetVersion): Promise<LoadedRec
 
   const promise = (async () => {
     if (!version.recipeLookupIndexPath) {
-      throw new Error(`Dataset ${version.id} has no recipe lookup index.`);
+      throw new DatasetNotFoundError(`Dataset ${version.id} has no recipe lookup index.`);
     }
     const payload = await readGzipJson<RecipeLookupIndexFile>(
       publicPathToFile(version.recipeLookupIndexPath),

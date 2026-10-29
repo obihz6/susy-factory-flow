@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { datasetErrorResponse } from "@/lib/server/dataset-errors";
 import { type DatasetRecipeRef, resolveDatasetRecipeRefs } from "@/lib/server/dataset-query";
 
 export const runtime = "nodejs";
@@ -20,10 +21,7 @@ export async function POST(
       },
     );
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Recipe resolution failed." },
-      { status: 500 },
-    );
+    return datasetErrorResponse(error, "Recipe resolution failed.");
   }
 }
 

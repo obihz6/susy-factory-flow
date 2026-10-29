@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { queryDatasetRecipes } from "@/lib/server/dataset-query";
+import { DatasetNotFoundError } from "@/lib/server/dataset-errors";
 import { GET } from "./route";
 
 vi.mock("@/lib/server/dataset-query", () => ({
@@ -15,6 +16,20 @@ vi.mock("@/lib/server/dataset-query", () => ({
 }));
 
 describe("recipe dataset API route", () => {
+  it("returns 404 for an unknown dataset version instead of a server error", async () => {
+    vi.mocked(queryDatasetRecipes).mockRejectedValueOnce(
+      new DatasetNotFoundError("Dataset stable does not exist."),
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/datasets/stable/recipes"),
+      { params: Promise.resolve({ versionId: "stable" }) },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Dataset stable does not exist." });
+  });
+
   it("accepts aspect resources for recipe lookups", async () => {
     await GET(
       new Request(
