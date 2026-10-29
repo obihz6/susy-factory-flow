@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { writeFileAtomic } from "../lib/atomic-write.mjs";
 
 const instanceRoot = process.argv[2];
 const outputPath = process.argv[3];
@@ -52,8 +53,7 @@ const fingerprint = {
   roots,
 };
 
-await fs.mkdir(path.dirname(outputPath), { recursive: true });
-await fs.writeFile(outputPath, `${JSON.stringify(fingerprint, null, 2)}\n`);
+await writeFileAtomic(outputPath, `${JSON.stringify(fingerprint, null, 2)}\n`);
 console.log(`Wrote GTNH asset fingerprint ${fingerprint.hash} from ${files.length} file(s).`);
 
 async function collectFiles(rootPath, rootName) {

@@ -6,6 +6,7 @@ import { forEachResource, readDataset, writeDataset } from "./icon-utils.mjs";
 const currentDatasetPath = process.argv[2];
 const previousDatasetDir = process.argv[3];
 const currentDatasetDir = process.argv[4];
+const datasetsUrlRoot = process.env.DATASETS_URL_ROOT ?? "/datasets/susy";
 
 if (!currentDatasetPath || !previousDatasetDir || !currentDatasetDir) {
   throw new Error(
@@ -85,10 +86,11 @@ function reusableIcon(resource, previousVersionId, currentVersionId) {
 }
 
 function rewriteDatasetPath(value, previousVersionId, currentVersionId) {
-  if (typeof value !== "string" || !value.includes(`/datasets/susy/${previousVersionId}/`)) {
+  const prefix = `${datasetsUrlRoot}/${previousVersionId}/`;
+  if (typeof value !== "string" || !value.includes(prefix)) {
     return undefined;
   }
-  return value.replace(`/datasets/susy/${previousVersionId}/`, `/datasets/susy/${currentVersionId}/`);
+  return value.replace(prefix, `${datasetsUrlRoot}/${currentVersionId}/`);
 }
 
 async function copyTextureDir(name) {
