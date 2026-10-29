@@ -1,8 +1,4 @@
-import fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
-import readline from "node:readline";
-import { gunzipSync, gzipSync } from "node:zlib";
-import { writeDatasetJson } from "./dataset-json-writer.mjs";
+import { readDatasetFile, writeDatasetFile } from "../lib/line-dataset.mjs";
 
 const datasetPath = process.argv[2];
 
@@ -10,108 +6,12 @@ if (!datasetPath) {
   throw new Error("Usage: build-resource-index.mjs <recipes.json|recipes.json.gz>");
 }
 
-const dataset = await readDataset(datasetPath);
+const dataset = await readDatasetFile(datasetPath);
 dataset.resourceIndex = buildResourceIndex(dataset);
-await writeDataset(datasetPath, dataset);
+await writeDatasetFile(datasetPath, dataset);
 
 console.log(`Wrote resourceIndex with ${dataset.resourceIndex.length} resources.`);
 
-async function readDataset(filePath) {
-  if (!filePath.endsWith(".gz")) {
-    return readLineDelimitedDataset(filePath);
-  }
-
-  const data = await fs.readFile(filePath);
-  const source = gunzipSync(data).toString("utf8");
-  return JSON.parse(source);
-}
-
-async function readLineDelimitedDataset(filePath) {
-  const dataset = {};
-  const wantedArrays = new Set([
-    "resources",
-    "recipes",
-    "recipeMaps",
-    "recipeMapIcons",
-    "machineHandlerIcons",
-    "plantSourceKeys",
-  ]);
-  let currentArrayKey;
-  let skippingArray = false;
-  let skippingObject = false;
-
-  const lines = readline.createInterface({
-    input: createReadStream(filePath, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-
-  for await (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line === "{" || line === "}") {
-      continue;
-    }
-
-    if (currentArrayKey || skippingArray) {
-      if (line === "]," || line === "]") {
-        currentArrayKey = undefined;
-        skippingArray = false;
-        continue;
-      }
-
-      if (currentArrayKey) {
-        dataset[currentArrayKey].push(parseJsonLineValue(line));
-      }
-      continue;
-    }
-
-    if (skippingObject) {
-      if (line === "}," || line === "}") {
-        skippingObject = false;
-      }
-      continue;
-    }
-
-    const match = /^("(?:(?:\\.)|[^"\\])*"):\s*(.*)$/.exec(line);
-    if (!match) {
-      continue;
-    }
-
-    const key = JSON.parse(match[1]);
-    const value = match[2].replace(/,$/, "");
-    if (value === "[") {
-      if (wantedArrays.has(key)) {
-        dataset[key] = [];
-        currentArrayKey = key;
-      } else {
-        skippingArray = true;
-      }
-      continue;
-    }
-
-    if (value === "{") {
-      skippingObject = true;
-      continue;
-    }
-
-    dataset[key] = JSON.parse(value);
-  }
-
-  return dataset;
-}
-
-function parseJsonLineValue(line) {
-  return JSON.parse(line.replace(/,$/, ""));
-}
-
-async function writeDataset(filePath, dataset) {
-  if (filePath.endsWith(".gz")) {
-    const json = `${JSON.stringify(dataset)}\n`;
-    await fs.writeFile(filePath, gzipSync(json, { level: 9 }));
-    return;
-  }
-
-  await writeDatasetJson(filePath, dataset);
-}
 
 function buildResourceIndex(dataset) {
   const resourcesByKey = new Map(

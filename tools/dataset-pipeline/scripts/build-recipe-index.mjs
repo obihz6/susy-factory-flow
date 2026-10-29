@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { gzipSync } from "node:zlib";
+import { readDatasetFile } from "../lib/line-dataset.mjs";
+import { writeFileAtomic } from "../lib/atomic-write.mjs";
 
 const datasetPath = process.argv[2];
 const datasetOutDir = process.argv[3];
@@ -15,7 +15,7 @@ if (!datasetPath || !datasetOutDir) {
 // made each miss a 55MB parse that blocked every other request for seconds.
 // Compression barely cares (recipes share vocabulary within 250 fine).
 const shardSize = positiveIntEnv("GTNH_RECIPE_SHARD_SIZE", 250);
-const dataset = await readDataset(datasetPath);
+const dataset = await readDatasetFile(datasetPath);
 const versionId = dataset.datasetVersionId;
 const shardDir = path.join(datasetOutDir, "recipes-shards");
 const resourcesByKey = buildResourcesByKey(dataset);
@@ -24,8 +24,14 @@ if (!versionId) {
   throw new Error("Dataset must include datasetVersionId.");
 }
 
-await fs.rm(shardDir, { recursive: true, force: true });
-await fs.mkdir(shardDir, { recursive: true });
+// Stage into a versioned temp dir and only swap shard files in when every
+// shard writes cleanly, so an interrupted run cannot leave the served
+// directory mixing generations.
+const shardStagingDir = path.join(
+  datasetOutDir,
+  `.${"recipes-shards"}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`,
+);
+await fs.mkdir(shardStagingDir, { recursive: true });
 
 const shards = [];
 for (
@@ -45,8 +51,18 @@ for (
     recipes: dataset.recipes.slice(start, end),
   };
 
-  await fs.writeFile(path.join(shardDir, fileName), gzipSync(JSON.stringify(shard), { level: 9 }));
+  await writeFileAtomic(path.join(shardStagingDir, fileName), gzipSync(JSON.stringify(shard), { level: 9 }));
   shards.push({ id: String(shardIndex), path: publicPath, start, end });
+}
+
+// Write the staging shard dir name AFTER all shards exist; swap old dir out
+// only on success so a crash cannot leave zero shards for the old manifest.
+try {
+  await fs.rm(shardDir, { recursive: true, force: true });
+  await fs.rename(shardStagingDir, shardDir);
+} catch (error) {
+  await fs.rm(shardStagingDir, { recursive: true, force: true }).catch(() => undefined);
+  throw error;
 }
 
 const recipeIndex = {
@@ -86,9 +102,9 @@ const resourceCatalog = {
 const resourceIndexPath = path.join(datasetOutDir, "resource-index.json.gz");
 const indexPath = path.join(datasetOutDir, "recipe-index.json.gz");
 const lookupIndexPath = path.join(datasetOutDir, "recipe-lookup-index.json.gz");
-await fs.writeFile(resourceIndexPath, gzipSync(JSON.stringify(resourceCatalog), { level: 9 }));
-await fs.writeFile(indexPath, gzipSync(JSON.stringify(recipeIndex), { level: 9 }));
-await fs.writeFile(lookupIndexPath, gzipSync(JSON.stringify(recipeLookupIndex), { level: 9 }));
+await writeFileAtomic(resourceIndexPath, gzipSync(JSON.stringify(resourceCatalog), { level: 9 }));
+await writeFileAtomic(indexPath, gzipSync(JSON.stringify(recipeIndex), { level: 9 }));
+await writeFileAtomic(lookupIndexPath, gzipSync(JSON.stringify(recipeLookupIndex), { level: 9 }));
 
 console.log(
   `Wrote resource catalog, recipe index with ${recipeIndex.recipes.length} summaries, compact lookup index, and ${shards.length} shard(s).`,
@@ -318,94 +334,6 @@ function compactNei(nei) {
     requiresCleanroom: nei.requiresCleanroom,
     requiresLowGravity: nei.requiresLowGravity,
   });
-}
-
-async function readDataset(filePath) {
-  if (!filePath.endsWith(".gz")) {
-    return readLineDelimitedDataset(filePath);
-  }
-
-  const data = await fs.readFile(filePath);
-  const source = gunzipSync(data).toString("utf8");
-  return JSON.parse(source);
-}
-
-async function readLineDelimitedDataset(filePath) {
-  const dataset = {};
-  const wantedArrays = new Set([
-    "resources",
-    "recipes",
-    "recipeMaps",
-    "recipeMapIcons",
-    "machineHandlerIcons",
-    "resourceIndex",
-    "plantSourceKeys",
-  ]);
-  let currentArrayKey;
-  let skippingArray = false;
-  let skippingObject = false;
-
-  const lines = readline.createInterface({
-    input: createReadStream(filePath, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-
-  for await (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line === "{" || line === "}") {
-      continue;
-    }
-
-    if (currentArrayKey || skippingArray) {
-      if (line === "]," || line === "]") {
-        currentArrayKey = undefined;
-        skippingArray = false;
-        continue;
-      }
-
-      if (currentArrayKey) {
-        dataset[currentArrayKey].push(parseJsonLineValue(line));
-      }
-      continue;
-    }
-
-    if (skippingObject) {
-      if (line === "}," || line === "}") {
-        skippingObject = false;
-      }
-      continue;
-    }
-
-    const match = /^("(?:(?:\\.)|[^"\\])*"):\s*(.*)$/.exec(line);
-    if (!match) {
-      continue;
-    }
-
-    const key = JSON.parse(match[1]);
-    const value = match[2].replace(/,$/, "");
-    if (value === "[") {
-      if (wantedArrays.has(key)) {
-        dataset[key] = [];
-        currentArrayKey = key;
-      } else {
-        skippingArray = true;
-      }
-      continue;
-    }
-
-    if (value === "{") {
-      skippingObject = true;
-      continue;
-    }
-
-    dataset[key] = JSON.parse(value);
-  }
-
-  return dataset;
-}
-
-function parseJsonLineValue(line) {
-  return JSON.parse(line.replace(/,$/, ""));
 }
 
 function toCompactResource(resource) {

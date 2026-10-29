@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { writeFileAtomic } from "../../lib/atomic-write.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(scriptDir, "../../../../");
@@ -40,8 +41,7 @@ export async function readJson(filePath) {
 }
 
 export async function writeJson(filePath, value) {
-  await fsp.mkdir(path.dirname(filePath), { recursive: true });
-  await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  return writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export async function loadConfig(options = {}) {

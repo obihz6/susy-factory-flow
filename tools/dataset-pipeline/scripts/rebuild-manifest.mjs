@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
-import { createReadStream, existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { computeDatasetChecksum } from "./dataset-checksum.mjs";
 import readline from "node:readline";
 import { createGunzip } from "node:zlib";
+import { writeFileAtomic } from "../lib/atomic-write.mjs";
 
 const rootDir = process.env.DATASETS_ROOT ?? process.env.GTNH_DATASETS_ROOT ?? path.join("public", "datasets", "susy");
 // URL prefix under which the dataset files are served. DATASETS_URL_ROOT keeps
@@ -74,7 +75,7 @@ const manifest = {
 };
 
 await fs.mkdir(rootDir, { recursive: true });
-await fs.writeFile(
+await writeFileAtomic(
   path.join(rootDir, "datasets.manifest.json"),
   `${JSON.stringify(manifest, null, 2)}\n`,
 );
@@ -140,6 +141,37 @@ async function readRecipeDatasetMetadata(filePath) {
     lines.close();
     input.destroy();
     fileStream.destroy();
+  }
+
+  for (const key of wantedKeys) {
+    if (dataset[key] === undefined) {
+      // P-14 tail: the reader only accepted the hand-rolled per-line format
+      // (and the one-line compacted rewrite). Accept any JSON shape so a
+      // minified/compact dataset never becomes an unfixable "Missing …" error.
+      return await readDatasetMetadataWhole(filePath, dataset, wantedKeys);
+    }
+  }
+
+  return dataset;
+}
+
+async function readDatasetMetadataWhole(filePath, fallback, wantedKeys) {
+  const source = filePath.endsWith(".gz")
+    ? createReadStream(filePath).pipe(createGunzip())
+    : createReadStream(filePath);
+  const raw = await new Promise((resolve, reject) => {
+    let text = "";
+    source.on("data", (chunk) => (text += chunk.toString("utf8")));
+    source.on("end", () => resolve(text));
+    source.on("error", reject);
+  });
+
+  const dataset = fallback; // keep fallback keys when present; overwrite where whole-parse provides them
+  const whole = JSON.parse(raw);
+  for (const key of wantedKeys) {
+    if (whole[key] !== undefined) {
+      dataset[key] = whole[key];
+    }
   }
 
   for (const key of wantedKeys) {

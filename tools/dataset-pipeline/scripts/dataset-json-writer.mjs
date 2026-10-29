@@ -1,8 +1,16 @@
-import fs from "node:fs/promises";
+import { writeFileAtomic } from "../lib/atomic-write.mjs";
 
+/**
+ * Line-oriented JSON writer for the dataset contract.
+ *
+ * Every top-level property is emitted per line so the line-scanning parsers
+ * in `lib/line-dataset.mjs` and `rebuild-manifest.mjs` can stream large
+ * datasets without JSON-parsing the whole file. The file itself is staged as
+ * a temp file and renamed atomically (P-01): an interrupted step can never
+ * leave a truncated recipes.json at the served path.
+ */
 export async function writeDatasetJson(filePath, dataset) {
-  const handle = await fs.open(filePath, "w");
-  try {
+  return writeFileAtomic(filePath, async (handle) => {
     await handle.write("{\n");
     const entries = Object.entries(dataset);
     for (let index = 0; index < entries.length; index += 1) {
@@ -10,9 +18,7 @@ export async function writeDatasetJson(filePath, dataset) {
       await writeJsonProperty(handle, key, value, index === 0);
     }
     await handle.write("\n}\n");
-  } finally {
-    await handle.close();
-  }
+  });
 }
 
 async function writeJsonProperty(handle, key, value, first = false) {
