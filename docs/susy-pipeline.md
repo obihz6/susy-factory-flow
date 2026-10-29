@@ -1,8 +1,8 @@
 # SUSY Dataset Pipeline
 
-How Supersymmetry recipe data gets from the game into the planner. The GTNH
-equivalent lives in `docs/dataset-pipeline.md`; this page covers only what
-differs.
+How Supersymmetry recipe data gets from the game into the planner. The canonical
+runbook for the full pipeline → package → publish → runtime path lives in
+`docs/dataset-pipeline.md`; this page is the SuSy-specific quick reference.
 
 ## Data sources
 
@@ -173,7 +173,7 @@ when given a `.gz`, rewrites it as one compact line, which breaks that parser.
 So the index builders must run against the plain line-oriented `recipes.json`
 (produced by `dataset-json-writer`), and the gzip step must come last.
 
-## Known gaps vs the GTNH export
+## Known gaps in the SuSy export
 
 - No HEI slot layouts: slot positions are synthesized deterministically.
 - No localized recipe-map names: derived from the unlocalized map key.
@@ -201,6 +201,6 @@ keyed `registry@meta#`). Icon coverage after application: 98.9% of resources.
 
 ## Version detection
 
-`susy/detect-susy-versions.mjs` mirrors the GTNH detector's output contract:
+`susy/detect-susy-versions.mjs` mirrors the version-detector output contract:
 stable channel from pack GitHub releases, daily channel from the `master-ceu`
 branch HEAD. It writes `.pipeline/detected-versions.json`.

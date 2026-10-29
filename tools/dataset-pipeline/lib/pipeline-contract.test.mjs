@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { writeDatasetJson } from "../scripts/dataset-json-writer.mjs";
-import { readDatasetFile } from "./line-dataset.mjs";
 import { parseRecipeDatasetJson, parseDatasetManifestJson } from "../../../src/lib/import-export/dataset-json";
 import { recipeDatasetSchema, datasetManifestSchema } from "../../../src/lib/datasets/schemas";
 import { DatasetJsonError } from "../../../src/lib/import-export/dataset-json";
