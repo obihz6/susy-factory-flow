@@ -3,10 +3,7 @@ export async function register() {
     return;
   }
 
-  if (
-    process.env.SUSY_PREWARM_ON_STARTUP !== "1" &&
-    process.env.GTNH_PREWARM_ON_STARTUP !== "1"
-  ) {
+  if (process.env.SUSY_PREWARM_ON_STARTUP !== "1") {
     return;
   }
 

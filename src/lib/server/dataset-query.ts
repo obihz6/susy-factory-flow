@@ -209,8 +209,8 @@ const pendingPrewarmLoads = new Map<string, Promise<void>>();
 let manifestCache: DatasetManifest | undefined;
 let manifestCacheStamp: string | undefined;
 const gunzipAsync = promisify(gunzip);
-const maxLoadedShardCount = positiveIntEnv("GTNH_MAX_LOADED_RECIPE_SHARDS", 8);
-const maxHydratedRecipeSummaryCount = positiveIntEnv("GTNH_MAX_HYDRATED_RECIPE_SUMMARIES", 8000);
+const maxLoadedShardCount = positiveIntEnv("SUSY_MAX_LOADED_RECIPE_SHARDS", 8);
+const maxHydratedRecipeSummaryCount = positiveIntEnv("SUSY_MAX_HYDRATED_RECIPE_SUMMARIES", 8000);
 
 export async function getDatasetCatalog(versionId: string) {
   const catalog = await loadCatalog(versionId);
@@ -1614,7 +1614,7 @@ export async function prewarmDatasetVersion(
 export async function prewarmLatestDatasetVersions(): Promise<void> {
   const manifest = await loadManifest();
   const versionIds =
-    process.env.GTNH_PREWARM_ALL_DATASETS === "1"
+    process.env.SUSY_PREWARM_ALL_DATASETS === "1"
       ? [
           manifest.latestStableVersion,
           manifest.latestDailyVersion,
@@ -1626,7 +1626,7 @@ export async function prewarmLatestDatasetVersions(): Promise<void> {
           manifest.latestStableVersion ?? manifest.latestDailyVersion ?? manifest.versions[0]?.id,
         ].filter((versionId): versionId is string => Boolean(versionId));
 
-  const includeShards = process.env.GTNH_PREWARM_FULL_DATASETS === "1";
+  const includeShards = process.env.SUSY_PREWARM_FULL_DATASETS === "1";
   for (const versionId of versionIds) {
     await prewarmDatasetVersion(versionId, { includeShards });
   }
@@ -1956,7 +1956,7 @@ async function getRecipeIndexesByRawRecipeId(
 }
 
 async function prewarmRecipeShards(catalog: LoadedRecipeIndex): Promise<void> {
-  const batchSize = Number.parseInt(process.env.GTNH_PREWARM_SHARD_CONCURRENCY ?? "4", 10);
+  const batchSize = Number.parseInt(process.env.SUSY_PREWARM_SHARD_CONCURRENCY ?? "4", 10);
   const concurrency = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 4;
 
   for (let index = 0; index < catalog.shards.length; index += concurrency) {

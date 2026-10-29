@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:icons:browsers": "node tools/browser-tests/icon-sizing.mjs",
-    "datasets:detect": "node tools/dataset-pipeline/scripts/detect-gtnh-versions.mjs",
+    "datasets:detect": "node tools/dataset-pipeline/scripts/susy/detect-susy-versions.mjs",
     "datasets:manifest": "node tools/dataset-pipeline/scripts/rebuild-manifest.mjs",
     "datasets:susy": "node tools/dataset-pipeline/scripts/susy/orchestrator.mjs build",
     "pipeline": "node tools/dataset-pipeline/scripts/susy/orchestrator.mjs build",
