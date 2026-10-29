@@ -185,6 +185,13 @@ async function installMods(java8) {
   const packwizBin = path.join(target, isWindows ? "packwiz.exe" : "packwiz");
   if (fs.existsSync(packwizBin)) {
     if (!isWindows) await fs.promises.chmod(packwizBin, 0o755);
+    // `packwiz refresh` loads the modpack before regenerating the index, and
+    // the pack archive no longer ships index.toml: create an empty one when the
+    // bootstrap target lacks it, then let refresh generate the real index.
+    const indexPath = path.join(target, "index.toml");
+    if (!fs.existsSync(indexPath)) {
+      await fs.promises.writeFile(indexPath, "");
+    }
     run(packwizBin, ["refresh"], { cwd: target });
   } else {
     log("no bundled packwiz binary; hoping the shipped index is valid.");
