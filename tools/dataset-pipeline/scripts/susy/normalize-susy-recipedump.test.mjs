@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { recipeDatasetSchema } from "../../../../src/lib/datasets/schemas";
 
 const scriptPath = fileURLToPath(new URL("./normalize-susy-recipedump.mjs", import.meta.url));
 const fixturePath = fileURLToPath(new URL("./fixture-recipedump.json", import.meta.url));
@@ -107,6 +108,29 @@ describe("normalize-susy-recipedump", () => {
     const ingot = dataset.resources.find((r) => r.id === "minecraft:iron_ingot");
     expect(ingot.oreDictionary).toContain("ingotIron");
     expect(ingot.displayName).toBe("Iron Ingot");
+  });
+
+  it("names every resource and machine handler the way the dataset schema requires", () => {
+    // recipeDatasetSchema rejects handlers without machineType (machineHandlerSchema
+    // extends machineProfileSchema) and resources without displayName. The runtime
+    // derives both from the label/id, so the dataset must state them.
+    for (const resource of dataset.resources) {
+      expect(typeof resource.displayName, resource.id).toBe("string");
+      expect(resource.displayName.length, resource.id).toBeGreaterThan(0);
+    }
+    const handlers = dataset.recipes.flatMap((recipe) => recipe.machineHandlers ?? []);
+    expect(handlers.length).toBeGreaterThan(0);
+    for (const handler of handlers) {
+      expect(handler.machineType, handler.id).toBe(handler.label);
+    }
+  });
+
+  it("produces a dataset that satisfies recipeDatasetSchema", () => {
+    const parsed = recipeDatasetSchema.safeParse(dataset);
+    const issues = parsed.success
+      ? []
+      : parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+    expect(issues.slice(0, 10)).toEqual([]);
   });
 
   it("synthesizes electric-furnace timing for smelting entries", () => {

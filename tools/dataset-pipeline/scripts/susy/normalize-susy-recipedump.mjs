@@ -439,6 +439,11 @@ function familyHandlers(machines) {
     byFamily.set(familyKey, {
       id: familyKey,
       label: prettyMachineName(familyName),
+      // The dataset contract (machineHandlerSchema -> machineProfileSchema)
+      // requires machineType. Runtime already derives it from the label
+      // (normalizeMachineHandler: handler.machineType || label), so emitting
+      // the label here states the value the planner was using anyway.
+      machineType: prettyMachineName(familyName),
       kind: machine.isController ? "multiblock" : "single",
       // Representative machine item (lowest tier): looked up through
       // machineItemByTranslationKey for category / selector icons.
@@ -809,6 +814,11 @@ for (const resource of resources.values()) {
     .filter(([, ids]) => ids.includes(resource.id))
     .map(([name]) => name);
   if (membership.length > 0) resource.oreDictionary = membership;
+  // datasetResourceSchema requires displayName. Items reachable only through
+  // the ore dictionary are absent from the dump's item catalog and have no
+  // name there; the UI already falls back to the id, so state that fallback
+  // instead of leaving the field undefined.
+  if (!resource.displayName) resource.displayName = resource.id;
 }
 
 const dataset = {
