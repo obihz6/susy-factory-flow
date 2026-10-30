@@ -1,4 +1,5 @@
-import type { Recipe, RecipeInput, RecipeOutput, ResourceKind } from "@/lib/model/types";
+import type { Recipe, RecipeInput, RecipeOutput, ResourceAmount, ResourceKind } from "@/lib/model/types";
+import type { RecipeQueryClause } from "@/lib/datasets/recipe-query";
 
 /**
  * What an imported plan knows about a recipe the dataset no longer lists.
@@ -218,4 +219,161 @@ export function recipeContentRef(recipe: Recipe): RecipeContentRef {
     durationTicks: recipe.durationTicks,
     eut: recipe.eut,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: deterministic, output-aware recipe selection.
+// ---------------------------------------------------------------------------
+
+export interface RecipeSelectionRequest {
+  /** Explicit pin: wins over everything, including ambiguity. */
+  recipeId?: string;
+  /** What the downstream flow must receive. Drives disambiguation. */
+  requiredOutputs?: Array<Pick<ResourceAmount, "kind" | "id" | "accepted" | "groupId">>;
+  machineHandlerId?: string;
+  inputClauses?: RecipeQueryClause[];
+}
+
+export interface RecipeSelectionResult {
+  recipe: Recipe;
+  score: number;
+  exact: boolean;
+  /** Other candidates that tied on the primary criteria. */
+  rivals: Recipe[];
+  /** True when requiredOutputs reduced the choice to one candidate. */
+  unambiguous: boolean;
+}
+
+function resourceSlotsCompatible(
+  a: Pick<ResourceAmount, "kind" | "id" | "accepted" | "groupId">,
+  b: Pick<ResourceAmount, "kind" | "id" | "accepted" | "groupId">,
+): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  if (a.id === b.id) {
+    return true;
+  }
+  if (a.groupId && a.groupId === b.groupId) {
+    return true;
+  }
+  const aIds = new Set([a.id, ...(a.accepted?.map((entry) => entry.id) ?? [])]);
+  const bIds = new Set([b.id, ...(b.accepted?.map((entry) => entry.id) ?? [])]);
+  for (const id of aIds) {
+    if (bIds.has(id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Picks a recipe deterministically among candidates that share inputs.
+ *
+ * Order of precedence:
+ *   1. an explicit `recipeId` pin;
+ *   2. required-output coverage (a candidate must make every required output;
+ *      candidates that do not are kept only as rivals for the UI);
+ *   3. input-clause overlap;
+ *   4. lower EU/t, then shorter duration;
+ *   5. recipe id (final, deterministic tie-break).
+ *
+ * Ambiguity is reported, never resolved by guessing: `rivals` lists every
+ * candidate that tied on (2) and (3), and `unambiguous` is true only when
+ * (2) left a single candidate.
+ */
+export function selectRecipeForNode(
+  request: RecipeSelectionRequest,
+  candidates: Iterable<Recipe>,
+): RecipeSelectionResult | undefined {
+  const list = [...candidates];
+  if (list.length === 0) {
+    return undefined;
+  }
+
+  if (request.recipeId) {
+    const pinned = list.find((candidate) => candidate.id === request.recipeId);
+    if (pinned) {
+      return { recipe: pinned, score: Number.POSITIVE_INFINITY, exact: true, rivals: [], unambiguous: true };
+    }
+  }
+
+  const required = request.requiredOutputs ?? [];
+  const clauses = request.inputClauses ?? [];
+
+  const scored = list.map((candidate) => {
+    const outputCoverage = required.length === 0
+      ? 0
+      : required.filter((req) => candidate.outputs.some((out) => resourceSlotsCompatible(req, out))).length;
+    const allOutputs = required.length === 0 || outputCoverage === required.length;
+    const inputOverlap = clauses.length === 0
+      ? 0
+      : candidate.inputs.filter((input) =>
+          clauses.some((clause) => clause.kind === input.kind && clause.id === input.id),
+        ).length;
+    return { candidate, outputCoverage, allOutputs, inputOverlap };
+  });
+
+  // Sort: allOutputs first, then outputCoverage desc, inputOverlap desc,
+  // eu asc, duration asc, id asc.
+  scored.sort((left, right) => {
+    if (left.allOutputs !== right.allOutputs) return left.allOutputs ? -1 : 1;
+    if (right.outputCoverage !== left.outputCoverage) return right.outputCoverage - left.outputCoverage;
+    if (right.inputOverlap !== left.inputOverlap) return right.inputOverlap - left.inputOverlap;
+    if (left.candidate.eut !== right.candidate.eut) return left.candidate.eut - right.candidate.eut;
+    if (left.candidate.durationTicks !== right.candidate.durationTicks) {
+      return left.candidate.durationTicks - right.candidate.durationTicks;
+    }
+    return left.candidate.id < right.candidate.id ? -1 : left.candidate.id > right.candidate.id ? 1 : 0;
+  });
+
+  const winner = scored[0]!;
+  const topKey = `${winner.outputCoverage}|${winner.inputOverlap}|${winner.allOutputs}`;
+  const rivals = scored
+    .filter((entry) => `${entry.outputCoverage}|${entry.inputOverlap}|${entry.allOutputs}` === topKey)
+    .map((entry) => entry.candidate)
+    .filter((candidate) => candidate.id !== winner.candidate.id);
+
+  const unambiguous =
+    required.length > 0 &&
+    winner.allOutputs &&
+    rivals.length === 0;
+
+  return {
+    recipe: winner.candidate,
+    score: winner.outputCoverage * 100 + winner.inputOverlap,
+    exact: winner.allOutputs && rivals.length === 0,
+    rivals,
+    unambiguous,
+  };
+}
+
+/**
+ * Like pickRecipeRefMatch, but reports rivals instead of silently taking the
+ * earliest candidate. pickRecipeRefMatch is kept for callers that only want
+ * the best stand-in.
+ */
+export function pickRecipeRefMatchWithRivals<T extends RecipeRefCandidate>(
+  ref: RecipeContentRef,
+  candidates: Iterable<T>,
+): { best: RecipeRefMatch<T> | undefined; rivals: T[] } {
+  const list = [...candidates].filter((candidate) => candidate.id !== ref.id);
+  const scored = list
+    .map((candidate) => ({ candidate, score: scoreRecipeRefCandidate(ref, candidate) }))
+    .filter((entry) => entry.score > 0);
+
+  if (scored.length === 0) {
+    return { best: undefined, rivals: [] };
+  }
+
+  scored.sort((left, right) => {
+    if (right.score !== left.score) return right.score - left.score;
+    return left.candidate.id < right.candidate.id ? -1 : left.candidate.id > right.candidate.id ? 1 : 0;
+  });
+
+  const topScore = scored[0]!.score;
+  const topEntries = scored.filter((entry) => entry.score === topScore);
+  const best = { candidate: topEntries[0]!.candidate, score: topScore, exact: topScore >= EXACT_SCORE };
+  const rivals = topEntries.slice(1).map((entry) => entry.candidate);
+  return { best, rivals };
 }

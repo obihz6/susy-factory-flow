@@ -22,6 +22,7 @@ import { formatSignedRate } from "./inspector/flow-rate";
 import { getMemoizedSupplyShortfalls, type InputSupplyShortfall } from "@/lib/solver/supply-shortfall";
 import { getStorageRoles } from "@/lib/model/storage-role";
 import { sectionNodeId } from "@/lib/model/shared-machine";
+import { applyRecipeInputOverrides } from "@/lib/model/recipe-input-overrides";
 import {
   energyPerUnit,
   isEnergyRateUnit,
@@ -379,6 +380,22 @@ function FlowIOPanel() {
     () => selectInternalBalances(Object.values(result.resources)),
     [result.resources],
   );
+  const selectedNodeResourceGroups = useMemo(() => {
+    if (selectedBoardIds.length !== 1) return undefined;
+    const node = project.nodes.find((entry) => entry.id === selectedBoardIds[0]);
+    if (!node) return undefined;
+    const recipe = project.recipes.find((entry) => entry.id === node.recipeId);
+    if (!recipe) return undefined;
+    const resolved = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
+    const groups: Array<{ groupId: string; input: ResourceAmount; accepted: NonNullable<ResourceAmount["accepted"]> }> = [];
+    for (const input of resolved.inputs) {
+      if (input.groupId && input.accepted && input.accepted.length >= 2) {
+        groups.push({ groupId: input.groupId, input, accepted: input.accepted });
+      }
+    }
+    return groups.length ? groups : undefined;
+  }, [project, selectedBoardIds]);
+
   const selectedNodeShortfalls = useMemo(() => {
     if (selectedBoardIds.length !== 1) return undefined;
     const selectedNodeId = selectedBoardIds[0];
@@ -593,6 +610,42 @@ function FlowIOPanel() {
       ) : null}
       {selectedNodeShortfalls ? (
         <SelectedNodeShortfalls name={selectedNodeShortfalls.name} inputs={selectedNodeShortfalls.inputs} />
+      ) : null}
+      {selectedNodeResourceGroups ? (
+        <div className="inspector-tag-choices" style={{ padding: "4px 8px", fontSize: 12 }}>
+          {selectedNodeResourceGroups.map((group) => (
+            <label key={group.groupId} style={{ display: "block", marginBottom: 4 }}>
+              <span style={{ marginRight: 6 }}>{group.input.displayName ?? group.groupId}</span>
+              <select
+                value={project.resourceChoices?.[group.groupId]?.id ?? group.input.id}
+                onChange={(event) => {
+                  const member = group.accepted.find((entry) => entry.id === event.target.value);
+                  useFactoryStore.getState().setResourceChoice(
+                    group.groupId,
+                    member
+                      ? {
+                          groupId: group.groupId,
+                          kind: member.kind,
+                          id: member.id,
+                          displayName: member.displayName,
+                          iconPath: member.iconPath,
+                          iconAtlas: member.iconAtlas,
+                          dominantColor: member.dominantColor,
+                          modId: member.modId,
+                        }
+                      : null,
+                  );
+                }}
+              >
+                {group.accepted.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.displayName ?? member.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
       ) : null}
 
       <div className="inspector-section-heading">

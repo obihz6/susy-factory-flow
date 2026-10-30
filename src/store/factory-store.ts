@@ -102,6 +102,7 @@ import type {
   Recipe,
   RecipeInput,
   ResourceAmount,
+  ResourceGroupChoice,
   ResourceKind,
   TargetRate,
   ThroughputResult,
@@ -300,6 +301,8 @@ interface FactoryStore {
   recalculate: () => void;
   selectNode: (nodeId?: string) => void;
   selectRecipe: (recipeId?: string) => void;
+  /** Pins which member a tag resolves to for this plan. */
+  setResourceChoice: (groupId: string, choice: ResourceGroupChoice | null) => void;
   addNodeForRecipe: (recipeId: string) => void;
   addNodeForRecipeObject: (
     recipe: Recipe,
@@ -2981,6 +2984,19 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
       if (identity.icon !== undefined) {
         project.icon = identity.icon ?? undefined;
       }
+      return { project };
+    });
+  },
+  setResourceChoice: (groupId, choice) => {
+    set((state) => {
+      const project = { ...state.project };
+      const choices = { ...(project.resourceChoices ?? {}) };
+      if (choice === null) {
+        delete choices[groupId];
+      } else {
+        choices[groupId] = choice;
+      }
+      project.resourceChoices = Object.keys(choices).length ? choices : undefined;
       return { project };
     });
   },
