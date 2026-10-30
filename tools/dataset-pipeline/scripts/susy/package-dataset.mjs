@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import { Writable } from "node:stream";
-import { writeFileAtomic } from "../lib/atomic-write.mjs";
+import { writeFileAtomic } from "../../lib/atomic-write.mjs";
 import {
   executeStandaloneStep,
   parseCliArgs,
@@ -22,7 +22,13 @@ class HandleSink extends Writable {
   }
 
   _write(chunk, encoding, callback) {
-    this.handle.write(chunk, encoding, callback);
+    // FileHandle.write takes (buffer, offset, length, position); the stream
+    // "chunk, encoding, callback" shape is the fs.WriteStream one and throws
+    // ERR_INVALID_ARG_TYPE here. position null appends at the current offset.
+    this.handle.write(chunk, 0, chunk.length, null).then(
+      () => callback(),
+      (error) => callback(error),
+    );
   }
 }
 
