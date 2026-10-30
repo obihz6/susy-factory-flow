@@ -138,7 +138,7 @@ export function closeBoundaries(
     // can change what comes out. A drawer on a port the solve does not have
     // is an edge the solve drops (a silent starve). Only the keys matter, not
     // rates, so this can run before the solver.
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
+    const nodeRecipe = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
     const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, node);
     const outputs = getRuntimeCalculationOutputs(effectiveRecipe, node) ?? effectiveRecipe.outputs;
     // Non-consumed inputs are not ingredients and never need a feeder.

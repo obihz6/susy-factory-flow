@@ -82,7 +82,7 @@ export function listPoolCellPairs(
     if (!recipe) {
       continue;
     }
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
+    const nodeRecipe = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
     const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, node);
     const slots = [
       ...nodeRecipe.inputs.filter((input) => isRecipeInputConsumed(input)),
@@ -172,7 +172,7 @@ export function expandPool(project: FactoryProject): PoolExpansion {
     if (node.enabled === false) continue;
     const recipe = recipesById.get(node.recipeId);
     if (!recipe) continue;
-    const contextual = applyRecipeInputOverrides(recipe, node);
+    const contextual = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
     const effective = applyMachineHandlerToRecipe(contextual, node);
     const outputs = getRuntimeCalculationOutputs(effective, node) ?? effective.outputs;
     const seenIn = new Set<ResourceKey>();

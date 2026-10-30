@@ -3,14 +3,14 @@ import resistor from "./__fixtures__/issue49-resistor.json";
 import { PROJECT_SCHEMA_VERSION, type FactoryProject, type Recipe } from "./types";
 import { applyRecipeInputOverrides } from "./recipe-input-overrides";
 import { applyEdgeInputOverride, repairWiredInputOverrides } from "./edge-input-overrides";
-import { normalizeLoadedProject } from "./project-normalize";
+import { migrateRecipeIngredientGroups, normalizeLoadedProject } from "./project-normalize";
 import { useFactoryStore } from "@/store/factory-store";
 import { buildRailPorts, deriveNodeVerdict } from "@/components/flow/node-verdict";
 import { calculateThroughput } from "@/lib/solver/throughput";
 import { closeBoundaries } from "@/lib/solver/close-boundaries";
 
 const FINE = "gregtech:gt.metaitem.02@19035";
-const recipe = resistor as Recipe;
+const recipe = migrateRecipeIngredientGroups({ recipes: [resistor as Recipe] } as FactoryProject).recipes[0] as Recipe;
 function project(): FactoryProject {
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,

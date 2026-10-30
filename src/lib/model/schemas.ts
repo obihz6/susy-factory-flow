@@ -58,6 +58,19 @@ export const factoryNodeColorTagSchema = z.enum([
   "onyx",
 ]);
 
+export const acceptedResourceSchema = z.object({
+  kind: resourceKindSchema,
+  id: z.string().min(1),
+  perUnit: z.number().positive().optional(),
+  displayName: z.string().min(1).optional(),
+  iconPath: z.string().min(1).optional(),
+  iconAtlas: resourceIconAtlasRefSchema.optional(),
+  dominantColor: dominantColorSchema,
+  modId: z.string().min(1).optional(),
+  tooltip: z.array(z.string()).optional(),
+  amount: z.number().positive().optional(),
+});
+
 export const resourceAmountSchema = z.object({
   kind: resourceKindSchema,
   id: z.string().min(1, "Resource id is required"),
@@ -89,6 +102,8 @@ export const resourceAmountSchema = z.object({
       }),
     )
     .optional(),
+  accepted: z.array(acceptedResourceSchema).min(2).optional(),
+  groupId: z.string().min(1).optional(),
 });
 
 export const recipeInputSchema = resourceAmountSchema.extend({
@@ -566,6 +581,21 @@ export const factoryProjectSchema = z.object({
   poolMode: z.boolean().optional(),
   // Pool mode's cell-to-fluid ratios, litres per filled cell by cell id.
   poolCellRatios: z.record(z.string(), z.number().positive()).optional(),
+  resourceChoices: z
+    .record(
+      z.string().min(1),
+      z.object({
+        groupId: z.string().min(1),
+        kind: resourceKindSchema,
+        id: z.string().min(1),
+        displayName: z.string().min(1).optional(),
+        iconPath: z.string().min(1).optional(),
+        iconAtlas: resourceIconAtlasRefSchema.optional(),
+        dominantColor: dominantColorSchema,
+        modId: z.string().min(1).optional(),
+      }),
+    )
+    .optional(),
   recipes: z.array(recipeSchema),
   nodes: z.array(factoryNodeSchema),
   storages: z.array(factoryStorageSchema).optional().default([]),

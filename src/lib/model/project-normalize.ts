@@ -18,7 +18,57 @@ import { isPocketNestingValid } from "./board-windows";
  * IndexedDB, a JSON import, an embedded plan image or the community hub.
  * One funnel on purpose, so no load path can skip a migration.
  */
+/**
+ * Legacy datasets and plans carried ingredient substitutes as `alternatives`
+ * (a display hint). The new model carries them as `accepted` (real
+ * substitutes, with optional per-unit ratios) plus an optional `groupId` when
+ * the set equals an ore dictionary group. Synthesize `accepted` from
+ * `alternatives` so old data keeps working; `groupId` is only ever set by the
+ * dataset pipeline, never inferred here (inferring it from membership would
+ * invent recipes, see dataset-query.getChoiceAlternativesByKey).
+ */
+export function migrateRecipeIngredientGroups(project: FactoryProject): FactoryProject {
+  let changed = false;
+  const recipes = project.recipes.map((recipe) => {
+    let recipeChanged = false;
+    const inputs = recipe.inputs.map((input) => {
+      if (input.accepted || !input.alternatives?.length) return input;
+      changed = true;
+      recipeChanged = true;
+      return {
+        ...input,
+        accepted: [
+          {
+            kind: input.kind,
+            id: input.id,
+            displayName: input.displayName,
+            iconPath: input.iconPath,
+            iconAtlas: input.iconAtlas,
+            dominantColor: input.dominantColor,
+            modId: input.modId,
+            tooltip: input.tooltip,
+          },
+          ...input.alternatives.map((alternative) => ({
+            kind: alternative.kind,
+            id: alternative.id,
+            displayName: alternative.displayName,
+            iconPath: alternative.iconPath,
+            iconAtlas: alternative.iconAtlas,
+            dominantColor: alternative.dominantColor,
+            modId: alternative.modId,
+            tooltip: alternative.tooltip,
+            perUnit: alternative.amount,
+          })),
+        ],
+      };
+    });
+    return recipeChanged ? { ...recipe, inputs } : recipe;
+  });
+  return changed ? { ...project, recipes } : project;
+}
+
 export function normalizeLoadedProject(project: FactoryProject): FactoryProject {
+  project = migrateRecipeIngredientGroups(project);
   project = normalizeProductionGroups(project);
   project = repairWiredInputOverrides(project);
   return normalizeProjectHatchInputs(

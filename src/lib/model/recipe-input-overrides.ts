@@ -1,4 +1,4 @@
-import type { FactoryNode, Recipe, ResourceAmount, ResourceKind } from "./types";
+import type { FactoryNode, Recipe, ResourceAmount, ResourceGroupChoice, ResourceKind } from "./types";
 import { isOreDictionaryResource } from "./resources";
 
 /**
@@ -30,32 +30,64 @@ export function inputOverrideAmount(
 export function applyRecipeInputOverrides(
   recipe: Recipe,
   node: Pick<FactoryNode, "recipeInputOverrides">,
+  choices?: Record<string, ResourceGroupChoice>,
 ): Recipe {
-  if (!node.recipeInputOverrides) {
-    return recipe;
-  }
-
   let changed = false;
   const inputs = recipe.inputs.map((input, index) => {
     const override = node.recipeInputOverrides?.[String(index)];
-    if (!override) {
+    if (override) {
+      // Legacy category wires saved the group itself as a choice, hiding its members.
+      if (isOreDictionaryResource(input) && override.kind === input.kind && override.id === input.id) {
+        return input;
+      }
+      changed = true;
+      return {
+        ...input,
+        ...override,
+        amount: override.amount ?? input.amount,
+        optional: input.optional,
+        consumed: input.consumed,
+        neiSlot: input.neiSlot,
+        // A concrete pick locks the slot: no group, no fallback.
+        accepted: undefined,
+        groupId: undefined,
+        alternatives: undefined,
+      };
+    }
+
+    // Plan-level default for a tag, applied when the node itself did not
+    // pin a member. The recipe runs on the chosen member; the slot keeps
+    // `accepted` so the UI can still offer the other members.
+    const choice = input.groupId ? choices?.[input.groupId] : undefined;
+    if (!choice || choice.kind !== input.kind) {
       return input;
     }
-    // Legacy category wires saved the group itself as a choice, hiding its members.
-    if (isOreDictionaryResource(input) && override.kind === input.kind && override.id === input.id) {
+    const member = input.accepted?.find((entry) => entry.id === choice.id);
+    if (!member) {
       return input;
     }
     changed = true;
+    const perUnit = member.perUnit ?? 1;
     return {
       ...input,
-      ...override,
-      amount: override.amount ?? input.amount,
-      optional: input.optional,
-      consumed: input.consumed,
-      neiSlot: input.neiSlot,
-      alternatives: undefined,
+      id: member.id,
+      displayName: member.displayName ?? input.displayName,
+      iconPath: member.iconPath ?? input.iconPath,
+      iconAtlas: member.iconAtlas ?? input.iconAtlas,
+      dominantColor: member.dominantColor ?? input.dominantColor,
+      modId: member.modId ?? input.modId,
+      amount: perUnit > 0 && Number.isFinite(perUnit) ? input.amount * perUnit : input.amount,
+      accepted: input.accepted,
+      groupId: input.groupId,
     };
   });
 
   return changed ? { ...recipe, inputs } : recipe;
 }
+
+/**
+ * Preferred name for the boundary where a recipe's ingredients are resolved to
+ * concrete resources. `applyRecipeInputOverrides` is kept as the entry point
+ * the call sites already use; this alias documents the intended contract.
+ */
+export const resolveRecipeIngredients = applyRecipeInputOverrides;

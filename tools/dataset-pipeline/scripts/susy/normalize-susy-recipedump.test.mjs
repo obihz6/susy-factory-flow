@@ -123,6 +123,9 @@ describe("normalize-susy-recipedump", () => {
     for (const handler of handlers) {
       expect(handler.machineType, handler.id).toBe(handler.label);
     }
+    // Tag/alternative groups: at least one slot carries the accepted set.
+    const acceptedSlots = dataset.recipes.flatMap((recipe) => recipe.inputs).filter((input) => Array.isArray(input.accepted));
+    expect(acceptedSlots.length).toBeGreaterThan(0);
   });
 
   it("produces a dataset that satisfies recipeDatasetSchema", () => {

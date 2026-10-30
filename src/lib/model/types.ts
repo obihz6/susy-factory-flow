@@ -98,6 +98,22 @@ export interface ResourceAmount {
     y: number;
   };
   alternatives?: ResourceAlternative[];
+  /**
+   * Every resource that satisfies this slot, the representative member first.
+   * The representative is what the recipe originally named; the members are
+   * the exporter's accepted stack list. Absent when the slot takes one thing
+   * only. Never inferred from ore dictionary membership: a recipe that names a
+   * Vacuum Tube takes only that, even though it shares `circuitPrimitive`
+   * with the NAND chip.
+   */
+  accepted?: AcceptedResource[];
+  /**
+   * When `accepted` equals an ore dictionary group exactly, this names that
+   * group ("oredict:dustIron"). The slot then means the tag, not the
+   * representative member, and the plan resolves it through `resourceChoices`.
+   * Absent otherwise.
+   */
+  groupId?: string;
 }
 
 export type ResourceAlternative = Pick<
@@ -105,6 +121,20 @@ export type ResourceAlternative = Pick<
   "kind" | "id" | "displayName" | "iconPath" | "iconAtlas" | "dominantColor" | "tooltip" | "modId"
 > &
   Partial<Pick<ResourceAmount, "amount">>;
+
+/**
+ * One member a slot truly accepts. Unlike `ResourceAlternative` (a display
+ * hint that the slot "could also be" something), an accepted member is a
+ * real substitute: the recipe runs unchanged when one replaces another.
+ * `perUnit` scales the slot amount when the pack disagrees between members;
+ * absent means one for one, which is what ore dictionary members always do.
+ */
+export interface AcceptedResource extends Pick<
+  ResourceAmount,
+  "kind" | "id" | "displayName" | "iconPath" | "iconAtlas" | "dominantColor" | "tooltip" | "modId"
+> {
+  perUnit?: number;
+}
 
 export interface RecipeInput extends ResourceAmount {
   optional?: boolean;
@@ -715,6 +745,19 @@ export interface ProductionGroup {
   resourceRules?: Record<string, PoolResourceRule>;
 }
 
+export interface ResourceGroupChoice {
+  /** "oredict:dustIron" — matches ResourceAmount.groupId. */
+  groupId: string;
+  kind: ResourceKind;
+  /** A member of the group's accepted set. */
+  id: ResourceId;
+  displayName?: string;
+  iconPath?: string;
+  iconAtlas?: ResourceIconAtlasRef;
+  dominantColor?: string;
+  modId?: string;
+}
+
 export interface FactoryProject {
   productionGroups?: ProductionGroup[];
   poolResourceRules?: Record<string, PoolResourceRule>;
@@ -760,6 +803,12 @@ export interface FactoryProject {
    * solves the same everywhere without a lookup.
    */
   poolCellRatios?: Record<string, number>;
+  /**
+   * The plan's answer for each tag: which member the board actually runs on.
+   * Absent entry means "the representative member" — what the planner used
+   * before this table existed, so old plans behave identically.
+   */
+  resourceChoices?: Record<string, ResourceGroupChoice>;
   /** LEGACY sketch-mode flag: dropped on load, nothing writes it. */
   assumeBoundaries?: boolean;
   recipes: Recipe[];

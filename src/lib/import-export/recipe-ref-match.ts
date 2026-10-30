@@ -12,6 +12,8 @@ export interface RecipeRefSlot {
   kind: ResourceKind;
   id: string;
   amount?: number;
+  accepted?: Array<{ kind?: ResourceKind; id: string }>;
+  groupId?: string;
 }
 
 export interface RecipeContentRef {
@@ -40,7 +42,19 @@ export interface RecipeRefMatch<T extends RecipeRefCandidate> {
 
 const EXACT_SCORE = 400;
 
-function slotKey(slot: RecipeRefSlot): string {
+function slotKey(slot: RecipeRefSlot | { kind: ResourceKind; id: string; accepted?: Array<{ id: string }>; groupId?: string }): string {
+  // A slot that accepts a whole group is identified by the group, not by
+  // whichever member happened to be listed first in this dataset build.
+  // Recipe ids are minted per build and the primary member can flip between
+  // builds, so a literal id would make the same recipe look different.
+  if (slot.groupId) {
+    return `${slot.kind}:group:${slot.groupId}`;
+  }
+  const accepted = slot.accepted?.map((entry) => entry.id) ?? [];
+  if (accepted.length >= 2) {
+    const ids = [...new Set([slot.id, ...accepted])].sort();
+    return `${slot.kind}:group:${ids.join(",")}`;
+  }
   return `${slot.kind}:${slot.id}`;
 }
 
@@ -191,6 +205,10 @@ export function recipeContentRef(recipe: Recipe): RecipeContentRef {
       id: input.id,
       amount: input.amount,
       ...(input.consumed === false ? { consumed: false } : {}),
+      ...(input.accepted?.length
+        ? { accepted: input.accepted.map((entry) => ({ kind: entry.kind, id: entry.id })) }
+        : {}),
+      ...(input.groupId ? { groupId: input.groupId } : {}),
     })),
     outputs: recipe.outputs.map((output) => ({
       kind: output.kind,

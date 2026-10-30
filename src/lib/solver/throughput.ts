@@ -168,7 +168,7 @@ export function calculateThroughput(
       continue;
     }
 
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
+    const nodeRecipe = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
     const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, node);
     const overclockedRecipe = getOverclockedRecipeStats(nodeRecipe, node);
     const runtimeVariant = selectRuntimeCalculationVariant(effectiveRecipe, node);
@@ -1009,7 +1009,7 @@ function finalizeNodeReports(
       }
     }
 
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
+    const nodeRecipe = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
     const overclockedRecipe = {
       ...applyMachineHandlerToRecipe(nodeRecipe, node),
       ...getOverclockedRecipeStats(nodeRecipe, node),

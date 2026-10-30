@@ -25,7 +25,7 @@ export function expandHatchSupplies(project: FactoryProject): FactoryProject {
   for (const node of project.nodes) {
     const recipe = recipes.get(node.recipeId);
     if (!recipe || node.enabled === false || !node.hatchSupplies?.length) continue;
-    const inputs = applyRecipeInputOverrides(recipe, node).inputs;
+    const inputs = applyRecipeInputOverrides(recipe, node, project.resourceChoices).inputs;
     for (const resourceId of new Set(node.hatchSupplies)) {
       const input = inputs.find((input) => input.id === resourceId && input.amount > 0
         && isRecipeInputConsumed(input) && isHatchSuppliedInput(recipe, node, input));

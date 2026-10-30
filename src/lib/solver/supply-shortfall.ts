@@ -217,7 +217,7 @@ function targetInputKey(
   const node = nodesById.get(edge.target);
   const recipe = node ? recipesById.get(node.recipeId) : undefined;
   if (!node || !recipe) return undefined;
-  const effectiveRecipe = applyRecipeInputOverrides(recipe, node);
+  const effectiveRecipe = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
   const input = effectiveRecipe.inputs.find(
     (entry) =>
       isRecipeInputConsumed(entry) &&

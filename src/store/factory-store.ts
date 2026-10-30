@@ -1374,7 +1374,7 @@ export const useFactoryStore = create<FactoryStore>(withViewerGuard((set, get, w
         return state;
       }
 
-      const effectiveRecipe = applyRecipeInputOverrides(recipe, node);
+      const effectiveRecipe = applyRecipeInputOverrides(recipe, node, state.project.resourceChoices);
       const seed: RecipeSeedClause[] = [];
       const seen = new Set<string>();
       const push = (role: RecipeSeedClause["role"], resource: ResourceAmount) => {
@@ -5026,13 +5026,13 @@ function buildResourceEdgesBetweenNodes(
     if (!sourceRecipe) {
       continue;
     }
-    const effectiveSource = applyRecipeInputOverrides(sourceRecipe, source.node);
+    const effectiveSource = applyRecipeInputOverrides(sourceRecipe, source.node, project.resourceChoices);
     for (const target of listNodeSections(targetNode)) {
       const targetRecipe = project.recipes.find((recipe) => recipe.id === target.node.recipeId);
       if (!targetRecipe) {
         continue;
       }
-      const effectiveTarget = applyRecipeInputOverrides(targetRecipe, target.node);
+      const effectiveTarget = applyRecipeInputOverrides(targetRecipe, target.node, project.resourceChoices);
       effectiveSource.outputs.forEach((output, outputIndex) => {
         if (!matchesResource(output)) {
           return;
@@ -5560,13 +5560,13 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
     const sourceMatches = sourceStorage
       ? sourceStorage.kind === edge.resourceKind && sourceStorage.resourceId === edge.resourceId
       : sourceNode && sourceRecipe &&
-        applyRecipeInputOverrides(sourceRecipe, sourceNode).outputs.some((output) =>
+        applyRecipeInputOverrides(sourceRecipe, sourceNode, project.resourceChoices).outputs.some((output) =>
           resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
         );
     const targetMatches = targetStorage
       ? targetStorage.kind === target.kind && targetStorage.resourceId === target.resourceId
       : targetNode && targetRecipe &&
-        applyRecipeInputOverrides(targetRecipe, targetNode).inputs.some((input) =>
+        applyRecipeInputOverrides(targetRecipe, targetNode, project.resourceChoices).inputs.some((input) =>
           isRecipeInputConsumed(input) &&
           resourceMatchesInput({ kind: target.kind, id: target.resourceId }, input),
         );
@@ -5584,7 +5584,7 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
     if (!sourceNode || !sourceRecipe) {
       return false;
     }
-    const effectiveSourceRecipe = applyRecipeInputOverrides(sourceRecipe, sourceNode);
+    const effectiveSourceRecipe = applyRecipeInputOverrides(sourceRecipe, sourceNode, project.resourceChoices);
     return effectiveSourceRecipe.outputs.some((output) =>
       resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
     );
@@ -5603,7 +5603,7 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
 
   if (sourceStorage && targetRecipe) {
     const effectiveTargetRecipe = targetNode
-      ? applyRecipeInputOverrides(targetRecipe, targetNode)
+      ? applyRecipeInputOverrides(targetRecipe, targetNode, project.resourceChoices)
       : targetRecipe;
     return (
       edge.resourceKind === sourceStorage.kind &&
@@ -5618,7 +5618,7 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
 
   if (sourceRecipe && targetStorage) {
     const effectiveSourceRecipe = sourceNode
-      ? applyRecipeInputOverrides(sourceRecipe, sourceNode)
+      ? applyRecipeInputOverrides(sourceRecipe, sourceNode, project.resourceChoices)
       : sourceRecipe;
     return (
       edge.resourceKind === targetStorage.kind &&
@@ -5633,8 +5633,8 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
     return false;
   }
 
-  const effectiveSourceRecipe = applyRecipeInputOverrides(sourceRecipe, sourceNode);
-  const effectiveTargetRecipe = applyRecipeInputOverrides(targetRecipe, targetNode);
+  const effectiveSourceRecipe = applyRecipeInputOverrides(sourceRecipe, sourceNode, project.resourceChoices);
+  const effectiveTargetRecipe = applyRecipeInputOverrides(targetRecipe, targetNode, project.resourceChoices);
 
   return (
     effectiveSourceRecipe.outputs.some((output) =>
@@ -5704,7 +5704,7 @@ function buildEdgeBetweenNodes(
 
   if (sourceStorage && targetRecipe && selectedResource) {
     const effectiveTargetRecipe = targetNode
-      ? applyRecipeInputOverrides(targetRecipe, targetNode)
+      ? applyRecipeInputOverrides(targetRecipe, targetNode, project.resourceChoices)
       : targetRecipe;
     const matchedInput = effectiveTargetRecipe.inputs.find(
       (input) =>
@@ -5731,7 +5731,7 @@ function buildEdgeBetweenNodes(
 
   if (sourceRecipe && targetStorage && selectedResource) {
     const effectiveSourceRecipe = sourceNode
-      ? applyRecipeInputOverrides(sourceRecipe, sourceNode)
+      ? applyRecipeInputOverrides(sourceRecipe, sourceNode, project.resourceChoices)
       : sourceRecipe;
     const matchedOutput = effectiveSourceRecipe.outputs.find((output) =>
       resourceMatchesInput(sourceStorageResource(targetStorage), output),
@@ -5907,7 +5907,7 @@ function buildCompatibleEdgesForStorage(
     if (!recipe) {
       continue;
     }
-    const effectiveRecipe = applyRecipeInputOverrides(recipe, node);
+    const effectiveRecipe = applyRecipeInputOverrides(recipe, node, project.resourceChoices);
 
     effectiveRecipe.outputs.forEach((output, outputIndex) => {
       if (!resourceMatchesInput(sourceStorageResource(storage), output)) {
